@@ -17,7 +17,7 @@ import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";
 
 export const serverLayer = Layer.unwrap(
-  Effect.gen(function* makeServerLayer() {
+  Effect.gen(function* () {
     const { dataDirectory, port, allowedOrigins } = yield* ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -43,7 +43,7 @@ export const serverLayer = Layer.unwrap(
     });
     const browserAccess = HttpRouter.middleware(
       (httpEffect) =>
-        Effect.gen(function* checkBrowserOrigin() {
+        Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const origin = request.headers.origin;
           if (origin !== undefined && !isAllowedOrigin(origin)) {
