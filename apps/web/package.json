@@ -1,0 +1,50 @@
+{
+  "name": "@dyad/web",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "exports": {
+    "./server": {
+      "types": "./src/server.ts",
+      "default": "./dist/server/server.js"
+    }
+  },
+  "scripts": {
+    "dev": "portless",
+    "dev:tailscale": "portless --tailscale",
+    "dev:app": "vp dev --host 127.0.0.1",
+    "build": "vp build",
+    "preview": "vp preview --host 127.0.0.1",
+    "typecheck": "vp build && tsc --noEmit"
+  },
+  "dependencies": {
+    "@dyad/client-runtime": "workspace:*",
+    "@dyad/domain": "workspace:*",
+    "@effect/atom-react": "catalog:",
+    "@effect/platform-browser": "catalog:",
+    "@stylexjs/stylex": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@stylexjs/unplugin": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "unplugin": "catalog:",
+    "vite": "catalog:"
+  },
+  "portless": {
+    "name": "dyad",
+    "script": "dev:app"
+  }
+}

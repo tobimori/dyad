@@ -1,0 +1,67 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "e1098378-396d-4eae-b786-d52baeceeb7e",
+  "prevIds": ["00000000-0000-0000-0000-000000000000"],
+  "ddl": [
+    {
+      "name": "replica_identity",
+      "entityType": "tables"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "slot",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "replica_id",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "columns": ["slot"],
+      "nameExplicit": false,
+      "name": "replica_identity_pk",
+      "table": "replica_identity",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["replica_id"],
+      "nameExplicit": false,
+      "name": "replica_identity_replica_id_unique",
+      "entityType": "uniques",
+      "table": "replica_identity"
+    }
+  ],
+  "renames": []
+}

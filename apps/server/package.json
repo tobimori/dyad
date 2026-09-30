@@ -1,0 +1,27 @@
+{
+  "name": "@dyad/server",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "portless",
+    "dev:tailscale": "portless --tailscale",
+    "dev:app": "node --conditions=development --env-file=.env.development --env-file-if-exists=.env.local --watch src/main.ts",
+    "start": "node dist/main.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dyad/db": "workspace:*",
+    "@dyad/domain": "workspace:*",
+    "@dyad/server-core": "workspace:*",
+    "@dyad/web": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "env-paths": "catalog:"
+  },
+  "portless": {
+    "name": "api.dyad",
+    "script": "dev:app"
+  }
+}

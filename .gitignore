@@ -1,0 +1,10 @@
+.docs/
+node_modules/
+dist/
+.vite/
+.vite-plus/
+.tanstack/
+.data/
+.env
+.env.local
+*.tsbuildinfo
