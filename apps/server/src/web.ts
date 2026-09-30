@@ -1,4 +1,4 @@
-import { Effect, Layer, Path, Schema } from "effect";
+import { Effect, Layer, Path, Predicate, Schema } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -13,7 +13,7 @@ class WebApplicationError extends Schema.TaggedError<WebApplicationError>()("Web
 }) {}
 
 export const webApplicationLayer = Layer.unwrap(
-  Effect.gen(function* makeWebApplicationLayer() {
+  Effect.gen(function* () {
     const { appEnv } = yield* ServerConfig;
     if (appEnv === "development") {
       return Layer.empty;
@@ -26,7 +26,7 @@ export const webApplicationLayer = Layer.unwrap(
     const path = yield* Path.Path;
     const root = yield* path.fromFileUrl(web.clientAssetsUrl);
     const staticAssets = yield* HttpStaticServer.make({ root, index: undefined });
-    const startHandler = Effect.gen(function* handleStartRequest() {
+    const startHandler = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const webRequest = yield* HttpServerRequest.toWeb(request);
       const response = yield* Effect.tryPromise({
@@ -41,7 +41,7 @@ export const webApplicationLayer = Layer.unwrap(
       "*",
       staticAssets.pipe(
         Effect.catchIf(
-          (error) => error.reason._tag === "RouteNotFound",
+          (error) => Predicate.isTagged(error.reason, "RouteNotFound"),
           () => startHandler,
         ),
       ),

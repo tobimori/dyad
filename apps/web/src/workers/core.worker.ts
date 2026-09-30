@@ -1,7 +1,7 @@
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
 import { CoreWorkerRpc } from "@dyad/domain";
 import { BrowserWorkerRunner } from "@effect/platform-browser";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import { RpcServer } from "effect/unstable/rpc";
 
 const handlers = CoreWorkerRpc.toLayer({
@@ -9,7 +9,7 @@ const handlers = CoreWorkerRpc.toLayer({
     Effect.sync(() => ({
       execution: "worker" as const,
       secureContext: globalThis.isSecureContext,
-      persistentStorageAvailable: typeof navigator.storage?.getDirectory === "function",
+      persistentStorageAvailable: Predicate.isFunction(navigator.storage?.getDirectory),
     })),
   server: () =>
     ServerConnection.use((client) => client.describe()).pipe(

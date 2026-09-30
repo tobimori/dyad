@@ -18,6 +18,7 @@
     "prepare": "effect-tsgo patch"
   },
   "devDependencies": {
+    "@dyad/oxlint": "workspace:*",
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
     "portless": "catalog:",

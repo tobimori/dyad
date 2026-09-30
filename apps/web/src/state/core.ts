@@ -5,7 +5,7 @@ import { AtomRpc } from "effect/unstable/reactivity";
 import { RpcClient } from "effect/unstable/rpc";
 
 const workerPlatform = Layer.unwrap(
-  Effect.gen(function* acquireCoreWorker() {
+  Effect.gen(function* () {
     const worker = yield* Effect.acquireRelease(
       Effect.sync(
         () => new Worker(new URL("../workers/core.worker.ts", import.meta.url), { type: "module" }),

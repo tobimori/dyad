@@ -1,6 +1,14 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
+export const HttpUrl = Schema.URLFromString.check(
+  Schema.makeFilter((url) =>
+    url.protocol === "http:" || url.protocol === "https:"
+      ? undefined
+      : "Expected an HTTP or HTTPS URL",
+  ),
+);
+
 export const ReplicaId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("ReplicaId"));
 export type ReplicaId = typeof ReplicaId.Type;
 

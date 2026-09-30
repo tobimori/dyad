@@ -35,23 +35,22 @@ export const serverLayer = Layer.unwrap(
       ),
     ).pipe(Layer.provide(database));
 
+    const isAllowedOrigin = (origin: string) => allowedOrigins.includes(origin);
+    const cors = HttpMiddleware.cors({
+      allowedOrigins: isAllowedOrigin,
+      allowedMethods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type"],
+    });
     const browserAccess = HttpRouter.middleware(
-      Effect.gen(function* browserAccessMiddleware() {
-        const cors = HttpMiddleware.cors({
-          allowedOrigins: (origin) => allowedOrigins.includes(origin),
-          allowedMethods: ["GET", "POST", "OPTIONS"],
-          allowedHeaders: ["Content-Type"],
-        });
-        return (httpEffect) =>
-          Effect.gen(function* checkBrowserOrigin() {
-            const request = yield* HttpServerRequest.HttpServerRequest;
-            const origin = request.headers.origin;
-            if (origin !== undefined && !allowedOrigins.includes(origin)) {
-              return HttpServerResponse.empty({ status: 403 });
-            }
-            return yield* cors(httpEffect);
-          });
-      }),
+      (httpEffect) =>
+        Effect.gen(function* checkBrowserOrigin() {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const origin = request.headers.origin;
+          if (origin !== undefined && !isAllowedOrigin(origin)) {
+            return HttpServerResponse.empty({ status: 403 });
+          }
+          return yield* cors(httpEffect);
+        }),
       { global: true },
     );
     const routes = Layer.mergeAll(serverRoutes, webApplicationLayer, browserAccess).pipe(

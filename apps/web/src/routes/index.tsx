@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as stylex from "@stylexjs/stylex";
 import { createFileRoute } from "@tanstack/react-router";
+import { Match } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { serverDescriptor, workerDescriptor } from "../state/core.ts";
@@ -21,29 +22,34 @@ function Scaffold() {
       <dl {...stylex.props(styles.status)} aria-live="polite">
         <dt>Browser worker</dt>
         <dd>
-          {AsyncResult.isSuccess(worker)
-            ? "Running"
-            : AsyncResult.isFailure(worker)
-              ? "Unavailable"
-              : "Starting"}
+          {AsyncResult.match(worker, {
+            onInitial: () => "Starting",
+            onFailure: () => "Unavailable",
+            onSuccess: () => "Running",
+          })}
         </dd>
         <dt>Browser context</dt>
         <dd>
-          {workerInfo === null
-            ? "Not checked yet"
-            : workerInfo.secureContext
-              ? "Secure"
-              : "HTTP: HTTPS required for audio and offline storage"}
+          {Match.value(workerInfo).pipe(
+            Match.when(null, () => "Not checked yet"),
+            Match.when({ secureContext: true }, () => "Secure"),
+            Match.orElse(() => "HTTP: HTTPS required for audio and offline storage"),
+          )}
         </dd>
         <dt>Server connection</dt>
         <dd>
-          {descriptor !== null
-            ? "Connected"
-            : AsyncResult.isFailure(worker)
-              ? "Not checked: worker unavailable"
-              : AsyncResult.isInitial(server)
-                ? "Not checked yet"
-                : "Unavailable"}
+          {Match.value(server).pipe(
+            Match.when(
+              () => descriptor !== null,
+              () => "Connected",
+            ),
+            Match.when(
+              () => AsyncResult.isFailure(worker),
+              () => "Not checked: worker unavailable",
+            ),
+            Match.when(AsyncResult.isInitial, () => "Not checked yet"),
+            Match.orElse(() => "Unavailable"),
+          )}
         </dd>
         <dt>Server replica</dt>
         <dd>{descriptor?.replicaId ?? "Not available"}</dd>

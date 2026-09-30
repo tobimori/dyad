@@ -23,7 +23,7 @@ export class ReplicaDatabase extends Context.Service<ReplicaDatabase, Identity>(
 export const nodeDatabaseLayer = (options: NodeDatabaseOptions) =>
   Layer.effect(
     ReplicaDatabase,
-    Effect.gen(function* initializeReplicaDatabase() {
+    Effect.gen(function* () {
       const db = yield* Drizzle.makeWithDefaults();
       const crypto = yield* Crypto.Crypto;
       const path = yield* Path.Path;
@@ -31,7 +31,7 @@ export const nodeDatabaseLayer = (options: NodeDatabaseOptions) =>
       yield* migrate(db, { migrationsFolder });
 
       return yield* db.transaction((tx) =>
-        Effect.gen(function* initializeIdentity() {
+        Effect.gen(function* () {
           const rows = yield* tx.select().from(replicaIdentity).where(eq(replicaIdentity.slot, 1));
           const existing = rows[0];
           if (existing !== undefined) {

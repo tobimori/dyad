@@ -87,6 +87,9 @@ importers:
 
   .:
     devDependencies:
+      '@dyad/oxlint':
+        specifier: workspace:*
+        version: link:packages/oxlint
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.47.1
@@ -212,6 +215,19 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.117
+
+  packages/oxlint:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-rc.117
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.13.6)(@vitest/ui@5.0.1(vitest@5.0.1))(jiti@2.7.0)(typescript@7.0.2)
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
 
   packages/server-core:
     dependencies:

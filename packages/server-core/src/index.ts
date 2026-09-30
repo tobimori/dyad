@@ -8,7 +8,7 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescri
 ) {}
 
 export const serverRoutes = Layer.unwrap(
-  Effect.gen(function* serverRoutes() {
+  Effect.gen(function* () {
     const descriptor = yield* ServerIdentity;
     const handlers = ServerRpc.toLayer({
       describe: () => Effect.succeed(descriptor),
