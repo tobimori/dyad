@@ -11,7 +11,7 @@
     "dev:server": "vp run @dyad/server#dev",
     "dev:web": "vp run @dyad/web#dev",
     "build": "vp run -r build",
-    "check": "vp fmt --check && vp lint apps packages && vp exec tsc --noEmit && vp run -r typecheck",
+    "check": "vp fmt --check && vp lint apps packages plugins && vp exec tsc --noEmit && vp run -r typecheck",
     "format": "vp fmt",
     "db:generate": "vp run @dyad/db#generate",
     "start": "vp run @dyad/server#start",

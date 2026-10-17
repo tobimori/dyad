@@ -3,6 +3,8 @@ import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+export { pluginLayer } from "./plugin.ts";
+
 export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescriptor>()(
   "@dyad/server-core/ServerIdentity",
 ) {}

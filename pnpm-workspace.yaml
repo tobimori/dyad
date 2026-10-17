@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - plugins/*
 
 catalog:
   effect: 4.0.0-rc.117

@@ -3,7 +3,8 @@ import { createServer } from "node:http";
 
 import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
 import { ServerDescriptor } from "@dyad/domain";
-import { ServerIdentity, serverRoutes } from "@dyad/server-core";
+import type { Plugin } from "@dyad/plugin";
+import { ServerIdentity, pluginLayer, serverRoutes } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import {
@@ -15,6 +16,8 @@ import {
 
 import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";
+
+const builtinPlugins: ReadonlyArray<Plugin> = [];
 
 export const serverLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -56,8 +59,11 @@ export const serverLayer = Layer.unwrap(
     const routes = Layer.mergeAll(serverRoutes, webApplicationLayer, browserAccess).pipe(
       Layer.provide(identity),
     );
-    return HttpRouter.serve(routes).pipe(
-      Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
+    return Layer.mergeAll(
+      pluginLayer(builtinPlugins),
+      HttpRouter.serve(routes).pipe(
+        Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
+      ),
     );
   }),
 );

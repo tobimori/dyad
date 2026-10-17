@@ -16,6 +16,6 @@ export default defineConfig({
     target: "node24",
     format: ["esm"],
     sourcemap: true,
-    deps: { alwaysBundle: [/^@dyad\/(?:domain|server-core)(?:\/|$)/] },
+    deps: { alwaysBundle: [/^@dyad\/(?:domain|server-core|plugin(?:-[\w-]+)?)(?:\/|$)/] },
   },
 });
