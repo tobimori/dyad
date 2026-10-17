@@ -7,6 +7,7 @@ export * from "./schema/job.ts";
 export * from "./schema/library-sync.ts";
 export * from "./schema/library.ts";
 export * from "./schema/local.ts";
+export * from "./schema/matching.ts";
 export * from "./schema/provider-cache.ts";
 export * from "./schema/replica.ts";
 export * from "./schema/source.ts";

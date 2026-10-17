@@ -95,7 +95,7 @@ const searchProvider = (
             artworkUrl: item.source.artworkUrl,
             artistRef: null,
             albumRef: null,
-            explicit: false,
+            explicit: item.source.explicit ?? false,
           }),
           isrc: item.isrc,
           position,
@@ -175,11 +175,19 @@ const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
 
-    // A played provider source is also a local result. The provider copy has the ISRC and the
-    // position, and a provider can return an item twice.
-    const candidates = [
-      ...new Map(answer.candidates.map((candidate) => [candidate.summary.id, candidate])).values(),
-    ];
+    // A played provider source is also a local result. The local copy has the canonical fields,
+    // the provider copy the ISRC and position. A provider can return an item twice.
+    const byId = new Map<string, Candidate>();
+    for (const candidate of answer.candidates) {
+      const earlier = byId.get(candidate.summary.id);
+      byId.set(
+        candidate.summary.id,
+        earlier === undefined
+          ? candidate
+          : new Candidate({ ...candidate, summary: earlier.summary }),
+      );
+    }
+    const candidates = [...byId.values()];
     const plays = yield* loadPlays(userId, candidates, now);
 
     const ranked = rank(query, candidates, answer.hits, plays, now);

@@ -1,11 +1,14 @@
-import type { Database } from "@dyad/db/node";
+import type { Database, ReplicaDatabase } from "@dyad/db/node";
 import { PluginContext } from "@dyad/plugin";
 import type { Plugin } from "@dyad/plugin";
+import type { HlcClock } from "@dyad/sync";
 import { Effect, Exit, Layer, Scope } from "effect";
 import type { Crypto, FileSystem, Path } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
+import type { Jobs } from "./jobs.ts";
 import { syncLibraryRoot } from "./library.ts";
+import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
 import { Popularities, Providers } from "./providers.ts";
 
 // A second registration of a key would replace the first, and closing either plugin scope would
@@ -74,8 +77,17 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
       const scope = yield* Effect.scope;
       const providers = yield* Providers;
       const popularities = yield* Popularities;
+      const musicbrainzLookups = yield* MusicBrainzLookups;
       const services = yield* Effect.context<
-        Database | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+        | Database
+        | ReplicaDatabase
+        | HlcClock
+        | Jobs
+        | MusicBrainzLookups
+        | Providers
+        | Crypto.Crypto
+        | FileSystem.FileSystem
+        | Path.Path
       >();
 
       const context = new PluginContext({
@@ -94,6 +106,9 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         },
         popularity: {
           add: (name, popularity) => register(popularities, name, popularity),
+        },
+        musicbrainz: {
+          add: (lookup) => register(musicbrainzLookups, musicbrainzLookupKey, lookup),
         },
       });
 

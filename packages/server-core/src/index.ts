@@ -18,6 +18,7 @@ import {
 import { listRecentPlays, recordPlay } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
+import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
 import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { mediaCacheLayer } from "./media-cache.ts";
 import { prefetch, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
@@ -27,6 +28,7 @@ import { search } from "./search.ts";
 import { listSources } from "./sources.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
+export { catalogLayer } from "./catalog-backfill.ts";
 export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { pluginLayer } from "./plugin.ts";
@@ -43,6 +45,7 @@ export const coreServicesLayer = Layer.mergeAll(
   authCodesLayer,
   providerCacheSweepLayer,
   mediaCacheLayer,
+  musicbrainzLookupsLayer,
 ).pipe(Layer.provideMerge(jobsLayer));
 
 export const serverRoutes = Layer.unwrap(
@@ -86,6 +89,10 @@ export const serverRoutes = Layer.unwrap(
         linkAccount(provider, credentials).pipe(orDieOnDatabaseError("linkAccount")),
       unlinkAccount: ({ provider }) =>
         unlinkAccount(provider).pipe(orDieOnDatabaseError("unlinkAccount")),
+      unmergeRecording: (pair) =>
+        decideMerge(pair, "reject").pipe(orDieOnDatabaseError("unmergeRecording")),
+      mergeRecordings: (pair) =>
+        decideMerge(pair, "merge").pipe(orDieOnDatabaseError("mergeRecordings")),
     });
 
     return Layer.mergeAll(

@@ -226,6 +226,9 @@ importers:
       '@dyad/plugin-local-files':
         specifier: workspace:*
         version: link:../../plugins/local-files
+      '@dyad/plugin-musicbrainz':
+        specifier: workspace:*
+        version: link:../../plugins/musicbrainz
       '@dyad/plugin-soundcloud':
         specifier: workspace:*
         version: link:../../plugins/soundcloud

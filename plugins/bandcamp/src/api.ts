@@ -1,4 +1,4 @@
-import { ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
+import { CreditedArtist, ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
 import { getJson, HttpStatusError, send } from "@dyad/plugin/http";
 import type { HttpRequestError } from "@dyad/plugin/http";
 import { Effect, Schema, Stream } from "effect";
@@ -77,6 +77,8 @@ export const searchTracks = (query: string) =>
             track.art_id === undefined || track.art_id === null
               ? null
               : `https://f4.bcbits.com/img/a${track.art_id}_10.jpg`,
+          artists: [new CreditedArtist({ id: String(track.band_id), name: track.band_name })],
+          explicit: null,
         }),
     );
   });

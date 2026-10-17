@@ -3,6 +3,12 @@ import { Data, Effect, Schema } from "effect";
 import type { FileSystem, Path, Redacted, Scope, Stream } from "effect";
 import type { HttpClient } from "effect/http";
 
+/** One artist of a credit, with the ID that the provider or MusicBrainz gives it */
+export class CreditedArtist extends Schema.Class<CreditedArtist>("CreditedArtist")({
+  id: Schema.String,
+  name: Schema.String,
+}) {}
+
 /**
  * A playable item of a provider, for example one Apple Music song. The core stores it in the
  * provider cache of its replica, so it is a schema.
@@ -29,6 +35,10 @@ export class ProviderSource extends Schema.Class<ProviderSource>("ProviderSource
   artworkUrl: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
   ),
+  /** Artists of `artist` with provider IDs. The core never identifies an artist by name alone */
+  artists: Schema.Array(CreditedArtist).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  /** `null` when the provider does not say */
+  explicit: Schema.NullOr(Schema.Boolean).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 }) {}
 
 /** The core logs `reason`, so it must not contain tokens, signed URLs or keys */
@@ -150,6 +160,35 @@ export class Provider extends Data.Class<{
   };
   /** Only for providers with `account` */
   readonly library?: ProviderLibrary;
+  /** Higher wins when providers share a recording. Curated catalogs rank above uploads */
+  readonly metadataPriority?: number;
+}> {}
+
+export class MusicBrainzRecording extends Data.Class<{
+  readonly mbid: string;
+  readonly title: string;
+  /** The credit as one text, for example `A feat. B` */
+  readonly artist: string | null;
+  /** With artist MBIDs */
+  readonly artists: ReadonlyArray<CreditedArtist>;
+  readonly durationMs: number | null;
+}> {}
+
+/**
+ * `retryAfterSeconds` is set when MusicBrainz throttles. The core waits at least a minute,
+ * because MusicBrainz can send 0.
+ */
+export class MusicBrainzError extends Data.TaggedError("MusicBrainzError")<{
+  readonly reason: string;
+  readonly retryAfterSeconds: number | null;
+}> {}
+
+/** The plugin paces its requests within the MusicBrainz limit */
+export class MusicBrainzLookup extends Data.Class<{
+  /** The recordings that have each ISRC now. The result has an entry for each valid ISRC. */
+  readonly recordingsByIsrc: (
+    isrcs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<MusicBrainzRecording>>, MusicBrainzError>;
 }> {}
 
 /** Popularity of one recording, for search ranking */
@@ -187,6 +226,10 @@ export class PluginContext extends Data.Class<{
       name: string,
       popularity: (query: string) => Effect.Effect<ReadonlyArray<PopularityHit>, ProviderError>,
     ) => Effect.Effect<void, never, Scope.Scope>;
+  };
+  readonly musicbrainz: {
+    /** Supplies the MusicBrainz lookups of matching. Setup fails if another plugin supplied them. */
+    readonly add: (lookup: MusicBrainzLookup) => Effect.Effect<void, never, Scope.Scope>;
   };
 }> {}
 

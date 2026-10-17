@@ -20,7 +20,8 @@ export const catalogAssertion = sqliteTable(
     originRevision: text("origin_revision"),
     evidence: text("evidence", { mode: "json" }),
     confidence: real("confidence").notNull(),
-    authorUserId: text("author_user_id").notNull(),
+    // Null for imports and matching, which no user starts
+    authorUserId: text("author_user_id"),
     authorReplicaId: text("author_replica_id").notNull(),
     // Newer assertion with the same ID wins
     hlc: text("hlc").notNull(),

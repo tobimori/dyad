@@ -66,6 +66,12 @@ export const recording = sqliteTable(
     artistCreditId: text("artist_credit_id"),
     durationMs: integer("duration_ms"),
     disambiguation: text("disambiguation"),
+    // The credit as one text, for example `A feat. B`. Artist entities need corroborated identity.
+    artistName: text("artist_name"),
+    // Album and artwork stay on the recording until sources bind to tracks and releases
+    album: text("album"),
+    artworkUrl: text("artwork_url"),
+    explicit: integer("explicit", { mode: "boolean" }),
     // Root of the merge tree, resolved from the effective `entity_merge` edges. Null for a root.
     mergedIntoId: text("merged_into_id"),
     ...entity,

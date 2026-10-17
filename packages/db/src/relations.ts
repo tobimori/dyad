@@ -9,6 +9,7 @@ import * as job from "./schema/job.ts";
 import * as librarySync from "./schema/library-sync.ts";
 import * as library from "./schema/library.ts";
 import * as local from "./schema/local.ts";
+import * as matching from "./schema/matching.ts";
 import * as providerCache from "./schema/provider-cache.ts";
 import * as replica from "./schema/replica.ts";
 import * as source from "./schema/source.ts";
@@ -26,6 +27,7 @@ export const schema = {
   ...job,
   ...library,
   ...librarySync,
+  ...matching,
 };
 
 export const relations = defineRelations(schema, (r) => ({

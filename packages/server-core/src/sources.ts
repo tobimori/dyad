@@ -5,10 +5,14 @@ import type { UserId } from "@dyad/domain";
 import type { ProviderSource } from "@dyad/plugin";
 import { and, eq, getColumns, inArray, isNotNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
+import { RecordingMetadata, assertRecording } from "./assertions.ts";
 import { boundRecordingId, sourceId, variantId } from "./ids.ts";
+import { updateRecording } from "./matching.ts";
+import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { usableProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef } from "./refs.ts";
@@ -26,8 +30,8 @@ const differs = (table: SQLiteTable, keys: ReadonlyArray<string>) => {
 };
 
 /**
- * Adds or updates a source, its variant and its bound recording, and returns the source ID. All
- * writes of `source` and `source_variant` go through here.
+ * Writes a source, its variant and recording, then asserts and matches the metadata. All writes
+ * of `source` and `source_variant` go through here.
  */
 export const writeSource = (
   item: {
@@ -36,8 +40,16 @@ export const writeSource = (
     readonly kind: "stream" | "file";
     readonly title: string;
     readonly artist: string | null;
+    /** The artists of `artist` with provider IDs */
+    readonly artists: ReadonlyArray<{ readonly id: string; readonly name: string }>;
     readonly album: string | null;
     readonly durationMs: number | null;
+    /** As the provider or the tags give it */
+    readonly isrc: string | null;
+    /** The recording MBID of a file tag */
+    readonly mbid: string | null;
+    readonly artworkUrl: string | null;
+    readonly explicit: boolean | null;
   },
   variant: Omit<typeof sourceVariant.$inferInsert, "id" | "sourceId">,
 ) =>
@@ -85,6 +97,30 @@ export const writeSource = (
             set: variantRow,
             setWhere: differs(sourceVariant, Object.keys(variantRow)),
           });
+
+        // A file asserts as its source, so that copies of the same audio on two replicas agree
+        const local = item.provider === "local";
+        yield* assertRecording(
+          recordingId,
+          local ? "local" : "provider",
+          local ? id : `${item.provider}:${item.externalId}`,
+          new RecordingMetadata({
+            title: item.title,
+            artistCredit:
+              item.artist === null
+                ? null
+                : {
+                    name: item.artist,
+                    artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
+                  },
+            album: item.album,
+            durationMs: item.durationMs,
+            isrc: item.isrc === null ? null : normalizeIsrc(item.isrc),
+            artworkUrl: item.artworkUrl,
+            explicit: item.explicit,
+          }),
+        );
+        yield* updateRecording(recordingId, item.mbid);
       }),
     );
 
@@ -99,8 +135,13 @@ export const writeProviderSource = (provider: string, item: ProviderSource) =>
       kind: "stream",
       title: item.title,
       artist: item.artist,
+      artists: item.artists,
       album: item.album,
       durationMs: item.durationMs,
+      isrc: item.isrc,
+      mbid: null,
+      artworkUrl: item.artworkUrl,
+      explicit: item.explicit,
     },
     {
       codec: item.codec,
@@ -114,6 +155,25 @@ export const addProviderSource = (cached: CachedSource) =>
   writeProviderSource(cached.provider, cached.source);
 
 export const Tags = Schema.Record(Schema.String, Schema.String);
+
+const mbidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * FFmpeg (`node-av` 6.1.1) keeps the ID3 frame name `tsrc` and does not read the MP3 `UFID`
+ * frame where Picard writes the recording MBID.
+ */
+export const tagIdentifiers = (tags: typeof Tags.Type) => {
+  // Picard calls the recording MBID `musicbrainz_trackid` in Vorbis comments
+  const mbid = (tags.musicbrainz_trackid ?? tags["musicbrainz track id"])?.trim().toLowerCase();
+  return {
+    isrc: tags.isrc ?? tags.tsrc ?? null,
+    mbid: mbid !== undefined && mbidPattern.test(mbid) ? mbid : null,
+  };
+};
+
+// The canonical recording of each source, for its fields
+const bound = alias(recording, "bound");
+const canonical = alias(recording, "canonical");
 
 /**
  * The sources that `userId` can play, one row per source: a file on this replica, or a source of
@@ -133,13 +193,23 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
         albumArtistKey: localFile.albumArtistKey,
         artistKey: localFile.artistKey,
         albumKey: localFile.albumKey,
-        // `source` has no artwork. A provider source has it only while its search result is cached.
-        artworkUrl: sql<string | null>`json_extract(${providerItem.data}, '$.artworkUrl')`,
+        canonical: {
+          title: canonical.title,
+          artist: canonical.artistName,
+          album: canonical.album,
+          explicit: canonical.explicit,
+        },
+        // The cached search result has artwork for sources from before assertions
+        artworkUrl: sql<
+          string | null
+        >`coalesce(${canonical.artworkUrl}, json_extract(${providerItem.data}, '$.artworkUrl'))`,
       })
       .from(source)
       .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
       .leftJoin(localFile, eq(localFile.sourceId, source.id))
       .leftJoin(providerItem, eq(providerItem.sourceId, source.id))
+      .leftJoin(bound, eq(bound.id, source.recordingId))
+      .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
       .where(
         and(or(isNotNull(localFile.id), inArray(source.provider, [...providers.keys()])), match),
       )
@@ -149,9 +219,16 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
     return yield* limit === undefined ? query : query.limit(limit);
   });
 
+/** Canonical fields of the source's recording first. The duration is the source's own. */
 export const sourceSummary = (row: {
   readonly source: typeof source.$inferSelect;
   readonly variant: typeof sourceVariant.$inferSelect;
+  readonly canonical: {
+    readonly title: string | null;
+    readonly artist: string | null;
+    readonly album: string | null;
+    readonly explicit: boolean | null;
+  } | null;
   readonly artworkUrl: string | null;
   readonly albumArtistKey: string | null;
   readonly artistKey: string | null;
@@ -160,9 +237,9 @@ export const sourceSummary = (row: {
   new SourceSummary({
     id: row.source.id,
     provider: row.source.provider,
-    title: row.source.rawTitle,
-    artist: row.source.rawArtist,
-    album: row.source.rawAlbum,
+    title: row.canonical?.title ?? row.source.rawTitle,
+    artist: row.canonical?.artist ?? row.source.rawArtist,
+    album: row.canonical?.album ?? row.source.rawAlbum,
     durationMs: row.source.rawDurationMs,
     codec: row.variant.codec,
     artworkUrl: row.artworkUrl,
@@ -171,7 +248,7 @@ export const sourceSummary = (row: {
       row.albumArtistKey === null || row.albumKey === null
         ? null
         : libraryAlbumRef(row.albumArtistKey, row.albumKey),
-    explicit: false,
+    explicit: row.canonical?.explicit ?? false,
   });
 
 /** The disc or track number. Tags such as `3/12` give the position and the total. */

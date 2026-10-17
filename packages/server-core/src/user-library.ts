@@ -223,6 +223,13 @@ const resolveRecordings = (userId: UserId, boundIds: ReadonlyArray<string>) =>
     const groupOf = new Map(rootOf);
     for (const row of members) groupOf.set(row.id, row.mergedIntoId ?? row.id);
 
+    const canonical = new Map(
+      (yield* db.select().from(recording).where(inArray(recording.id, roots))).map((row) => [
+        row.id,
+        row,
+      ]),
+    );
+
     const sources = yield* playableSources(
       userId,
       inArray(source.recordingId, [...groupOf.keys()]),
@@ -263,18 +270,21 @@ const resolveRecordings = (userId: UserId, boundIds: ReadonlyArray<string>) =>
       return remote.catalogId === null ? ("library_only" as const) : ("not_in_catalog" as const);
     };
 
+    // The canonical recording first, then the best source, then the provider's library data
     const describe = (root: string) => {
       const candidates = sourcesByRoot.get(root) ?? [];
       const best = candidates[0];
       const remote = remoteByRoot.get(root);
+      const fields = canonical.get(root);
 
       return {
         recordingId: RecordingId.make(root),
-        title: best?.source.rawTitle ?? remote?.rawTitle ?? null,
-        artist: best?.source.rawArtist ?? remote?.rawArtist ?? null,
-        album: best?.source.rawAlbum ?? remote?.rawAlbum ?? null,
-        durationMs: best?.source.rawDurationMs ?? remote?.rawDurationMs ?? null,
-        artworkUrl: best?.artworkUrl ?? null,
+        title: fields?.title ?? best?.source.rawTitle ?? remote?.rawTitle ?? null,
+        artist: fields?.artistName ?? best?.source.rawArtist ?? remote?.rawArtist ?? null,
+        album: fields?.album ?? best?.source.rawAlbum ?? remote?.rawAlbum ?? null,
+        durationMs:
+          fields?.durationMs ?? best?.source.rawDurationMs ?? remote?.rawDurationMs ?? null,
+        artworkUrl: fields?.artworkUrl ?? best?.artworkUrl ?? null,
         source: best === undefined ? null : sourceSummary(best),
         sourceCount: candidates.length,
         unavailable: best === undefined ? unavailableReason(remote) : null,

@@ -8,10 +8,12 @@ import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
 import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
+import { musicbrainzPlugin } from "@dyad/plugin-musicbrainz/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
 import {
   MediaCacheConfig,
   ServerIdentity,
+  catalogLayer,
   coreServicesLayer,
   librarySyncLayer,
   pluginLayer,
@@ -31,6 +33,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   appleMusicPlugin,
   bandcampPlugin,
   deezerPlugin,
+  musicbrainzPlugin,
   soundcloudPlugin,
 ];
 
@@ -85,8 +88,10 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(identity),
     );
     return Layer.mergeAll(
-      // The first library imports need the providers that the plugins add
-      librarySyncLayer.pipe(Layer.provide(pluginLayer(builtinPlugins, packageJson.version))),
+      // The first library imports and ISRC lookups need what the plugins add
+      Layer.mergeAll(librarySyncLayer, catalogLayer).pipe(
+        Layer.provide(pluginLayer(builtinPlugins, packageJson.version)),
+      ),
       HttpRouter.serve(routes).pipe(
         Layer.provide(
           NodeHttpServer.layer(() => createServer(), {

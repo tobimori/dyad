@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path } from "effect";
 
 import { normV1 } from "./normalize.ts";
-import { writeSource } from "./sources.ts";
+import { tagIdentifiers, writeSource } from "./sources.ts";
 import type { Tags } from "./sources.ts";
 
 class Stat extends Data.Class<{ readonly size: number; readonly mtime: number }> {}
@@ -40,8 +40,12 @@ const importFile = (rootId: string, relativePath: string, file: AudioFile, stat:
             kind: "file",
             title: file.tags.get("title") ?? path.parse(relativePath).name,
             artist: file.tags.get("artist") ?? null,
+            artists: [],
             album: file.tags.get("album") ?? null,
             durationMs: file.durationMs,
+            ...tagIdentifiers(tags),
+            artworkUrl: null,
+            explicit: null,
           },
           {
             codec: file.codec,

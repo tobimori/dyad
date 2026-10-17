@@ -1,4 +1,5 @@
-import { Array as Arr, Data, Effect, Schema } from "effect";
+import { CreditedArtist, MusicBrainzRecording } from "@dyad/plugin";
+import { Array as Arr, Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import { requestJson } from "./http.ts";
@@ -12,25 +13,24 @@ const batchSize = 25;
 
 const Isrc = Schema.String.check(Schema.isPattern(/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/));
 
+const ArtistCredit = Schema.Struct({
+  name: Schema.String,
+  joinphrase: Schema.optional(Schema.String),
+  artist: Schema.Struct({ id: Schema.String, name: Schema.String }),
+});
+
 class SearchRecording extends Schema.Class<SearchRecording>("SearchRecording")({
   id: Schema.String,
   title: Schema.String,
   length: Schema.optional(Schema.NullOr(Schema.Int)),
   isrcs: Schema.optional(Schema.Array(Schema.String)),
+  "artist-credit": Schema.optional(Schema.Array(ArtistCredit)),
 }) {}
 
 const SearchResults = Schema.Struct({
   count: Schema.Int,
   recordings: Schema.Array(SearchRecording),
 });
-
-/** A MusicBrainz recording that has the ISRC */
-export class IsrcRecording extends Data.Class<{
-  readonly mbid: string;
-  readonly title: string;
-  readonly lengthMs: number | null;
-  readonly isrcs: ReadonlyArray<string>;
-}> {}
 
 const searchPage = (query: string, offset: number) =>
   requestJson(
@@ -74,12 +74,19 @@ export const lookupIsrcs = (isrcs: ReadonlyArray<string>) =>
       [...recordings.values()].flatMap((recording) => {
         if (recording.isrcs?.includes(isrc) !== true) return [];
 
+        const credit = recording["artist-credit"] ?? [];
         return [
-          new IsrcRecording({
+          new MusicBrainzRecording({
             mbid: recording.id,
             title: recording.title,
-            lengthMs: recording.length ?? null,
-            isrcs: recording.isrcs,
+            artist:
+              credit.length === 0
+                ? null
+                : credit.map((name) => `${name.name}${name.joinphrase ?? ""}`).join(""),
+            artists: credit.map(
+              (name) => new CreditedArtist({ id: name.artist.id, name: name.artist.name }),
+            ),
+            durationMs: recording.length ?? null,
           }),
         ];
       });

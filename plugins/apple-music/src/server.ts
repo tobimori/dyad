@@ -210,6 +210,7 @@ export const appleMusicPlugin = new Plugin({
           search,
           account: { login, link },
           library,
+          metadataPriority: 30,
         }),
       );
     }),

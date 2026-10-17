@@ -201,6 +201,10 @@ export class PlaylistNotFound extends Schema.TaggedError<PlaylistNotFound>()(
   {},
 ) {}
 
+export class MergeFailed extends Schema.TaggedError<MergeFailed>()("MergeFailed", {
+  reason: Schema.Literals(["not_admin", "recording_not_found", "same_recording"]),
+}) {}
+
 export class LibrarySyncStatus extends Schema.Class<LibrarySyncStatus>("LibrarySyncStatus")({
   provider: Schema.String,
   /**
@@ -479,6 +483,17 @@ const UserRpc = RpcGroup.make(
   // Removes the account and its stored credentials from this server, and the songs and playlists
   // that it imported from the user's library
   Rpc.make("unlinkAccount", { payload: { provider: Schema.String } }),
+  // Admin only. Takes `fromId` out of the group of `intoId`. After this, the matcher never merges
+  // `fromId` again; only `mergeRecordings` does.
+  Rpc.make("unmergeRecording", {
+    payload: { fromId: RecordingId, intoId: RecordingId },
+    error: MergeFailed,
+  }),
+  // Admin only. Merges `fromId` into `intoId`, also against the matcher.
+  Rpc.make("mergeRecordings", {
+    payload: { fromId: RecordingId, intoId: RecordingId },
+    error: MergeFailed,
+  }),
 ).middleware(Authentication);
 
 export class ServerRpc extends PublicRpc.merge(UserRpc) {}

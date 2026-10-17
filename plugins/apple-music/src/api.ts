@@ -46,6 +46,8 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
     isrc: Schema.optional(Schema.String),
     // `url` is a template with `{w}` and `{h}` for the size in pixels
     artwork: Schema.optional(Schema.Struct({ url: Schema.String })),
+    // Apple leaves it out for songs without a rating
+    contentRating: Schema.optional(Schema.String),
   }),
 }) {}
 
@@ -250,6 +252,9 @@ export const catalogSource = (song: AppleTrack) =>
     lossless: false,
     encrypted: true,
     artworkUrl: song.attributes.artwork?.url.replace("{w}", "600").replace("{h}", "600") ?? null,
+    // Songs have artist IDs only in relationships, which these requests do not include
+    artists: [],
+    explicit: song.attributes.contentRating === "explicit",
   });
 
 /** The catalog needs only the web client token, not a subscriber */

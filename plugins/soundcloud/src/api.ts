@@ -1,4 +1,4 @@
-import { ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
+import { CreditedArtist, ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
 import { getJson, getText, makeScrapedToken } from "@dyad/plugin/http";
 import { Duration, Effect, Redacted, Schema, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -24,7 +24,7 @@ class Track extends Schema.Class<Track>("Track")({
   duration: Schema.Int,
   policy: Schema.String,
   track_authorization: Schema.String,
-  user: Schema.Struct({ username: Schema.String }),
+  user: Schema.Struct({ id: Schema.Int, username: Schema.String }),
   artwork_url: Schema.optional(Schema.NullOr(Schema.String)),
   // Label releases have publisher metadata. Most uploads of users have none.
   publisher_metadata: Schema.optional(
@@ -32,6 +32,7 @@ class Track extends Schema.Class<Track>("Track")({
       Schema.Struct({
         artist: Schema.optional(Schema.String),
         isrc: Schema.optional(Schema.String),
+        explicit: Schema.optional(Schema.Boolean),
       }),
     ),
   ),
@@ -134,6 +135,12 @@ export const searchTracks = (withClientId: Effect.Success<typeof clientIdCache>,
             encrypted: false,
             // The API gives the 100 pixel `-large` variant; `-t500x500` is the same image larger
             artworkUrl: track.artwork_url?.replace("-large.", "-t500x500.") ?? null,
+            // The uploader is the artist only when the label metadata names no other artist
+            artists:
+              track.publisher_metadata?.artist === undefined
+                ? [new CreditedArtist({ id: String(track.user.id), name: track.user.username })]
+                : [],
+            explicit: track.publisher_metadata?.explicit ?? null,
           }),
       );
   });
