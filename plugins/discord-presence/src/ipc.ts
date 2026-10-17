@@ -1,7 +1,3 @@
-// Discord RPC through the local socket of the Discord desktop client. Rich Presence on this socket
-// needs no OAuth. A frame is an `int32` opcode and an `int32` length, both little endian, and then
-// the JSON payload in UTF-8.
-
 import { NodeSocket } from "@effect/platform-node";
 import { Config, Data, Effect, Option, Schedule, Schema, Stream, SubscriptionRef } from "effect";
 import type { NonEmptyReadonlyArray } from "effect/Array";
@@ -100,6 +96,7 @@ const open = (paths: ReadonlyArray<string>) =>
     ),
   );
 
+// A frame is an `int32` opcode and an `int32` length, both little endian, then the JSON in UTF-8
 const encode = (opcode: number, json: string) => {
   const body = new TextEncoder().encode(json);
   const frame = new Uint8Array(8 + body.length);
@@ -233,9 +230,8 @@ const connect = (clientId: string, activity: SubscriptionRef.SubscriptionRef<Act
   }).pipe(Effect.scoped);
 
 /**
- * Keeps the presence of the Discord desktop client equal to `activity`. When Discord does not run
- * or restarts, it tries again after 1 second, then after up to 30 seconds. After each connection
- * it sends the current activity again.
+ * Keeps the presence of the Discord desktop client equal to `activity`. Rich Presence on its local
+ * socket needs no OAuth. After each new connection, it sends the current activity again.
  */
 export const presence = (
   clientId: string,

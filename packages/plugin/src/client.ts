@@ -1,6 +1,3 @@
-// The entry point for plugins that run in a client process on the user's device: the CLI now,
-// the Electron main process later. Browsers cannot open local sockets, so the web app has none.
-
 import type { SourceSummary } from "@dyad/domain";
 import { Data } from "effect";
 import type { Effect, Scope, Stream } from "effect";
@@ -27,15 +24,14 @@ export class ClientPluginContext extends Data.Class<{
 }> {}
 
 /**
- * A plugin that runs on one device, only after the user turns it on for that device. Turning it
- * off closes the scope of `setup`.
+ * Runs in the CLI or the Electron main process, not on the web, because browsers cannot open local
+ * sockets. It runs only after the user turns it on for the device.
  */
 export class ClientPlugin extends Data.Class<{
   readonly id: string;
-  /** Name to show, for example `Discord presence` */
   readonly name: string;
   /** The client shows it when the user turns the plugin on */
   readonly notice: string;
-  /** Starts the work of the plugin in the scope and returns. If it fails, only this plugin stops. */
+  /** Starts the work in the scope and returns. Turning the plugin off closes the scope. */
   readonly setup: (context: ClientPluginContext) => Effect.Effect<void, never, Scope.Scope>;
 }> {}

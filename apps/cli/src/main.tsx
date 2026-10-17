@@ -1,3 +1,4 @@
+// OpenTUI 0.6.6 resolves its native library in a top-level await, so this import must be first
 import "./sea-assets.ts";
 
 import { serverAtoms } from "@dyad/client-runtime";
@@ -12,22 +13,27 @@ import { createRoot } from "@opentui/react";
 import { Cause, Data, Effect, FileSystem, Layer, Option, Path, SubscriptionRef } from "effect";
 import { Command } from "effect/cli";
 
-import { accountCommands } from "./accounts.ts";
 import { App } from "./app.tsx";
-import { authCommands, deviceToken, reportFailures, serverUrl as serverUrlConfig } from "./auth.ts";
-import { DialogProvider } from "./dialog.tsx";
-import { ErrorBoundary } from "./error-boundary.tsx";
-import { createKeymap } from "./keymap.ts";
+import { accountCommands } from "./commands/accounts.ts";
+import {
+  authCommands,
+  deviceToken,
+  reportFailures,
+  serverUrl as serverUrlConfig,
+} from "./commands/auth.ts";
+import { pluginCommands } from "./commands/plugins.ts";
+import { createKeymap } from "./context/keymap.ts";
+import { startPluginHost } from "./context/plugin-host.ts";
+import { loadSession, saveSession } from "./context/session.ts";
+import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
-import { pluginCommands, startPluginHost } from "./plugins.ts";
-import { loadSession, saveSession } from "./session.ts";
-import { ThemeProvider } from "./theme-provider.tsx";
-import { ToastProvider } from "./toast.tsx";
+import { DialogProvider } from "./ui/dialog.tsx";
+import { ErrorBoundary } from "./ui/error-boundary.tsx";
+import { ToastProvider } from "./ui/toast.tsx";
 
 class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: unknown }> {}
 
 const player = Effect.gen(function* () {
-  // The player owns the terminal, so all logs go to a file
   const logging = yield* fileLogging;
   const logServices = yield* Layer.build(logging);
   const run = Effect.runForkWith(logServices);

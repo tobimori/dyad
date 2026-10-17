@@ -12,10 +12,7 @@ import {
 import type { Context } from "effect";
 import envPaths from "env-paths";
 
-/**
- * Writes the logs to `cli.log` in the log folder of the user, because the player owns the terminal.
- * `DYAD_LOG_LEVEL` sets the level, for example `Debug`.
- */
+/** Logs go to `cli.log` in the log folder, because the player owns the terminal */
 export const fileLogging = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -54,14 +51,12 @@ export const describeFailure = <E>(cause: Cause.Cause<E>) =>
     })
     .join(", ");
 
-/**
- * Logs errors that nothing else handles, because a crash would leave the terminal in raw mode. A
- * closed output pipe (`EPIPE`) is normal when the terminal goes away.
- */
+/** Logs unhandled errors, because a crash would leave the terminal in raw mode */
 export const processErrorLogging = (services: Context.Context<never>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const log = (message: string) => (cause: unknown) => {
+        // A closed output pipe is normal when the terminal goes away
         if (Predicate.hasProperty(cause, "code") && cause.code === "EPIPE") return;
         Effect.runForkWith(services)(Effect.logError(message, Cause.die(cause)));
       };

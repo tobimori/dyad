@@ -28,6 +28,5 @@ export const sourceLabel = (source: SourceSummary) =>
 
 export const titleOf = (source: SourceSummary) => source.title ?? "Unknown title";
 
-/** The title and the artist, for example in a list of entries that come next */
 export const songLine = (source: SourceSummary) =>
   source.artist === null ? titleOf(source) : `${titleOf(source)} · ${source.artist}`;

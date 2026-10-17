@@ -18,7 +18,7 @@ export const queueEntry = (source: SourceSummary, context: typeof PlayContext.Ty
   return new QueueEntry({ key: String(lastKey), source, context });
 };
 
-/** The play queue of one client. Entries before `current` are the history that a skip back goes to. */
+/** Entries before `current` are the history that a skip back goes to */
 export class PlayQueue extends Data.Class<{
   readonly entries: ReadonlyArray<QueueEntry>;
   /** `null` before the first play */
@@ -44,10 +44,7 @@ const sameText = (left: string | null, right: string | null) =>
 
 const durationToleranceMs = 2000;
 
-/**
- * Two sources that look like one song, for example a song on an album and on a single of the same
- * provider
- */
+/** Two sources that look like one song, for example on an album and on a single */
 export const isSameSong = (left: SourceSummary, right: SourceSummary) => {
   if (left.id === right.id) return true;
   if (!sameText(left.title, right.title) || !sameText(left.artist, right.artist)) return false;
@@ -112,10 +109,7 @@ export const clearQueue = (queue: PlayQueue) => {
   return new PlayQueue({ ...queue, entries: [entry], current: 0 });
 };
 
-/**
- * The queue after a skip with `n` or `b`, or after the current entry ends. `undefined` when
- * nothing comes next.
- */
+/** The queue after a skip or after the current entry ends, `undefined` when nothing comes next */
 export const step = (queue: PlayQueue, direction: 1 | -1, reason: "skip" | "end") => {
   if (queue.current === null) return queue.entries.length === 0 ? undefined : jumpTo(queue, 0);
   if (reason === "end" && queue.repeat === "one") return queue;

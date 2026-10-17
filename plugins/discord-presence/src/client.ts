@@ -1,7 +1,3 @@
-// Shows the source that plays on this device as a Listening activity in the Discord status of the
-// user. It works only through the Discord desktop client on the same device, because Discord has
-// no API that lets an app set the presence of a user from a server.
-
 import { ClientPlugin } from "@dyad/plugin/client";
 import type { NowPlaying } from "@dyad/plugin/client";
 import { Effect, Stream, SubscriptionRef } from "effect";
@@ -65,6 +61,7 @@ const activityOf = (nowPlaying: NowPlaying | null, serverOrigin: string) => {
   });
 };
 
+/** Discord cannot set a user's presence from a server, so this needs the local desktop client */
 export const discordPresencePlugin = new ClientPlugin({
   id: "dyad.discord-presence",
   name: "Discord presence",

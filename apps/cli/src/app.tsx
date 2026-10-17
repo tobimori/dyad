@@ -4,51 +4,37 @@ import type { AlbumCard, AlbumRef, ArtistRef, PlayContext, SourceSummary } from 
 import type { NowPlaying } from "@dyad/plugin/client";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
-import type { Audio, BoxRenderable, InputRenderable, Renderable } from "@opentui/core";
+import type { Audio, BoxRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
 import { Data, Effect } from "effect";
 import type { Fiber, Option, SubscriptionRef } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useDialog } from "./dialog.tsx";
-import { Action, ActionsDialog, HelpDialog, PluginsDialog } from "./dialogs.tsx";
-import { Footer } from "./footer.tsx";
-import { Header, SearchField } from "./header.tsx";
-import { commands, useCommands } from "./keymap.ts";
-import type { Command } from "./keymap.ts";
-import { NowPlayingPanel, NowPlayingView } from "./now-playing.tsx";
-import {
-  AlbumRow,
-  ArtistRow,
-  PageView,
-  RowList,
-  TrackRow,
-  albumRows,
-  artistRows,
-  pageRows,
-  selectableRows,
-  usePage,
-} from "./page-view.tsx";
-import type { SelectableRow } from "./page-view.tsx";
-import type { PluginHost } from "./plugins.ts";
-import {
-  AlbumRoute,
-  ArtistRoute,
-  SectionRoute,
-  sectionLabel,
-  sections,
-  useRoutes,
-} from "./routes.ts";
-import type { SectionId } from "./routes.ts";
-import { Sidebar } from "./sidebar.tsx";
-import { useCoverAccent } from "./theme-provider.tsx";
-import { useTheme } from "./theme.ts";
-import { useToast } from "./toast.tsx";
-import { ListItem, ListTitle, TrackList } from "./track-list.tsx";
-import { useArtwork } from "./use-artwork.ts";
-import { usePlayer } from "./use-player.ts";
-import { useSearch } from "./use-search.ts";
+import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
+import { HelpDialog } from "./component/dialog-help.tsx";
+import { PluginsDialog } from "./component/dialog-plugins.tsx";
+import { Footer } from "./component/footer.tsx";
+import { Header } from "./component/header.tsx";
+import { AlbumRow, ArtistRow, TrackRow, selectableRows } from "./component/row-list.tsx";
+import type { SelectableRow } from "./component/row-list.tsx";
+import { Sidebar } from "./component/sidebar.tsx";
+import { ListItem } from "./component/track-list.tsx";
+import { useArtwork } from "./component/use-artwork.ts";
+import { commands, useCommands } from "./context/keymap.ts";
+import type { Command } from "./context/keymap.ts";
+import type { PluginHost } from "./context/plugin-host.ts";
+import { AlbumRoute, ArtistRoute, SectionRoute, useRoutes } from "./context/routes.ts";
+import type { Section } from "./context/routes.ts";
+import { useCoverAccent } from "./context/theme-provider.tsx";
+import { useSearch } from "./context/use-search.ts";
+import { usePlayer } from "./playback/use-player.ts";
+import { NowPlayingPanel, NowPlayingView } from "./routes/now-playing.tsx";
+import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
+import { sections, startSection } from "./routes/sections.ts";
+import { useTheme } from "./theme/theme.ts";
+import { useDialog } from "./ui/dialog.tsx";
+import { useToast } from "./ui/toast.tsx";
 
 const sidebarMinWidth = 100;
 const panelMinWidth = 120;
@@ -58,15 +44,8 @@ const upNextRows = 20;
 class ActionTarget extends Data.Class<{
   readonly source: SourceSummary;
   readonly context: typeof PlayContext.Type;
-  /** The position in the queue, so that the action can remove the entry */
-  readonly queueIndex: number | null;
+  readonly sectionActions: ReadonlyArray<Action>;
 }> {}
-
-const toItems = (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) =>
-  sources.map((source) => new ListItem({ key: source.id, source, context }));
-
-const successOr = <A,>(result: AsyncResult.AsyncResult<ReadonlyArray<A>, unknown>) =>
-  AsyncResult.isSuccess(result) ? result.value : [];
 
 export function App(props: {
   readonly serverUrl: string;
@@ -87,14 +66,7 @@ export function App(props: {
 
   const connection = useAtomValue(props.atoms.connection);
   const statusResult = useAtomValue(props.atoms.status);
-  const sourcesResult = useAtomValue(props.atoms.sources);
-  const recentResult = useAtomValue(props.atoms.recentPlays);
-  const artistsResult = useAtomValue(props.atoms.libraryArtists);
-  const albumsResult = useAtomValue(props.atoms.libraryAlbums);
-  const refreshSources = useAtomRefresh(props.atoms.sources);
   const refreshRecent = useAtomRefresh(props.atoms.recentPlays);
-  const refreshArtists = useAtomRefresh(props.atoms.libraryArtists);
-  const refreshAlbums = useAtomRefresh(props.atoms.libraryAlbums);
 
   const client = AsyncResult.isSuccess(connection) ? connection.value : null;
   const status = AsyncResult.isSuccess(statusResult) ? statusResult.value : "connecting";
@@ -117,15 +89,31 @@ export function App(props: {
   const artwork = useArtwork(player.current?.source.artworkUrl ?? null);
   useCoverAccent(artwork?.accent ?? null);
 
-  const routes = useRoutes("songs");
+  const routes = useRoutes(startSection);
   const route = routes.route;
   const section = routes.section;
   const page = usePage(props.atoms, route);
 
   const main = useRef<BoxRenderable | null>(null);
-  const searchInput = useRef<InputRenderable | null>(null);
   const [view, setView] = useState<"browse" | "nowPlaying">("browse");
-  const [focusSearch, setFocusSearch] = useState(false);
+
+  // `sections` never changes, so each render calls the same hooks in the same order
+  const views = new Map(
+    sections.map(
+      (entry) =>
+        [
+          entry,
+          entry.useView({
+            atoms: props.atoms,
+            player,
+            search,
+            focusList: () => main.current?.focus(),
+          }),
+        ] as const,
+    ),
+  );
+  // A route holds only sections from `sections`
+  const sectionView = views.get(section)!;
 
   // The keys of the list work only while the main box has focus, so the focus must not get lost
   useEffect(() => {
@@ -139,18 +127,8 @@ export function App(props: {
     };
   }, []);
 
-  // The search field exists only after the render that shows the search section
-  useEffect(() => {
-    if (!focusSearch) return;
-    searchInput.current?.focus();
-    setFocusSearch(false);
-  }, [focusSearch]);
-
   const reload = () => {
-    refreshSources();
-    refreshRecent();
-    refreshArtists();
-    refreshAlbums();
+    for (const entry of views.values()) entry.refresh?.();
     page.refresh();
   };
 
@@ -171,39 +149,12 @@ export function App(props: {
   const title = player.current === undefined ? "dyad" : `${songLine(player.current.source)} · dyad`;
   useEffect(() => renderer.setTerminalTitle(title), [title]);
 
-  // The footer renders twice a second, so the long lists keep their items between renders
-  const searchItems = useMemo(() => toItems(search.results, "search"), [search.results]);
-  const libraryItems = useMemo(() => toItems(successOr(sourcesResult), "library"), [sourcesResult]);
-  const historyItems = useMemo(() => toItems(successOr(recentResult), "history"), [recentResult]);
-  const artistItems = useMemo(() => artistRows(successOr(artistsResult)), [artistsResult]);
-  const albumItems = useMemo(() => albumRows(successOr(albumsResult)), [albumsResult]);
+  // The footer renders twice a second, so the page keeps its rows between renders
   const pageItems = useMemo(
     () => (AsyncResult.isSuccess(page.result) ? pageRows(page.result.value) : []),
     [page.result],
   );
-
-  const trackLists = {
-    search: searchItems,
-    songs: libraryItems,
-    history: historyItems,
-    queue: player.queue.entries.map(
-      (entry) => new ListItem({ key: entry.key, source: entry.source, context: entry.context }),
-    ),
-  };
-
-  const rowsOfRoute = () => {
-    if (!(route instanceof SectionRoute)) return pageItems;
-    if (route.section === "artists") return artistItems;
-    if (route.section === "albums") return albumItems;
-    return [];
-  };
-  const rows = rowsOfRoute();
-  const trackItems =
-    route instanceof SectionRoute && route.section !== "artists" && route.section !== "albums"
-      ? trackLists[route.section]
-      : null;
-  const items = trackItems ?? selectableRows(rows);
-  const onQueue = route instanceof SectionRoute && route.section === "queue";
+  const items = route instanceof SectionRoute ? sectionView.items : selectableRows(pageItems);
 
   const indexOfSelection = () =>
     Math.max(
@@ -240,9 +191,13 @@ export function App(props: {
   const activate = (index: number) => {
     const item = items[index];
 
+    if (item instanceof ListItem && sectionView.play !== undefined) {
+      sectionView.play(index);
+      return;
+    }
     if (item instanceof ListItem) {
-      if (onQueue) player.playEntry(index);
-      else player.playList(trackItems?.map((entry) => entry.source) ?? [], index, item.context);
+      const sources = items.flatMap((entry) => (entry instanceof ListItem ? [entry.source] : []));
+      player.playList(sources, index, item.context);
       return;
     }
 
@@ -251,29 +206,37 @@ export function App(props: {
     if (item instanceof ArtistRow) openArtist(item.artist.ref, item.artist.name);
   };
 
-  const openSection = (id: SectionId) => {
+  const openSection = (target: Section) => {
     setView("browse");
-    routes.open(id);
+    routes.open(target);
   };
 
-  const startTyping = () => {
-    openSection("search");
-    setFocusSearch(true);
+  const enterSection = (target: Section) => {
+    openSection(target);
+    views.get(target)?.focus?.();
   };
 
-  // The search field does not take the focus here, so that `tab` can go on to the next section
+  // `q` and `/` open the section that registered the command
+  const sectionOf = (command: Command) => sections.find((entry) => entry.command === command);
+
+  const enterSectionOf = (command: Command) => {
+    const target = sectionOf(command);
+    if (target !== undefined) enterSection(target);
+  };
+
+  // `tab` does not focus the section, so that it can go on to the next one
   const moveSection = (direction: 1 | -1) => {
-    const index = sections.findIndex((candidate) => candidate.id === section);
+    const index = sections.indexOf(section);
     const next = sections[(index + direction + sections.length) % sections.length];
-    if (next !== undefined) openSection(next.id);
+    if (next !== undefined) openSection(next);
   };
 
   const searchFor = (query: string) => {
-    openSection("search");
+    const target = sectionOf(commands.search);
+    if (target !== undefined) openSection(target);
     search.search(query);
   };
 
-  // In the list, the actions use the selected row; in the now playing view, the current source
   const actionTarget = () => {
     const index = indexOfSelection();
     const item = items[index];
@@ -282,14 +245,14 @@ export function App(props: {
       return new ActionTarget({
         source: item.source,
         context: item.context,
-        queueIndex: onQueue ? index : null,
+        sectionActions: sectionView.actions?.(index) ?? [],
       });
     }
     if (view === "browse" && item instanceof TrackRow) {
       return new ActionTarget({
         source: item.track.source,
         context: item.context,
-        queueIndex: null,
+        sectionActions: [],
       });
     }
     if (view === "browse" && item !== undefined) return item;
@@ -299,7 +262,7 @@ export function App(props: {
     return new ActionTarget({
       source: current.source,
       context: current.context,
-      queueIndex: player.queue.current,
+      sectionActions: sectionView.actions?.(null) ?? [],
     });
   };
 
@@ -363,17 +326,7 @@ export function App(props: {
       );
     }
 
-    const queueIndex = target.queueIndex;
-    if (section === "queue" && queueIndex !== null) {
-      list.push(
-        new Action({
-          command: commands.remove,
-          label: "Remove from queue",
-          run: () => player.remove(queueIndex),
-        }),
-      );
-    }
-    return list;
+    return [...list, ...target.sectionActions];
   };
 
   const albumActions = (album: AlbumCard) => {
@@ -390,7 +343,7 @@ export function App(props: {
     ];
   };
 
-  const pageSources = rows.flatMap((row) =>
+  const pageSources = pageItems.flatMap((row) =>
     row instanceof TrackRow && row.track.playable ? [row.track.source] : [],
   );
   const pageContext = route instanceof AlbumRoute ? "album" : "artist";
@@ -427,7 +380,7 @@ export function App(props: {
     if (target instanceof ActionTarget) return songLine(target.source);
     if (target instanceof AlbumRow) return target.album.title;
     if (target instanceof ArtistRow) return target.artist.name;
-    return route instanceof SectionRoute ? sectionLabel(route.section) : route.hint;
+    return route instanceof SectionRoute ? route.section.title : route.hint;
   };
 
   const runAction = (command: Command) => {
@@ -462,8 +415,8 @@ export function App(props: {
   const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [commands.help, () => dialog.push(<HelpDialog />)],
     [commands.plugins, () => dialog.push(<PluginsDialog host={props.plugins} run={props.run} />)],
-    [commands.queue, () => openSection("queue")],
-    [commands.search, startTyping],
+    [commands.queue, () => enterSectionOf(commands.queue)],
+    [commands.search, () => enterSectionOf(commands.search)],
     [commands.nextSection, () => moveSection(1)],
     [commands.previousSection, () => moveSection(-1)],
     [commands.nowPlaying, () => setView(view === "browse" ? "nowPlaying" : "browse")],
@@ -499,15 +452,10 @@ export function App(props: {
     [commands.last, () => select(items.length - 1)],
   ];
 
-  const queueCommands: ReadonlyArray<readonly [Command, () => void]> = [
-    [
-      commands.remove,
-      () => {
-        if (selectedItem !== undefined) player.remove(indexOfSelection());
-      },
-    ],
-    [commands.clear, player.clear],
-  ];
+  const sectionKeys = route instanceof SectionRoute ? (sectionView.keys ?? []) : [];
+  const sectionCommands = sectionKeys.map(
+    ([command, run]) => [command, () => run(indexOfSelection())] as const,
+  );
 
   const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
     view === "nowPlaying"
@@ -515,7 +463,7 @@ export function App(props: {
           [commands.close, () => setView("browse")],
           [commands.actions, openActions],
         ]
-      : [...(onQueue ? queueCommands : []), ...listCommands];
+      : [...sectionCommands, ...listCommands];
 
   // The footer shows the hints in this order
   useCommands([...viewCommands, ...playbackCommands], { target: main, targetMode: "focus" });
@@ -524,48 +472,6 @@ export function App(props: {
   const showPanel = screen.width >= panelMinWidth && screen.height >= 24;
   const panelWidth = Math.min(50, Math.floor(screen.width * 0.32));
   const bodyHeight = screen.height - 4;
-
-  const emptyText = {
-    search: search.query.trim() === "" ? "Type to search the library and the providers" : "",
-    songs: AsyncResult.match(sourcesResult, {
-      onInitial: () => "Loading the library",
-      onFailure: () => "Cannot load the library. Press r to try again.",
-      onSuccess: () => "No files. Set DYAD_LIBRARY_DIR on the server.",
-    }),
-    artists: AsyncResult.match(artistsResult, {
-      onInitial: () => "Loading the artists",
-      onFailure: () => "Cannot load the artists. Press r to try again.",
-      onSuccess: () => "No artists. The library has no files with artist tags.",
-    }),
-    albums: AsyncResult.match(albumsResult, {
-      onInitial: () => "Loading the albums",
-      onFailure: () => "Cannot load the albums. Press r to try again.",
-      onSuccess: () => "No albums. The library has no files with album tags.",
-    }),
-    history: AsyncResult.match(recentResult, {
-      onInitial: () => "Loading the plays",
-      onFailure: () => "Cannot load the plays. Press r to try again.",
-      onSuccess: () => "No plays yet",
-    }),
-    queue: "The queue is empty. Press a on a track to add it.",
-  };
-
-  const counts = {
-    search: searchItems.length,
-    songs: libraryItems.length,
-    artists: artistItems.length,
-    albums: albumItems.length,
-    history: historyItems.length,
-    queue: trackLists.queue.length,
-  };
-
-  const listTitle =
-    section === "search" && search.status !== null
-      ? `${sectionLabel(section)}  ·  ${search.status}`
-      : sectionLabel(section);
-
-  // A queue can have the same source twice, so it marks the entry, not the source
-  const playingKey = onQueue ? (player.current?.key ?? null) : (player.current?.source.id ?? null);
 
   const current = player.queue.current;
   const upNext =
@@ -579,41 +485,14 @@ export function App(props: {
   };
 
   const content = () => {
-    if (trackItems !== null) {
-      return (
-        <TrackList
-          title={listTitle}
-          items={trackItems}
-          selected={selectedIndex}
-          playingKey={playingKey}
-          historyRows={onQueue ? (current ?? 0) : 0}
-          empty={emptyText[section]}
-          onSelect={select}
-          onActivate={activate}
-        />
-      );
-    }
-
     if (route instanceof SectionRoute) {
-      const noun = route.section === "artists" ? "artist" : "album";
-      return (
-        <>
-          <ListTitle
-            title={listTitle}
-            detail={
-              rows.length === 0 ? "" : `${rows.length} ${noun}${rows.length === 1 ? "" : "s"}`
-            }
-          />
-          <RowList
-            rows={rows}
-            selected={selectedItem?.key ?? null}
-            playingId={player.current?.source.id ?? null}
-            empty={emptyText[route.section]}
-            onSelect={selectRow}
-            onActivate={activateRow}
-          />
-        </>
-      );
+      return sectionView.render({
+        selected: selectedIndex,
+        select,
+        activate,
+        selectRow,
+        activateRow,
+      });
     }
 
     return (
@@ -621,7 +500,7 @@ export function App(props: {
         breadcrumb={routes.breadcrumb}
         hint={route.hint}
         result={page.result}
-        rows={rows}
+        rows={pageItems}
         selected={selectedItem?.key ?? null}
         playingId={player.current?.source.id ?? null}
         onSelect={selectRow}
@@ -641,7 +520,7 @@ export function App(props: {
     >
       <Header
         sections={showSidebar || view === "nowPlaying" ? [] : sections}
-        active={section}
+        active={section.id}
         server={showSidebar ? props.serverUrl : null}
         status={status}
       />
@@ -660,24 +539,13 @@ export function App(props: {
         <box flexDirection="row" flexGrow={1}>
           {showSidebar && (
             <Sidebar
-              sections={sections.map((candidate) => ({
-                id: candidate.id,
-                label: candidate.label,
-                count: counts[candidate.id],
-              }))}
+              sections={sections}
+              count={(entry) => views.get(entry)?.items.length ?? 0}
               active={section}
-              onSelect={(id) => (id === "search" ? startTyping() : openSection(id))}
+              onSelect={enterSection}
             />
           )}
           <box flexDirection="column" flexGrow={1} paddingX={1} paddingTop={1}>
-            {section === "search" && route instanceof SectionRoute && (
-              <SearchField
-                input={searchInput}
-                query={search.query}
-                onInput={search.search}
-                onLeave={() => main.current?.focus()}
-              />
-            )}
             {content()}
           </box>
           {showPanel && (

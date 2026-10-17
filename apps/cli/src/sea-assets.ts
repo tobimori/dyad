@@ -1,6 +1,3 @@
-// `node:ffi` needs a real file, so the single executable extracts its assets before OpenTUI loads.
-// OpenTUI 0.6.6 resolves its native library in a top-level await, so this module must be the first
-// import of `main.tsx`.
 // @effect-diagnostics nodeBuiltinImport:off -- this runs before the Effect runtime and OpenTUI start
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -9,6 +6,7 @@ import envPaths from "env-paths";
 
 declare const DYAD_SEA_ASSET_HASH: string;
 
+// `node:ffi` needs a real file, so the executable extracts its assets before OpenTUI loads
 if (isSea()) {
   const parent = join(envPaths("dyad", { suffix: "" }).cache, "sea");
   // The folder name is the content hash, so a new build never uses files of an old build
