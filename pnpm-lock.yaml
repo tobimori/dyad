@@ -399,6 +399,12 @@ importers:
         specifier: 'catalog:'
         version: 4.0.5
 
+  plugins/musicbrainz:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
   plugins/soundcloud:
     dependencies:
       '@dyad/plugin':

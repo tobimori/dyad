@@ -1,0 +1,88 @@
+import { Array as Arr, Data, Effect, Schema } from "effect";
+import { HttpClientRequest } from "effect/http";
+
+import { requestJson } from "./http.ts";
+
+const searchUrl = "https://musicbrainz.org/ws/2/recording";
+
+// 100 is the largest page of the search. 25 ISRCs per query leave room for ISRCs with several
+// recordings.
+const pageSize = 100;
+const batchSize = 25;
+
+const Isrc = Schema.String.check(Schema.isPattern(/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/));
+
+class SearchRecording extends Schema.Class<SearchRecording>("SearchRecording")({
+  id: Schema.String,
+  title: Schema.String,
+  length: Schema.optional(Schema.NullOr(Schema.Int)),
+  isrcs: Schema.optional(Schema.Array(Schema.String)),
+}) {}
+
+const SearchResults = Schema.Struct({
+  count: Schema.Int,
+  recordings: Schema.Array(SearchRecording),
+});
+
+/** A MusicBrainz recording that has the ISRC */
+export class IsrcRecording extends Data.Class<{
+  readonly mbid: string;
+  readonly title: string;
+  readonly lengthMs: number | null;
+  readonly isrcs: ReadonlyArray<string>;
+}> {}
+
+const searchPage = (query: string, offset: number) =>
+  requestJson(
+    "musicbrainz",
+    HttpClientRequest.get(searchUrl).pipe(
+      HttpClientRequest.setUrlParams({ query, limit: pageSize, offset, fmt: "json" }),
+    ),
+    SearchResults,
+  );
+
+const searchBatch = (isrcs: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const query = isrcs.map((isrc) => `isrc:${isrc}`).join(" OR ");
+
+    const first = yield* searchPage(query, 0);
+    const recordings = [...first.recordings];
+
+    for (let offset = pageSize; offset < first.count; offset += pageSize) {
+      const page = yield* searchPage(query, offset);
+      recordings.push(...page.recordings);
+    }
+
+    return recordings;
+  });
+
+/**
+ * Finds the MusicBrainz recordings of each ISRC, with one search request for up to 25 ISRCs. The
+ * result has an entry for each ISRC, with an empty array when no recording has it.
+ */
+export const lookupIsrcs = (isrcs: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const valid = Arr.dedupe(isrcs).filter(Schema.is(Isrc));
+    const batches = yield* Effect.forEach(Arr.chunksOf(valid, batchSize), searchBatch);
+
+    // A recording with ISRCs in two batches comes back twice
+    const recordings = new Map(batches.flat().map((recording) => [recording.id, recording]));
+
+    // The search answers the recordings of all ISRCs of a query, and its index can lag behind the
+    // database. Only the `isrcs` of a recording show which ISRCs it has now.
+    const recordingsOf = (isrc: string) =>
+      [...recordings.values()].flatMap((recording) => {
+        if (recording.isrcs?.includes(isrc) !== true) return [];
+
+        return [
+          new IsrcRecording({
+            mbid: recording.id,
+            title: recording.title,
+            lengthMs: recording.length ?? null,
+            isrcs: recording.isrcs,
+          }),
+        ];
+      });
+
+    return new Map(isrcs.map((isrc) => [isrc, recordingsOf(isrc)]));
+  });
