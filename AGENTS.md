@@ -19,8 +19,11 @@ Local design notes are in `.docs/`. Git ignores them, so they can be missing. St
 
 ## Comments
 
-- A comment says why: a constraint, an external quirk or an invariant that the code cannot show. Do not restate names, narrate steps or record history.
-- `/** */` directly above an exported declaration or a member of an exported type, so that it shows in editor hover. `//` everywhere else, including file notes and column notes.
+- Default: no comment. Write one only when a maintainer would get the code wrong without it: a constraint, an external quirk or an invariant that the code cannot show.
+- Keep it short: one line is the target, two is the limit. Cut words until it breaks.
+- No file header notes. Put the reason next to the code that needs it.
+- Do not restate the name, the type, an obvious unit or an obvious example (`/** Name to show */ name`). Do not narrate steps or record history.
+- `/** */` directly above an exported declaration or a member of an exported type, so that it shows in editor hover. `//` everywhere else.
 - One sentence: no period. Two or more sentences: periods.
 - Write in Simplified Technical English. Put code names in backticks.
 - Name the version in a comment about an external quirk, for example `Mediabunny 1.61.0`, so that it is clear when to remove the workaround.
