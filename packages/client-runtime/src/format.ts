@@ -8,6 +8,13 @@ export const formatTime = (milliseconds: number) => {
 export const formatDuration = (milliseconds: number | null) =>
   milliseconds === null ? "" : formatTime(milliseconds);
 
+/** For example `1 h 12 min` */
+export const formatTotalDuration = (milliseconds: number) => {
+  const minutes = Math.round(milliseconds / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+};
+
 // The contract has no display name for a provider, so `apple_music` shows as `Apple Music`
 export const formatProvider = (provider: string) =>
   provider

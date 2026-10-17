@@ -91,8 +91,8 @@ export const playNext = (queue: PlayQueue, entry: QueueEntry) => {
   return new PlayQueue({ ...queue, entries });
 };
 
-export const addToQueue = (queue: PlayQueue, entry: QueueEntry) =>
-  new PlayQueue({ ...queue, entries: [...queue.entries, entry] });
+export const addToQueue = (queue: PlayQueue, entries: ReadonlyArray<QueueEntry>) =>
+  new PlayQueue({ ...queue, entries: [...queue.entries, ...entries] });
 
 /** When `index` is the current entry, the entry after it becomes current */
 export const removeEntry = (queue: PlayQueue, index: number) => {

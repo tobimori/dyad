@@ -47,6 +47,8 @@ export const commands = {
   nowPlaying: command("view.nowPlaying", "Now playing", "Playback", ["p"], "playing"),
 
   play: command("list.play", "Play, queue the rest", "Browse", ["return"], "play"),
+  open: command("list.open", "Open the artist or album", "Browse", ["return"], "open"),
+  back: command("browse.back", "Back", "Browse", ["escape", "backspace"], "back"),
   actions: command("list.actions", "Actions", "Browse", ["a"], "actions"),
   search: command("browse.search", "Search", "Browse", ["/"], "search"),
   queue: command("browse.queue", "Queue", "Browse", ["q"], "queue"),
@@ -63,6 +65,11 @@ export const commands = {
   addToQueue: command("track.addToQueue", "Add to queue", "Track", ["shift+a"]),
   searchArtist: command("track.searchArtist", "Search the artist", "Track", []),
   searchAlbum: command("track.searchAlbum", "Search the album", "Track", []),
+  goToArtist: command("track.goToArtist", "Go to the artist", "Track", []),
+  goToAlbum: command("track.goToAlbum", "Go to the album", "Track", []),
+  playAll: command("page.playAll", "Play all", "Browse", []),
+  shuffleAll: command("page.shuffleAll", "Shuffle all", "Browse", []),
+  addAllToQueue: command("page.addAllToQueue", "Add all to queue", "Browse", []),
   remove: command("queue.remove", "Remove from queue", "Queue", ["d", "delete"], "remove"),
   clear: command("queue.clear", "Clear, keep current", "Queue", ["c"], "clear"),
 
@@ -146,6 +153,7 @@ export function useCommands(
 const keyNames = new Map([
   ["return", "⏎"],
   ["escape", "esc"],
+  ["backspace", "⌫"],
   ["up", "↑"],
   ["down", "↓"],
   ["left", "←"],

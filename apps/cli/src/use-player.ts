@@ -1,4 +1,5 @@
 import {
+  PlayQueue,
   ServerConnection,
   addToQueue,
   clearQueue,
@@ -20,12 +21,22 @@ import {
   titleOf,
   toggleShuffle,
 } from "@dyad/client-runtime";
-import type { CurrentPlay, PlayQueue, SavedSession } from "@dyad/client-runtime";
+import type { CurrentPlay, SavedSession } from "@dyad/client-runtime";
 import { PlaybackUnavailable } from "@dyad/domain";
 import type { PlayContext, SourceSummary } from "@dyad/domain";
 import { NowPlaying } from "@dyad/plugin/client";
 import type { Audio } from "@opentui/core";
-import { Cause, Clock, Effect, Fiber, Option, Schedule, Schema, SubscriptionRef } from "effect";
+import {
+  Cause,
+  Clock,
+  Effect,
+  Fiber,
+  Option,
+  Random,
+  Schedule,
+  Schema,
+  SubscriptionRef,
+} from "effect";
 import { FetchHttpClient } from "effect/http";
 import { useEffect, useRef, useState } from "react";
 
@@ -313,11 +324,21 @@ export function usePlayer(props: {
       index: number,
       context: typeof PlayContext.Type,
     ) => start(playList(queueRef.current, sources, index, context)),
+    shuffleList: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) => {
+      const index = Effect.runSync(Random.nextIntBetween(0, sources.length, { halfOpen: true }));
+      const shuffled = new PlayQueue({ ...queueRef.current, shuffle: true });
+      start(playList(shuffled, sources, index, context));
+    },
     playEntry: (index: number) => start(jumpTo(queueRef.current, index)),
     playNext: (source: SourceSummary, context: typeof PlayContext.Type) =>
       commit(playNext(queueRef.current, queueEntry(source, context))),
-    addToQueue: (source: SourceSummary, context: typeof PlayContext.Type) =>
-      commit(addToQueue(queueRef.current, queueEntry(source, context))),
+    addToQueue: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) =>
+      commit(
+        addToQueue(
+          queueRef.current,
+          sources.map((source) => queueEntry(source, context)),
+        ),
+      ),
     remove,
     clear: () => commit(clearQueue(queueRef.current)),
     next: () => advance("skip"),

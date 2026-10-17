@@ -1,5 +1,5 @@
 import { formatDuration, sourceLabel, titleOf } from "@dyad/client-runtime";
-import type { SourceSummary } from "@dyad/domain";
+import type { PlayContext, SourceSummary } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
 import { Clock, Data, Effect } from "effect";
 import { useRef, useState } from "react";
@@ -11,20 +11,37 @@ export class ListItem extends Data.Class<{
   /** Unique in the list, also when a source is in the list twice */
   readonly key: string;
   readonly source: SourceSummary;
+  readonly context: typeof PlayContext.Type;
 }> {}
 
 const doubleClickMs = 400;
 // Rows that stay visible above and below the selection before the list scrolls
 const scrollMargin = 2;
 
-// The list scrolls only when the selection comes near an edge
-const scrollOffset = (previous: number, selected: number, rows: number, total: number) => {
+/** The list scrolls only when the selection comes near an edge */
+export const scrollOffset = (previous: number, selected: number, rows: number, total: number) => {
   if (total <= rows) return 0;
   const margin = Math.min(scrollMargin, Math.floor((rows - 1) / 2));
   const upper = Math.min(previous, selected - margin);
   const lower = Math.max(upper, selected + margin + 1 - rows);
   return Math.max(0, Math.min(lower, total - rows));
 };
+
+/** A second click on the same row soon after activates it */
+export function useRowClick(
+  onSelect: (index: number) => void,
+  onActivate: (index: number) => void,
+) {
+  const lastClick = useRef({ index: -1, at: 0 });
+
+  return (index: number) => {
+    const time = Effect.runSync(Clock.currentTimeMillis);
+    const double = lastClick.current.index === index && time - lastClick.current.at < doubleClickMs;
+    lastClick.current = { index, at: time };
+    if (double) onActivate(index);
+    else onSelect(index);
+  };
+}
 
 const gap = 2;
 const markerWidth = 1;
@@ -88,6 +105,17 @@ function Columns(props: {
   );
 }
 
+export function ListTitle(props: { readonly title: string; readonly detail: string }) {
+  const theme = useTheme();
+
+  return (
+    <text wrapMode="none">
+      <strong fg={theme.text}>{props.title}</strong>
+      <span fg={theme.muted}>{props.detail === "" ? "" : `  ${props.detail}`}</span>
+    </text>
+  );
+}
+
 /** A list of sources in columns. A click selects a row; a double click plays it. */
 export function TrackList(props: {
   readonly title: string;
@@ -103,7 +131,7 @@ export function TrackList(props: {
   const theme = useTheme();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const offset = useRef(0);
-  const lastClick = useRef({ index: -1, at: 0 });
+  const click = useRowClick(props.onSelect, props.onActivate);
 
   // The title and the column header take two rows
   const rows = Math.max(1, size.height - 2);
@@ -112,14 +140,6 @@ export function TrackList(props: {
   const wide = width >= wideMinWidth;
   offset.current = scrollOffset(offset.current, props.selected, rows, props.items.length);
   const visible = props.items.slice(offset.current, offset.current + rows);
-
-  const click = (index: number) => {
-    const time = Effect.runSync(Clock.currentTimeMillis);
-    const double = lastClick.current.index === index && time - lastClick.current.at < doubleClickMs;
-    lastClick.current = { index, at: time };
-    if (double) props.onActivate(index);
-    else props.onSelect(index);
-  };
 
   const count = props.items.length === 1 ? "1 track" : `${props.items.length} tracks`;
 
@@ -135,10 +155,7 @@ export function TrackList(props: {
         props.onSelect(Math.max(0, Math.min(props.items.length - 1, props.selected + delta)));
       }}
     >
-      <text wrapMode="none">
-        <strong fg={theme.text}>{props.title}</strong>
-        <span fg={theme.muted}>{props.items.length === 0 ? "" : `  ${count}`}</span>
-      </text>
+      <ListTitle title={props.title} detail={props.items.length === 0 ? "" : count} />
       <box flexDirection="row" gap={gap} paddingX={1} height={1}>
         <Columns
           marker=" "

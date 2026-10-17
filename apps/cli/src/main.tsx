@@ -1,5 +1,6 @@
 import "./sea-assets.ts";
 
+import { serverAtoms } from "@dyad/client-runtime";
 import type { SavedSession } from "@dyad/client-runtime";
 import { ClientPluginContext } from "@dyad/plugin/client";
 import type { NowPlaying } from "@dyad/plugin/client";
@@ -20,7 +21,6 @@ import { createKeymap } from "./keymap.ts";
 import { fileLogging, processErrorLogging } from "./log.ts";
 import { pluginCommands, startPluginHost } from "./plugins.ts";
 import { loadSession, saveSession } from "./session.ts";
-import { serverAtoms } from "./state.ts";
 import { ThemeProvider } from "./theme-provider.tsx";
 import { ToastProvider } from "./toast.tsx";
 
