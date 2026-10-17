@@ -18,7 +18,7 @@ export const queueEntry = (source: SourceSummary, context: typeof PlayContext.Ty
   return new QueueEntry({ key: String(lastKey), source, context });
 };
 
-/** The play queue of this client. Entries before `current` are the history that `b` goes back to. */
+/** The play queue of one client. Entries before `current` are the history that a skip back goes to. */
 export class PlayQueue extends Data.Class<{
   readonly entries: ReadonlyArray<QueueEntry>;
   /** `null` before the first play */
@@ -39,20 +39,47 @@ export const currentEntry = (queue: PlayQueue) =>
 
 const shuffled = <A>(items: ReadonlyArray<A>) => Effect.runSync(Random.shuffle(items));
 
-/** Plays `sources[index]` and queues the rest of the list after it */
+const sameText = (left: string | null, right: string | null) =>
+  left !== null && right !== null && left.toLowerCase() === right.toLowerCase();
+
+const durationToleranceMs = 2000;
+
+/**
+ * Two sources that look like one song, for example a song on an album and on a single of the same
+ * provider
+ */
+export const isSameSong = (left: SourceSummary, right: SourceSummary) => {
+  if (left.id === right.id) return true;
+  if (!sameText(left.title, right.title) || !sameText(left.artist, right.artist)) return false;
+  if (left.durationMs === null || right.durationMs === null) return true;
+  return Math.abs(left.durationMs - right.durationMs) <= durationToleranceMs;
+};
+
+/**
+ * Plays `sources[index]` and queues the rest of the list after it. A search lists one song once per
+ * source, so a source that repeats the song before it does not go into the queue.
+ */
 export const playList = (
   queue: PlayQueue,
   sources: ReadonlyArray<SourceSummary>,
   index: number,
   context: typeof PlayContext.Type,
 ) => {
-  const entries = sources.map((source) => queueEntry(source, context));
-  if (!queue.shuffle) return new PlayQueue({ ...queue, entries, current: index });
+  const keep = (source: SourceSummary, position: number) => {
+    if (position === index) return true;
+    const before = sources[position - 1];
+    return before === undefined || !isSameSong(before, source);
+  };
+  const kept = sources.filter(keep);
+  const current = sources.slice(0, index).filter(keep).length;
+
+  const entries = kept.map((source) => queueEntry(source, context));
+  if (!queue.shuffle) return new PlayQueue({ ...queue, entries, current });
 
   // With shuffle, the whole list plays in random order, not only the part after `index`
-  const chosen = entries.slice(index, index + 1);
-  const others = entries.filter((_, position) => position !== index);
-  return new PlayQueue({ ...queue, entries: [...chosen, ...shuffled(others)], current: 0 });
+  const first = entries.slice(current, current + 1);
+  const others = entries.filter((_, position) => position !== current);
+  return new PlayQueue({ ...queue, entries: [...first, ...shuffled(others)], current: 0 });
 };
 
 export const jumpTo = (queue: PlayQueue, index: number) =>

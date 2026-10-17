@@ -16,6 +16,7 @@
     "@effect/atom-react": "catalog:",
     "@effect/platform-node": "catalog:",
     "@opentui/core": "catalog:",
+    "@opentui/keymap": "catalog:",
     "@opentui/react": "catalog:",
     "effect": "catalog:",
     "env-paths": "catalog:",

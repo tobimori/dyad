@@ -1,10 +1,11 @@
+import { formatDuration, sourceLabel, titleOf } from "@dyad/client-runtime";
 import type { SourceSummary } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
 import { Clock, Data, Effect } from "effect";
 import { useRef, useState } from "react";
 
-import { fit, formatDuration, sourceLabel, titleOf } from "./format.ts";
-import type { Theme } from "./theme.ts";
+import { fit } from "./format.ts";
+import { useTheme } from "./theme.ts";
 
 export class ListItem extends Data.Class<{
   /** Unique in the list, also when a source is in the list twice */
@@ -96,10 +97,10 @@ export function TrackList(props: {
   /** Rows above this index are history and show dimmed */
   readonly historyRows: number;
   readonly empty: string;
-  readonly theme: Theme;
   readonly onSelect: (index: number) => void;
   readonly onActivate: (index: number) => void;
 }) {
+  const theme = useTheme();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const offset = useRef(0);
   const lastClick = useRef({ index: -1, at: 0 });
@@ -135,8 +136,8 @@ export function TrackList(props: {
       }}
     >
       <text wrapMode="none">
-        <strong fg={props.theme.text}>{props.title}</strong>
-        <span fg={props.theme.muted}>{props.items.length === 0 ? "" : `  ${count}`}</span>
+        <strong fg={theme.text}>{props.title}</strong>
+        <span fg={theme.muted}>{props.items.length === 0 ? "" : `  ${count}`}</span>
       </text>
       <box flexDirection="row" gap={gap} paddingX={1} height={1}>
         <Columns
@@ -148,14 +149,14 @@ export function TrackList(props: {
           source="Source"
           width={width}
           wide={wide}
-          fg={props.theme.muted}
-          secondary={props.theme.muted}
-          accent={props.theme.muted}
+          fg={theme.muted}
+          secondary={theme.muted}
+          accent={theme.muted}
           attributes={TextAttributes.BOLD}
         />
       </box>
       {props.items.length === 0 && (
-        <text fg={props.theme.muted} paddingX={1}>
+        <text fg={theme.muted} paddingX={1}>
           {props.empty}
         </text>
       )}
@@ -165,7 +166,7 @@ export function TrackList(props: {
         const playing = item.key === props.playingKey;
         const played = index < props.historyRows;
         const source = item.source;
-        const color = played ? props.theme.muted : props.theme.text;
+        const color = played ? theme.muted : theme.text;
 
         return (
           <box
@@ -174,7 +175,7 @@ export function TrackList(props: {
             gap={gap}
             paddingX={1}
             height={1}
-            backgroundColor={selected ? props.theme.selection : "transparent"}
+            backgroundColor={selected ? theme.selection : "transparent"}
             onMouseDown={() => click(index)}
           >
             <Columns
@@ -186,9 +187,9 @@ export function TrackList(props: {
               source={sourceLabel(source)}
               width={width}
               wide={wide}
-              fg={playing ? props.theme.accent : color}
-              secondary={selected ? color : props.theme.muted}
-              accent={props.theme.accent}
+              fg={playing ? theme.accent : color}
+              secondary={selected ? color : theme.muted}
+              accent={theme.accent}
               attributes={selected ? TextAttributes.BOLD : TextAttributes.NONE}
             />
           </box>

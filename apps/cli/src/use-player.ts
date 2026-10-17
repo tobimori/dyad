@@ -1,41 +1,36 @@
-import { ServerConnection } from "@dyad/client-runtime";
-import type { PlayContext, SourceSummary } from "@dyad/domain";
-import type { Audio } from "@opentui/core";
-import { Clock, Data, Effect, Fiber, Option, Schedule } from "effect";
-import { FetchHttpClient } from "effect/http";
-import { useEffect, useRef, useState } from "react";
-
-import { titleOf } from "./format.ts";
-import { openTrack } from "./player.ts";
-import type { Track } from "./player.ts";
 import {
+  ServerConnection,
   addToQueue,
   clearQueue,
   currentEntry,
   cycleRepeat,
   emptyQueue,
   jumpTo,
+  pausePlay,
   playList,
   playNext,
   queueEntry,
+  queueOf,
   removeEntry,
+  reportPlay,
+  resumePlay,
+  sessionOf,
+  startPlay,
   step,
+  titleOf,
   toggleShuffle,
-} from "./queue.ts";
-import type { PlayQueue } from "./queue.ts";
-import { queueOf, sessionOf } from "./session.ts";
-import type { SavedSession } from "./session.ts";
+} from "@dyad/client-runtime";
+import type { CurrentPlay, PlayQueue, SavedSession } from "@dyad/client-runtime";
+import { PlaybackUnavailable } from "@dyad/domain";
+import type { PlayContext, SourceSummary } from "@dyad/domain";
+import type { Audio } from "@opentui/core";
+import { Cause, Clock, Effect, Fiber, Option, Schedule, Schema } from "effect";
+import { FetchHttpClient } from "effect/http";
+import { useEffect, useRef, useState } from "react";
 
-// The play that the CLI reports with `recordPlay` when it ends
-class CurrentPlay extends Data.Class<{
-  readonly sourceId: string;
-  readonly context: typeof PlayContext.Type;
-  readonly startedAt: number;
-  /** Played time before the last resume */
-  readonly playedMs: number;
-  /** `null` while paused */
-  readonly resumedAt: number | null;
-}> {}
+import { describeFailure } from "./log.ts";
+import { openTrack } from "./player.ts";
+import type { Track } from "./player.ts";
 
 const now = () => Effect.runSync(Clock.currentTimeMillis);
 
@@ -44,20 +39,36 @@ const seekStepMs = 10_000;
 // Like most players, `b` first goes back to the start of the current source
 const restartAfterMs = 3000;
 
+// The status text stays until the next play, so that the user can read why nothing plays
+const failureText = (cause: Cause.Cause<unknown>, title: string) => {
+  const error = Cause.findErrorOption(cause);
+  if (Option.isNone(error) || !Schema.is(PlaybackUnavailable)(error.value)) {
+    return `Cannot play ${title}`;
+  }
+
+  if (error.value.reason === "account_required") return `Link an account to play ${title}`;
+  if (error.value.reason === "not_found") return `${title} is no longer available`;
+  return `Cannot play ${title}`;
+};
+
 /** The queue, the source that plays and the reports of plays */
 export function usePlayer(props: {
   readonly audio: Audio;
   readonly serverUrl: string;
   readonly connection: typeof ServerConnection.Service | null;
-  readonly saved: Option.Option<SavedSession>;
+  /** The session to start with. The app can start again after an error, with a newer session. */
+  readonly restore: () => Option.Option<SavedSession>;
   readonly save: (session: SavedSession) => Effect.Effect<void>;
+  /** Runs an effect with the log file of the CLI */
+  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly onPlayRecorded: () => void;
 }) {
+  const [saved] = useState(props.restore);
   const [queue, setQueue] = useState(() =>
-    Option.match(props.saved, { onNone: () => emptyQueue, onSome: queueOf }),
+    Option.match(saved, { onNone: () => emptyQueue, onSome: queueOf }),
   );
   const [volume, setVolume] = useState(() =>
-    Option.match(props.saved, { onNone: () => 1, onSome: (saved) => saved.volume }),
+    Option.match(saved, { onNone: () => 1, onSome: (session) => session.volume }),
   );
   // A restored session waits for `space`, so it starts as paused
   const [state, setState] = useState<"stopped" | "loading" | "playing" | "paused">(() =>
@@ -111,19 +122,12 @@ export function usePlayer(props: {
     currentPlay.current = null;
     if (play === null || props.connection === null) return Effect.void;
 
-    const resumedMs = play.resumedAt === null ? 0 : now() - play.resumedAt;
-    return props.connection
-      .recordPlay({
-        sourceId: play.sourceId,
-        startedAt: play.startedAt,
-        playedMs: play.playedMs + resumedMs,
-        completed,
-        context: play.context,
-      })
-      .pipe(
-        Effect.tap(() => Effect.sync(props.onPlayRecorded)),
-        Effect.ignore,
-      );
+    return reportPlay(play, completed).pipe(
+      Effect.provideService(ServerConnection, props.connection),
+      Effect.tap(() => Effect.sync(props.onPlayRecorded)),
+      Effect.tapCause((cause) => Effect.logWarning("Cannot report a play", describeFailure(cause))),
+      Effect.ignore,
+    );
   };
 
   const stop = () => {
@@ -133,8 +137,16 @@ export function usePlayer(props: {
     return finishPlay(false);
   };
 
+  // The audio must stop with the player, for example when the error screen replaces the app
+  useEffect(
+    () => () => {
+      props.run(stop());
+    },
+    [],
+  );
+
   const start = (next: PlayQueue) => {
-    Effect.runFork(stop());
+    props.run(stop());
     commit(next);
 
     const entry = currentEntry(next);
@@ -147,15 +159,7 @@ export function usePlayer(props: {
     props.audio.start();
     setState("loading");
     setError(null);
-
-    const startedAt = now();
-    currentPlay.current = new CurrentPlay({
-      sourceId: entry.source.id,
-      context: entry.context,
-      startedAt,
-      playedMs: 0,
-      resumedAt: startedAt,
-    });
+    currentPlay.current = startPlay(entry, now());
 
     const play = Effect.gen(function* () {
       const opened = yield* openTrack(props.audio, props.serverUrl, entry.source.id);
@@ -164,27 +168,33 @@ export function usePlayer(props: {
       yield* opened.ended;
     });
 
-    fiber.current = Effect.runFork(
+    const ended = Effect.sync(() => {
+      fiber.current = null;
+      track.current = null;
+      props.run(finishPlay(true));
+      advance("end");
+    });
+
+    // A failed play is not a choice of the user, so it must not count as a skip
+    const failed = (cause: Cause.Cause<unknown>) =>
+      Effect.gen(function* () {
+        yield* Effect.logWarning("Cannot play", describeFailure(cause)).pipe(
+          Effect.annotateLogs({ sourceId: entry.source.id, provider: entry.source.provider }),
+        );
+        fiber.current = null;
+        track.current = null;
+        currentPlay.current = null;
+        setState("stopped");
+        setError(failureText(cause, titleOf(entry.source)));
+      });
+
+    fiber.current = props.run(
       Effect.scoped(play).pipe(
         Effect.provideService(ServerConnection, connection),
         Effect.provide(FetchHttpClient.layer),
-        Effect.matchEffect({
-          onSuccess: () =>
-            Effect.sync(() => {
-              fiber.current = null;
-              track.current = null;
-              Effect.runFork(finishPlay(true));
-              advance("end");
-            }),
-          // A failed play is not a choice of the user, so it must not count as a skip
-          onFailure: () =>
-            Effect.sync(() => {
-              fiber.current = null;
-              track.current = null;
-              currentPlay.current = null;
-              setState("stopped");
-              setError(`Cannot play ${titleOf(entry.source)}`);
-            }),
+        Effect.matchCauseEffect({
+          onSuccess: () => ended,
+          onFailure: (cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : failed(cause)),
         }),
       ),
     );
@@ -202,6 +212,7 @@ export function usePlayer(props: {
   const seekTo = (ms: number) => {
     const playing = track.current;
     if (playing === null) return;
+
     Effect.runFork(
       playing.seek(Math.max(0, ms)).pipe(Effect.andThen(Effect.sync(() => setTick((t) => t + 1)))),
     );
@@ -230,32 +241,23 @@ export function usePlayer(props: {
       return;
     }
 
-    const time = now();
     const play = currentPlay.current;
     if (state === "paused") {
       props.audio.start();
       setState("playing");
-      if (play !== null) currentPlay.current = new CurrentPlay({ ...play, resumedAt: time });
+      if (play !== null) currentPlay.current = resumePlay(play, now());
       return;
     }
 
     props.audio.stop();
     setState("paused");
-    if (play === null) return;
-    const resumedMs = play.resumedAt === null ? 0 : time - play.resumedAt;
-    currentPlay.current = new CurrentPlay({
-      ...play,
-      playedMs: play.playedMs + resumedMs,
-      resumedAt: null,
-    });
+    if (play !== null) currentPlay.current = pausePlay(play, now());
   };
 
-  const changeVolume = (direction: 1 | -1) =>
-    setVolume((current) => {
-      const next = Math.min(1, Math.max(0, current + direction * volumeStep));
-      // Rounding removes the float error of many steps, so that the ends stay reachable
-      return Math.round(next * 100) / 100;
-    });
+  const setVolumeTo = (value: number) => {
+    // Rounding removes the float error of many steps, so that the ends stay reachable
+    setVolume(Math.round(Math.min(1, Math.max(0, value)) * 100) / 100);
+  };
 
   const remove = (index: number) => {
     const next = removeEntry(queueRef.current, index);
@@ -290,9 +292,11 @@ export function usePlayer(props: {
     next: () => advance("skip"),
     previous,
     togglePause,
+    seekTo,
     seekBy: (deltaMs: number) => seekTo(position() + deltaMs),
     seekStepMs,
-    changeVolume,
+    setVolume: setVolumeTo,
+    changeVolume: (direction: 1 | -1) => setVolumeTo(volume + direction * volumeStep),
     toggleShuffle: () => commit(toggleShuffle(queueRef.current)),
     cycleRepeat: () => commit(cycleRepeat(queueRef.current)),
     /** Reports the current play and saves the session */

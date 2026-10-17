@@ -1,5 +1,6 @@
-import type { NativeImage } from "@opentui/core";
+import type { NativeImage, TerminalColors } from "@opentui/core";
 import { Data } from "effect";
+import { createContext, useContext } from "react";
 
 /** Hue in degrees, saturation and lightness from 0 to 1 */
 export class Hsl extends Data.Class<{
@@ -8,10 +9,16 @@ export class Hsl extends Data.Class<{
   readonly lightness: number;
 }> {}
 
-const toHsl = (red: number, green: number, blue: number) => {
-  const r = red / 255;
-  const g = green / 255;
-  const b = blue / 255;
+class Rgb extends Data.Class<{
+  readonly red: number;
+  readonly green: number;
+  readonly blue: number;
+}> {}
+
+const toHsl = (color: Rgb) => {
+  const r = color.red / 255;
+  const g = color.green / 255;
+  const b = color.blue / 255;
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   const lightness = (max + min) / 2;
@@ -27,19 +34,61 @@ const toHsl = (red: number, green: number, blue: number) => {
   return new Hsl({ hue: hue(), saturation, lightness });
 };
 
-const toHex = (color: Hsl) => {
+const toRgb = (color: Hsl) => {
   const chroma = (1 - Math.abs(2 * color.lightness - 1)) * color.saturation;
   const channel = (offset: number) => {
     const k = (offset + color.hue / 30) % 12;
     const value = color.lightness - (chroma / 2) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-    return Math.round(value * 255)
-      .toString(16)
-      .padStart(2, "0");
+    return Math.round(value * 255);
   };
-  return `#${channel(0)}${channel(8)}${channel(4)}`;
+  return new Rgb({ red: channel(0), green: channel(8), blue: channel(4) });
 };
 
-/** Colors of the player, all from one accent color */
+const hexChannel = (value: number) =>
+  Math.round(Math.min(255, Math.max(0, value)))
+    .toString(16)
+    .padStart(2, "0");
+
+const toHex = (color: Rgb) =>
+  `#${hexChannel(color.red)}${hexChannel(color.green)}${hexChannel(color.blue)}`;
+
+const fromHex = (hex: string) => {
+  const digits = hex.replace("#", "");
+  const value = (start: number) => Number.parseInt(digits.slice(start, start + 2), 16);
+  return new Rgb({ red: value(0), green: value(2), blue: value(4) });
+};
+
+// `amount` 0 gives `from`, 1 gives `to`
+const mix = (from: Rgb, to: Rgb, amount: number) =>
+  new Rgb({
+    red: from.red + (to.red - from.red) * amount,
+    green: from.green + (to.green - from.green) * amount,
+    blue: from.blue + (to.blue - from.blue) * amount,
+  });
+
+/** The colors that the terminal reports. `null` when the terminal does not answer. */
+export class TerminalScheme extends Data.Class<{
+  readonly mode: "dark" | "light";
+  readonly background: string | null;
+  readonly foreground: string | null;
+  /** ANSI blue, the accent when the cover has no color */
+  readonly blue: string | null;
+  readonly red: string | null;
+}> {}
+
+const hexOrNull = (value: string | null | undefined) =>
+  value !== null && value !== undefined && /^#[0-9a-f]{6}$/i.test(value) ? value : null;
+
+export const terminalScheme = (mode: "dark" | "light", colors: TerminalColors | null) =>
+  new TerminalScheme({
+    mode,
+    background: hexOrNull(colors?.defaultBackground),
+    foreground: hexOrNull(colors?.defaultForeground),
+    blue: hexOrNull(colors?.palette[mode === "dark" ? 12 : 4]),
+    red: hexOrNull(colors?.palette[mode === "dark" ? 9 : 1]),
+  });
+
+/** Colors by role. Components use only these roles, never a fixed color. */
 export class Theme extends Data.Class<{
   readonly accent: string;
   readonly background: string;
@@ -48,32 +97,63 @@ export class Theme extends Data.Class<{
   readonly text: string;
   readonly muted: string;
   readonly faint: string;
+  readonly error: string;
+  /** Covers the screen behind a dialog */
+  readonly backdrop: string;
 }> {}
 
-const defaultAccent = new Hsl({ hue: 222, saturation: 0.85, lightness: 0.72 });
+const defaults = {
+  dark: { background: "#15171d", foreground: "#e4e6eb", red: "#f07178" },
+  light: { background: "#fafafa", foreground: "#1f2328", red: "#c62828" },
+};
 
-export const themeFor = (accent: Hsl | null) => {
-  const base = accent ?? defaultAccent;
-  // The surfaces take only the hue, so that every accent reads well on them
-  const tint = (saturation: number, lightness: number) =>
-    toHex(new Hsl({ hue: base.hue, saturation: base.saturation * saturation, lightness }));
+const defaultAccent = new Hsl({ hue: 222, saturation: 0.85, lightness: 0.6 });
 
-  return new Theme({
-    accent: toHex(
-      new Hsl({
-        hue: base.hue,
-        saturation: Math.max(base.saturation, 0.45),
-        lightness: Math.min(Math.max(base.lightness, 0.62), 0.78),
-      }),
-    ),
-    background: tint(0.35, 0.07),
-    panel: tint(0.3, 0.11),
-    selection: tint(0.45, 0.22),
-    text: tint(0.15, 0.92),
-    muted: tint(0.15, 0.62),
-    faint: tint(0.25, 0.3),
+// The accent must read well as text on the background of the mode
+const accentLightness = {
+  dark: { minimum: 0.62, maximum: 0.78 },
+  light: { minimum: 0.3, maximum: 0.45 },
+};
+
+const readableAccent = (color: Hsl, mode: "dark" | "light") => {
+  const range = accentLightness[mode];
+  return new Hsl({
+    hue: color.hue,
+    saturation: Math.max(color.saturation, 0.45),
+    lightness: Math.min(Math.max(color.lightness, range.minimum), range.maximum),
   });
 };
+
+/** The surfaces come from the terminal, the accent from the cover or else from the terminal blue */
+export const themeFor = (scheme: TerminalScheme, cover: Hsl | null) => {
+  const fallback = defaults[scheme.mode];
+  const background = fromHex(scheme.background ?? fallback.background);
+  const foreground = fromHex(scheme.foreground ?? fallback.foreground);
+  const terminalAccent = scheme.blue === null ? null : toHsl(fromHex(scheme.blue));
+  const accent = toRgb(readableAccent(cover ?? terminalAccent ?? defaultAccent, scheme.mode));
+  const dark = scheme.mode === "dark";
+
+  return new Theme({
+    accent: toHex(accent),
+    background: toHex(background),
+    panel: toHex(mix(mix(background, foreground, dark ? 0.05 : 0.04), accent, 0.03)),
+    selection: toHex(mix(background, accent, dark ? 0.24 : 0.16)),
+    text: toHex(foreground),
+    muted: toHex(mix(foreground, background, 0.38)),
+    faint: toHex(mix(foreground, background, 0.62)),
+    error: scheme.red ?? fallback.red,
+    backdrop: dark ? "#000000a0" : "#00000050",
+  });
+};
+
+export const ThemeContext = createContext(
+  themeFor(
+    new TerminalScheme({ mode: "dark", background: null, foreground: null, blue: null, red: null }),
+    null,
+  ),
+);
+
+export const useTheme = () => useContext(ThemeContext);
 
 const hueBins = 12;
 
@@ -93,10 +173,13 @@ export const artworkAccent = (image: NativeImage) => {
   for (let y = 0; y < raw.height; y++) {
     for (let x = 0; x < raw.width; x++) {
       const index = y * raw.stride + x * 4;
-      const red = raw.data[index] ?? 0;
-      const green = raw.data[index + 1] ?? 0;
-      const blue = raw.data[index + 2] ?? 0;
-      const color = toHsl(red, green, blue);
+      const color = toHsl(
+        new Rgb({
+          red: raw.data[index] ?? 0,
+          green: raw.data[index + 1] ?? 0,
+          blue: raw.data[index + 2] ?? 0,
+        }),
+      );
       if (color.saturation < 0.2 || color.lightness < 0.15 || color.lightness > 0.9) continue;
 
       // Each pixel counts by its saturation, so that strong colors win over pale ones

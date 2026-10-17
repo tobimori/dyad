@@ -1,4 +1,4 @@
-import type { Theme } from "./theme.ts";
+import { useTheme } from "./theme.ts";
 
 /** The sections, with the active one marked */
 export function Sidebar<S extends string>(props: {
@@ -8,11 +8,12 @@ export function Sidebar<S extends string>(props: {
     readonly count: number;
   }>;
   readonly active: S;
-  readonly theme: Theme;
   readonly onSelect: (section: S) => void;
 }) {
+  const theme = useTheme();
+
   return (
-    <box width={22} flexDirection="column" backgroundColor={props.theme.panel} paddingY={1}>
+    <box width={22} flexDirection="column" backgroundColor={theme.panel} paddingY={1}>
       {props.sections.map((section) => {
         const active = section.id === props.active;
         return (
@@ -21,16 +22,16 @@ export function Sidebar<S extends string>(props: {
             flexDirection="row"
             height={1}
             paddingRight={1}
-            backgroundColor={active ? props.theme.selection : "transparent"}
+            backgroundColor={active ? theme.selection : "transparent"}
             onMouseDown={() => props.onSelect(section.id)}
           >
-            <text width={2} fg={props.theme.accent}>
+            <text width={2} fg={theme.accent}>
               {active ? "▌" : " "}
             </text>
-            <text flexGrow={1} fg={active ? props.theme.text : props.theme.muted}>
+            <text flexGrow={1} fg={active ? theme.text : theme.muted}>
               {active ? <strong>{section.label}</strong> : section.label}
             </text>
-            <text fg={props.theme.faint}>{section.count === 0 ? "" : String(section.count)}</text>
+            <text fg={theme.faint}>{section.count === 0 ? "" : String(section.count)}</text>
           </box>
         );
       })}

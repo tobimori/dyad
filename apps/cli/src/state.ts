@@ -1,15 +1,22 @@
-import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
-import { Effect, Option } from "effect";
+import { ConnectionStatus, ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
+import { Effect, Layer, Option } from "effect";
 import type { Redacted } from "effect";
 import { Atom } from "effect/reactivity";
 
-export const serverAtoms = (serverUrl: string, deviceToken: Redacted.Redacted<string>) => {
-  const runtime = Atom.runtime(serverConnectionLayer(serverUrl, Option.some(deviceToken)));
+/** `logging` sends the logs of the connection to the log file, not to the terminal */
+export const serverAtoms = (
+  serverUrl: string,
+  deviceToken: Redacted.Redacted<string>,
+  logging: Layer.Layer<never>,
+) => {
+  const runtime = Atom.runtime(
+    serverConnectionLayer(serverUrl, Option.some(deviceToken)).pipe(Layer.provideMerge(logging)),
+  );
+
   return {
     connection: runtime.atom(ServerConnection),
-    server: runtime.atom(
-      ServerConnection.use((client) => client.describe()).pipe(Effect.timeout("5 seconds")),
-    ),
+    // `Atom` 4.0.5 calls an argument that is a function, and a service key is a class
+    status: runtime.subscriptionRef(() => Effect.service(ConnectionStatus)),
     sources: runtime.atom(
       ServerConnection.use((client) => client.listSources()).pipe(Effect.timeout("5 seconds")),
     ),

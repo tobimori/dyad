@@ -1,22 +1,6 @@
-import { PlayContext, SourceSummary } from "@dyad/domain";
+import { SavedSession } from "@dyad/client-runtime";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import envPaths from "env-paths";
-
-import { PlayQueue, RepeatMode, queueEntry } from "./queue.ts";
-
-class SavedEntry extends Schema.Class<SavedEntry>("SavedEntry")({
-  source: SourceSummary,
-  context: PlayContext,
-}) {}
-
-/** The player state that the CLI restores on the next start */
-export class SavedSession extends Schema.Class<SavedSession>("SavedSession")({
-  entries: Schema.Array(SavedEntry),
-  current: Schema.NullOr(Schema.Int),
-  shuffle: Schema.Boolean,
-  repeat: RepeatMode,
-  volume: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
-}) {}
 
 // One session per server origin, because the entries are sources of that server
 const Sessions = Schema.fromJsonString(Schema.Record(Schema.String, SavedSession));
@@ -53,23 +37,4 @@ export const saveSession = (origin: string, session: SavedSession) =>
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     const text = yield* Schema.encodeEffect(Sessions)({ ...sessions, [origin]: session });
     yield* fs.writeFileString(file, text);
-  });
-
-export const sessionOf = (queue: PlayQueue, volume: number) =>
-  new SavedSession({
-    entries: queue.entries.map(
-      (entry) => new SavedEntry({ source: entry.source, context: entry.context }),
-    ),
-    current: queue.current,
-    shuffle: queue.shuffle,
-    repeat: queue.repeat,
-    volume,
-  });
-
-export const queueOf = (session: SavedSession) =>
-  new PlayQueue({
-    entries: session.entries.map((entry) => queueEntry(entry.source, entry.context)),
-    current: session.current,
-    shuffle: session.shuffle,
-    repeat: session.repeat,
   });

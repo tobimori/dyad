@@ -1,21 +1,27 @@
-import type { SourceSummary } from "@dyad/domain";
+import { songLine } from "@dyad/client-runtime";
+import type { SavedSession } from "@dyad/client-runtime";
+import type { PlayContext, SourceSummary } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
-import type { Audio } from "@opentui/core";
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { Effect } from "effect";
-import type { Option } from "effect";
+import { CliRenderEvents } from "@opentui/core";
+import type { Audio, BoxRenderable, InputRenderable, Renderable } from "@opentui/core";
+import { useRenderer, useTerminalDimensions } from "@opentui/react";
+import { Data, Effect } from "effect";
+import type { Fiber, Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useDialog } from "./dialog.tsx";
+import { Action, ActionsDialog, HelpDialog } from "./dialogs.tsx";
 import { Footer } from "./footer.tsx";
 import { Header, SearchField } from "./header.tsx";
-import { hints, keyOf } from "./keys.ts";
-import { NowPlaying } from "./now-playing.tsx";
-import { Action, ActionsPopup, HelpPopup } from "./popups.tsx";
-import type { SavedSession } from "./session.ts";
+import { commands, useCommands } from "./keymap.ts";
+import type { Command } from "./keymap.ts";
+import { NowPlayingPanel, NowPlayingView } from "./now-playing.tsx";
 import { Sidebar } from "./sidebar.tsx";
 import type { ServerAtoms } from "./state.ts";
-import { themeFor } from "./theme.ts";
+import { useCoverAccent } from "./theme-provider.tsx";
+import { useTheme } from "./theme.ts";
+import { useToast } from "./toast.tsx";
 import { ListItem, TrackList } from "./track-list.tsx";
 import { useArtwork } from "./use-artwork.ts";
 import { usePlayer } from "./use-player.ts";
@@ -32,8 +38,16 @@ const sections = [
 type Section = (typeof sections)[number]["id"];
 
 const sidebarMinWidth = 100;
-const nowPlayingMinWidth = 120;
+const panelMinWidth = 120;
 const pageRows = 10;
+const upNextRows = 20;
+
+class ActionTarget extends Data.Class<{
+  readonly source: SourceSummary;
+  readonly context: typeof PlayContext.Type;
+  /** The position in the queue, so that the action can remove the entry */
+  readonly queueIndex: number | null;
+}> {}
 
 const toItems = (sources: ReadonlyArray<SourceSummary>) =>
   sources.map((source) => new ListItem({ key: source.id, source }));
@@ -42,43 +56,99 @@ export function App(props: {
   readonly serverUrl: string;
   readonly atoms: ServerAtoms;
   readonly audio: Audio;
-  readonly saved: Option.Option<SavedSession>;
+  readonly restore: () => Option.Option<SavedSession>;
   readonly save: (session: SavedSession) => Effect.Effect<void>;
+  /** Runs an effect with the log file of the CLI */
+  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
 }) {
   const renderer = useRenderer();
   const screen = useTerminalDimensions();
-  const server = useAtomValue(props.atoms.server);
+  const theme = useTheme();
+  const toast = useToast();
+  const dialog = useDialog();
+
   const connection = useAtomValue(props.atoms.connection);
+  const statusResult = useAtomValue(props.atoms.status);
   const sourcesResult = useAtomValue(props.atoms.sources);
   const recentResult = useAtomValue(props.atoms.recentPlays);
-  const retryServer = useAtomRefresh(props.atoms.server);
-  const retrySources = useAtomRefresh(props.atoms.sources);
+  const refreshSources = useAtomRefresh(props.atoms.sources);
   const refreshRecent = useAtomRefresh(props.atoms.recentPlays);
 
   const client = AsyncResult.isSuccess(connection) ? connection.value : null;
+  const status = AsyncResult.isSuccess(statusResult) ? statusResult.value : "connecting";
+
   const player = usePlayer({
     audio: props.audio,
     serverUrl: props.serverUrl,
     connection: client,
-    saved: props.saved,
+    restore: props.restore,
     save: props.save,
+    run: props.run,
     onPlayRecorded: refreshRecent,
   });
-  const search = useSearch(client);
+  const search = useSearch({
+    connection: client,
+    run: props.run,
+    onFailure: (message) => toast("error", message),
+  });
   const artwork = useArtwork(player.current?.source.artworkUrl ?? null);
-  const theme = themeFor(artwork?.accent ?? null);
+  useCoverAccent(artwork?.accent ?? null);
 
+  const main = useRef<BoxRenderable | null>(null);
+  const searchInput = useRef<InputRenderable | null>(null);
   const [section, setSection] = useState<Section>("library");
-  const [typing, setTyping] = useState(false);
-  const [popup, setPopup] = useState<"actions" | "help" | null>(null);
-  const [actionIndex, setActionIndex] = useState(0);
+  const [view, setView] = useState<"browse" | "nowPlaying">("browse");
+  const [focusSearch, setFocusSearch] = useState(false);
   // The selection follows the item, not the row, because search results reorder while providers answer
-  const [selection, setSelection] = useState<Record<Section, string | null>>({
+  const [selection, setSelectionState] = useState<Record<Section, string | null>>({
     search: null,
     library: null,
     history: null,
     queue: null,
   });
+  // Keys that repeat fast can come before the next render, so key handlers read the newest selection
+  const selectionRef = useRef(selection);
+  const setSelection = (next: Record<Section, string | null>) => {
+    selectionRef.current = next;
+    setSelectionState(next);
+  };
+
+  // The keys of the list work only while the main box has focus, so the focus must not get lost
+  useEffect(() => {
+    main.current?.focus();
+    const refocus = (target: Renderable | null) => {
+      if (target === null) main.current?.focus();
+    };
+    renderer.on(CliRenderEvents.FOCUSED_RENDERABLE, refocus);
+    return () => {
+      renderer.off(CliRenderEvents.FOCUSED_RENDERABLE, refocus);
+    };
+  }, []);
+
+  // The search field exists only after the render that shows the search section
+  useEffect(() => {
+    if (!focusSearch) return;
+    searchInput.current?.focus();
+    setFocusSearch(false);
+  }, [focusSearch]);
+
+  const previousStatus = useRef(status);
+  useEffect(() => {
+    const previous = previousStatus.current;
+    previousStatus.current = status;
+    if (previous === "connected" && status === "reconnecting") {
+      toast("error", "The connection to the server dropped. Dyad tries again.");
+    }
+    // Calls fail while the connection is down, so the lists load again after it comes back
+    if (previous === "reconnecting" && status === "connected") {
+      refreshSources();
+      refreshRecent();
+      toast("notice", "Connected to the server again");
+    }
+  }, [status]);
+
+  const title = player.current === undefined ? "dyad" : `${songLine(player.current.source)} · dyad`;
+  useEffect(() => renderer.setTerminalTitle(title), [title]);
 
   // The footer renders twice a second, so the long lists keep their items between renders
   const searchItems = useMemo(() => toItems(search.results), [search.results]);
@@ -100,19 +170,18 @@ export function App(props: {
     ),
   };
   const items = lists[section];
-  const selectedIndex = Math.max(
-    0,
-    items.findIndex((item) => item.key === selection[section]),
-  );
+  const indexOfSelection = () =>
+    Math.max(
+      0,
+      items.findIndex((item) => item.key === selectionRef.current[section]),
+    );
+  const selectedIndex = indexOfSelection();
   const selectedItem = items[selectedIndex];
 
   const select = (index: number) => {
     const item = items[Math.max(0, Math.min(items.length - 1, index))];
-    if (item !== undefined) setSelection({ ...selection, [section]: item.key });
+    if (item !== undefined) setSelection({ ...selectionRef.current, [section]: item.key });
   };
-
-  const contextAt = (index: number) =>
-    section === "queue" ? (player.queue.entries[index]?.context ?? "library") : section;
 
   const activate = (index: number) => {
     if (section === "queue") {
@@ -126,59 +195,117 @@ export function App(props: {
     );
   };
 
+  const openSection = (id: Section) => {
+    setView("browse");
+    setSection(id);
+  };
+
+  const startTyping = () => {
+    openSection("search");
+    setFocusSearch(true);
+  };
+
+  // The search field does not take the focus here, so that `tab` can go on to the next section
+  const moveSection = (direction: 1 | -1) => {
+    const index = sections.findIndex((candidate) => candidate.id === section);
+    const next = sections[(index + direction + sections.length) % sections.length];
+    if (next !== undefined) openSection(next.id);
+  };
+
   const searchFor = (query: string) => {
-    setSection("search");
-    setTyping(false);
+    openSection("search");
     search.search(query);
   };
 
-  // The actions use the selected row, or the source that plays when the list is empty
-  const actionSource = selectedItem?.source ?? player.current?.source;
-  const actionContext =
-    selectedItem === undefined ? (player.current?.context ?? "library") : contextAt(selectedIndex);
+  // In the list, the actions use the selected row; in the now playing view, the current source
+  const actionTarget = () => {
+    const index = indexOfSelection();
+    const item = items[index];
+    if (view === "browse" && item !== undefined) {
+      if (section !== "queue") {
+        return new ActionTarget({ source: item.source, context: section, queueIndex: null });
+      }
+      const context = player.queue.entries[index]?.context ?? "library";
+      return new ActionTarget({ source: item.source, context, queueIndex: index });
+    }
 
-  const actionsFor = (source: SourceSummary) => {
+    const current = player.current;
+    if (current === undefined) return undefined;
+    return new ActionTarget({
+      source: current.source,
+      context: current.context,
+      queueIndex: player.queue.current,
+    });
+  };
+
+  const actionsFor = (target: ActionTarget) => {
+    const source = target.source;
     const list = [
-      new Action({ label: "Play next", run: () => player.playNext(source, actionContext) }),
-      new Action({ label: "Add to queue", run: () => player.addToQueue(source, actionContext) }),
+      new Action({
+        command: commands.playNext,
+        label: "Play next",
+        run: () => player.playNext(source, target.context),
+      }),
+      new Action({
+        command: commands.addToQueue,
+        label: "Add to queue",
+        run: () => player.addToQueue(source, target.context),
+      }),
     ];
 
     const artist = source.artist;
     if (artist !== null) {
       list.push(
-        new Action({ label: `Search the artist: ${artist}`, run: () => searchFor(artist) }),
+        new Action({
+          command: commands.searchArtist,
+          label: `Search the artist: ${artist}`,
+          run: () => searchFor(artist),
+        }),
       );
     }
 
     const album = source.album;
     if (album !== null) {
-      list.push(new Action({ label: `Search the album: ${album}`, run: () => searchFor(album) }));
+      list.push(
+        new Action({
+          command: commands.searchAlbum,
+          label: `Search the album: ${album}`,
+          run: () => searchFor(album),
+        }),
+      );
     }
 
-    if (section === "queue" && selectedItem !== undefined) {
+    const queueIndex = target.queueIndex;
+    if (section === "queue" && queueIndex !== null) {
       list.push(
-        new Action({ label: "Remove from queue", run: () => player.remove(selectedIndex) }),
+        new Action({
+          command: commands.remove,
+          label: "Remove from queue",
+          run: () => player.remove(queueIndex),
+        }),
       );
     }
     return list;
   };
 
-  const actions = actionSource === undefined ? [] : actionsFor(actionSource);
-
-  const runAction = (index: number) => {
-    setPopup(null);
-    actions[index]?.run();
+  const runAction = (command: Command) => {
+    const target = actionTarget();
+    if (target === undefined) return;
+    actionsFor(target)
+      .find((action) => action.command === command)
+      ?.run();
   };
 
-  const moveSection = (direction: 1 | -1) => {
-    const index = sections.findIndex((candidate) => candidate.id === section);
-    const next = sections[(index + direction + sections.length) % sections.length];
-    if (next !== undefined) setSection(next.id);
+  const openActions = () => {
+    const target = actionTarget();
+    if (target === undefined) return;
+    dialog.push(<ActionsDialog title={songLine(target.source)} actions={actionsFor(target)} />);
   };
 
   const quit = () => {
     search.cancel();
-    Effect.runFork(
+    renderer.setTerminalTitle("");
+    props.run(
       player
         .quit()
         .pipe(
@@ -189,128 +316,76 @@ export function App(props: {
     );
   };
 
-  const removeSelected = () => {
-    if (section === "queue" && selectedItem !== undefined) player.remove(selectedIndex);
-  };
+  useCommands([[commands.quit, quit]]);
 
-  const listKeys = new Map<string, () => void>([
+  const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
+    [commands.help, () => dialog.push(<HelpDialog />)],
+    [commands.queue, () => openSection("queue")],
+    [commands.search, startTyping],
+    [commands.nextSection, () => moveSection(1)],
+    [commands.previousSection, () => moveSection(-1)],
+    [commands.nowPlaying, () => setView(view === "browse" ? "nowPlaying" : "browse")],
     [
-      "/",
+      commands.reload,
       () => {
-        setSection("search");
-        setTyping(true);
-      },
-    ],
-    ["?", () => setPopup("help")],
-    [
-      "a",
-      () => {
-        if (actions.length === 0) return;
-        setActionIndex(0);
-        setPopup("actions");
-      },
-    ],
-    ["q", quit],
-    [
-      "r",
-      () => {
-        retryServer();
-        retrySources();
+        refreshSources();
         refreshRecent();
       },
     ],
-    ["space", player.togglePause],
-    ["n", player.next],
-    ["b", player.previous],
-    ["+", () => player.changeVolume(1)],
-    ["=", () => player.changeVolume(1)],
-    ["-", () => player.changeVolume(-1)],
-    [",", () => player.seekBy(-player.seekStepMs)],
-    [".", () => player.seekBy(player.seekStepMs)],
-    ["s", player.toggleShuffle],
-    ["R", player.cycleRepeat],
-    ["up", () => select(selectedIndex - 1)],
-    ["k", () => select(selectedIndex - 1)],
-    ["down", () => select(selectedIndex + 1)],
-    ["j", () => select(selectedIndex + 1)],
-    ["pageup", () => select(selectedIndex - pageRows)],
-    ["pagedown", () => select(selectedIndex + pageRows)],
-    ["g", () => select(0)],
-    ["home", () => select(0)],
-    ["G", () => select(items.length - 1)],
-    ["end", () => select(items.length - 1)],
+    [commands.togglePause, player.togglePause],
+    [commands.next, player.next],
+    [commands.previous, player.previous],
+    [commands.seekBack, () => player.seekBy(-player.seekStepMs)],
+    [commands.seekForward, () => player.seekBy(player.seekStepMs)],
+    [commands.volumeUp, () => player.changeVolume(1)],
+    [commands.volumeDown, () => player.changeVolume(-1)],
+    [commands.shuffle, player.toggleShuffle],
+    [commands.repeat, player.cycleRepeat],
+    [commands.playNext, () => runAction(commands.playNext)],
+    [commands.addToQueue, () => runAction(commands.addToQueue)],
+  ];
+
+  const listCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [
-      "return",
+      commands.play,
       () => {
-        if (selectedItem !== undefined) activate(selectedIndex);
+        if (selectedItem !== undefined) activate(indexOfSelection());
       },
     ],
-    ["d", removeSelected],
-    ["delete", removeSelected],
+    [commands.actions, openActions],
+    [commands.up, () => select(indexOfSelection() - 1)],
+    [commands.down, () => select(indexOfSelection() + 1)],
+    [commands.pageUp, () => select(indexOfSelection() - pageRows)],
+    [commands.pageDown, () => select(indexOfSelection() + pageRows)],
+    [commands.first, () => select(0)],
+    [commands.last, () => select(items.length - 1)],
+  ];
+
+  const queueCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [
-      "c",
+      commands.remove,
       () => {
-        if (section === "queue") player.clear();
+        if (selectedItem !== undefined) player.remove(indexOfSelection());
       },
     ],
-  ]);
+    [commands.clear, player.clear],
+  ];
 
-  const popupKey = (name: string) => {
-    if (popup === "help") {
-      if (name === "escape" || name === "?" || name === "q") setPopup(null);
-      return;
-    }
-    if (name === "escape" || name === "a") setPopup(null);
-    if (name === "up" || name === "k") setActionIndex(Math.max(0, actionIndex - 1));
-    if (name === "down" || name === "j") {
-      setActionIndex(Math.min(actions.length - 1, actionIndex + 1));
-    }
-    if (name === "return") runAction(actionIndex);
-  };
+  const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
+    view === "nowPlaying"
+      ? [
+          [commands.close, () => setView("browse")],
+          [commands.actions, openActions],
+        ]
+      : [...(section === "queue" ? queueCommands : []), ...listCommands];
 
-  useKeyboard((key) => {
-    const name = keyOf(key);
-    if (key.ctrl && key.name === "c") {
-      quit();
-      return;
-    }
-    if (popup !== null) {
-      popupKey(name);
-      return;
-    }
-
-    // OpenTUI 0.6.6 runs global key handlers before the focused input, so typed text must not
-    // reach the commands below
-    if (typing) {
-      if (name === "escape" || name === "down") setTyping(false);
-      return;
-    }
-
-    if (name === "tab") {
-      moveSection(key.shift ? -1 : 1);
-      return;
-    }
-    if (key.shift && name === "left") {
-      player.seekBy(-player.seekStepMs);
-      return;
-    }
-    if (key.shift && name === "right") {
-      player.seekBy(player.seekStepMs);
-      return;
-    }
-    listKeys.get(name)?.();
-  });
+  // The footer shows the hints in this order
+  useCommands([...viewCommands, ...playbackCommands], { target: main, targetMode: "focus" });
 
   const showSidebar = screen.width >= sidebarMinWidth;
-  const showNowPlaying = screen.width >= nowPlayingMinWidth && screen.height >= 24;
-  const nowPlayingWidth = Math.min(50, Math.floor(screen.width * 0.32));
+  const showPanel = screen.width >= panelMinWidth && screen.height >= 24;
+  const panelWidth = Math.min(50, Math.floor(screen.width * 0.32));
   const bodyHeight = screen.height - 4;
-
-  const serverStatus = AsyncResult.match(server, {
-    onInitial: () => "Connecting",
-    onFailure: () => "Unavailable",
-    onSuccess: () => "Connected",
-  });
 
   const emptyText = {
     search: search.query.trim() === "" ? "Type to search the library and the providers" : "",
@@ -337,74 +412,82 @@ export function App(props: {
   const playingKey =
     section === "queue" ? (player.current?.key ?? null) : (player.current?.source.id ?? null);
 
-  const hintKeys = () => {
-    if (popup !== null) return hints[popup];
-    if (typing) return hints.input;
-    if (section === "queue") return hints.queue;
-    return hints.list;
-  };
-
   const current = player.queue.current;
-  const upNext = current === null ? [] : player.queue.entries.slice(current + 1, current + 6);
+  const upNext =
+    current === null ? [] : player.queue.entries.slice(current + 1, current + 1 + upNextRows);
+  const openNowPlaying = () => setView("nowPlaying");
 
   return (
-    <box flexDirection="column" width="100%" height="100%" backgroundColor={theme.background}>
+    <box
+      ref={main}
+      focusable
+      flexDirection="column"
+      width="100%"
+      height="100%"
+      backgroundColor={theme.background}
+    >
       <Header
-        sections={showSidebar ? [] : sections}
+        sections={showSidebar || view === "nowPlaying" ? [] : sections}
         active={section}
-        status={showSidebar ? `${props.serverUrl} · ${serverStatus}` : serverStatus}
-        theme={theme}
+        server={showSidebar ? props.serverUrl : null}
+        status={status}
       />
-      <box flexDirection="row" flexGrow={1}>
-        {showSidebar && (
-          <Sidebar
-            sections={sections.map((candidate) => ({
-              id: candidate.id,
-              label: candidate.label,
-              count: lists[candidate.id].length,
-            }))}
-            active={section}
-            theme={theme}
-            onSelect={(id) => {
-              setSection(id);
-              setTyping(id === "search");
-            }}
-          />
-        )}
-        <box flexDirection="column" flexGrow={1} paddingX={1} paddingTop={1}>
-          {section === "search" && (
-            <SearchField
-              query={search.query}
-              focused={typing}
-              theme={theme}
-              onFocus={() => setTyping(true)}
-              onInput={search.search}
-              onSubmit={() => setTyping(false)}
+      {view === "nowPlaying" ? (
+        <NowPlayingView
+          entry={player.current}
+          upNext={upNext}
+          artwork={artwork}
+          positionMs={player.position()}
+          durationMs={player.durationMs()}
+          width={screen.width}
+          height={bodyHeight}
+          onSeek={player.seekTo}
+        />
+      ) : (
+        <box flexDirection="row" flexGrow={1}>
+          {showSidebar && (
+            <Sidebar
+              sections={sections.map((candidate) => ({
+                id: candidate.id,
+                label: candidate.label,
+                count: lists[candidate.id].length,
+              }))}
+              active={section}
+              onSelect={(id) => (id === "search" ? startTyping() : openSection(id))}
             />
           )}
-          <TrackList
-            title={listTitle}
-            items={items}
-            selected={selectedIndex}
-            playingKey={playingKey}
-            historyRows={section === "queue" ? (current ?? 0) : 0}
-            empty={emptyText[section]}
-            theme={theme}
-            onSelect={select}
-            onActivate={activate}
-          />
+          <box flexDirection="column" flexGrow={1} paddingX={1} paddingTop={1}>
+            {section === "search" && (
+              <SearchField
+                input={searchInput}
+                query={search.query}
+                onInput={search.search}
+                onLeave={() => main.current?.focus()}
+              />
+            )}
+            <TrackList
+              title={listTitle}
+              items={items}
+              selected={selectedIndex}
+              playingKey={playingKey}
+              historyRows={section === "queue" ? (current ?? 0) : 0}
+              empty={emptyText[section]}
+              onSelect={select}
+              onActivate={activate}
+            />
+          </box>
+          {showPanel && (
+            <NowPlayingPanel
+              entry={player.current}
+              upNext={upNext}
+              artwork={artwork}
+              width={panelWidth}
+              height={bodyHeight}
+              onOpen={openNowPlaying}
+            />
+          )}
         </box>
-        {showNowPlaying && (
-          <NowPlaying
-            entry={player.current}
-            upNext={upNext}
-            artwork={artwork}
-            width={nowPlayingWidth}
-            height={bodyHeight}
-            theme={theme}
-          />
-        )}
-      </box>
+      )}
       <Footer
         entry={player.current}
         state={player.state}
@@ -414,21 +497,12 @@ export function App(props: {
         shuffle={player.queue.shuffle}
         repeat={player.queue.repeat}
         message={player.error}
-        hints={hintKeys()}
-        width={screen.width - 2}
-        theme={theme}
+        artwork={artwork}
+        showCover={view === "browse" && !showPanel}
+        onOpen={openNowPlaying}
+        onSeek={player.seekTo}
+        onVolume={player.setVolume}
       />
-      {popup === "actions" && (
-        <ActionsPopup
-          title={actionSource?.title ?? "Actions"}
-          actions={actions}
-          selected={actionIndex}
-          screen={screen}
-          theme={theme}
-          onRun={runAction}
-        />
-      )}
-      {popup === "help" && <HelpPopup screen={screen} theme={theme} />}
     </box>
   );
 }
