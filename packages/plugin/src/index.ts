@@ -10,7 +10,10 @@ export class ProviderSource extends Data.Class<{
   readonly title: string;
   readonly artist: string | null;
   readonly album: string | null;
-  readonly durationMs: number;
+  /** `null` when the provider does not give it before playback */
+  readonly durationMs: number | null;
+  /** Links the source to the same recording from other providers and local files */
+  readonly isrc: string | null;
   /** FFmpeg name of the container that the resolver gives, for example `mov` for MP4 */
   readonly container: string;
   /** FFmpeg name of the codec, for example `aac` */
@@ -31,6 +34,17 @@ export type Resolve = (
   externalId: string,
   credentials: Credentials,
 ) => Effect.Effect<ProviderAudio, ResolveError>;
+
+/** Searches the provider's catalog with the credentials of the user who searches */
+export type Search = (
+  query: string,
+  credentials: Credentials,
+) => Effect.Effect<ReadonlyArray<ProviderSource>, SearchError>;
+
+/** The core logs `reason`, so it must not contain tokens, signed URLs or keys */
+export class SearchError extends Data.TaggedError("SearchError")<{
+  readonly reason: string;
+}> {}
 
 /** The core logs `reason`, so it must not contain tokens, signed URLs or keys */
 export class ResolveError extends Data.TaggedError("ResolveError")<{
@@ -58,8 +72,15 @@ export class PluginContext extends Data.Class<{
     readonly sync: (root: string, paths: ReadonlyArray<string>) => Effect.Effect<void>;
   };
   readonly source: {
-    /** Adds or updates a provider source in the catalog */
+    /** Adds or updates a provider source in the shared catalog, for example from a library sync */
     readonly add: (source: ProviderSource) => Effect.Effect<void>;
+  };
+  readonly search: {
+    /**
+     * Adds the catalog search of `provider` for users who linked an account. The core caches the
+     * results on this replica and adds a result to the shared catalog when it is played.
+     */
+    readonly add: (provider: string, search: Search) => Effect.Effect<void, never, Scope.Scope>;
   };
   readonly account: {
     /** Lets users link their account of `provider`. The core stores the credentials. */

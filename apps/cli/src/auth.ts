@@ -2,20 +2,28 @@ import { hostname } from "node:os";
 
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
 import type { DeviceSession } from "@dyad/domain";
-import { AccountLinkFailed, AuthenticationFailed, DeviceId, Unauthorized } from "@dyad/domain";
+import {
+  AccountLinkFailed,
+  AuthenticationFailed,
+  DeviceId,
+  HttpUrl,
+  Unauthorized,
+} from "@dyad/domain";
 import { Clock, Config, Console, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
 import { Argument, Command, Prompt } from "effect/cli";
 
 import { BrowserLoginError } from "./browser-login.ts";
 import { deleteDeviceToken, loadDeviceToken, saveDeviceToken } from "./devices.ts";
 
-export const serverUrl = Config.String("DYAD_SERVER_URL").pipe(
-  Config.withDefault("http://127.0.0.1:4310"),
+/** Only the origin, because device tokens are per origin and the client sets its own paths */
+export const serverUrl = Config.schema(HttpUrl, "DYAD_SERVER_URL").pipe(
+  Config.withDefault(new URL("http://127.0.0.1:4310")),
+  Config.map((url) => url.origin),
 );
 
 export class NotSignedIn extends Data.TaggedError("NotSignedIn")<{}> {}
 
-export const notSignedIn = "Not signed in. Use `dyad login`, `dyad pair` or `dyad setup`.";
+const notSignedIn = "Not signed in. Use `dyad login`, `dyad pair` or `dyad setup`.";
 
 const publicConnection = Layer.unwrap(
   Effect.gen(function* () {
@@ -25,12 +33,17 @@ const publicConnection = Layer.unwrap(
 );
 
 /** Fails with `NotSignedIn` when this CLI has no device token for the server */
+export const deviceToken = Effect.gen(function* () {
+  const token = yield* loadDeviceToken(yield* serverUrl);
+  if (Option.isNone(token)) return yield* new NotSignedIn();
+  return token.value;
+});
+
 export const deviceConnection = Layer.unwrap(
   Effect.gen(function* () {
     const url = yield* serverUrl;
-    const token = yield* loadDeviceToken(url);
-    if (Option.isNone(token)) return yield* new NotSignedIn();
-    return serverConnectionLayer(url, token);
+    const token = yield* deviceToken;
+    return serverConnectionLayer(url, Option.some(token));
   }),
 );
 

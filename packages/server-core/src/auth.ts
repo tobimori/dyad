@@ -137,21 +137,28 @@ const createDevice = (userId: UserId, name: string) =>
     const token = hex(yield* randomBytes(32));
     const id = DeviceId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
 
-    yield* db
-      .insert(device)
-      .values({
-        id,
-        userId,
-        name,
-        tokenHash: yield* sha256(token),
-        createdAt: yield* Clock.currentTimeMillis,
-      })
-      .pipe(Effect.orDie);
+    yield* db.insert(device).values({
+      id,
+      userId,
+      name,
+      tokenHash: yield* sha256(token),
+      createdAt: yield* Clock.currentTimeMillis,
+    });
 
     return new DeviceSession({ token, principal: new Principal({ userId, deviceId: id }) });
   });
 
-export const setup = (setupCode: string, username: string, password: string, deviceName: string) =>
+export const setup = ({
+  setupCode,
+  username,
+  password,
+  deviceName,
+}: {
+  readonly setupCode: string;
+  readonly username: string;
+  readonly password: string;
+  readonly deviceName: string;
+}) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
@@ -168,28 +175,28 @@ export const setup = (setupCode: string, username: string, password: string, dev
     if (result !== "claimed") return yield* new AuthenticationFailed({ reason: result });
 
     const userId = UserId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
-    yield* db
-      .insert(user)
-      .values({
-        id: userId,
-        username,
-        passwordHash: yield* hashPassword(password),
-        role: "admin",
-        createdAt: yield* Clock.currentTimeMillis,
-      })
-      .pipe(Effect.orDie);
+    yield* db.insert(user).values({
+      id: userId,
+      username,
+      passwordHash: yield* hashPassword(password),
+      role: "admin",
+      createdAt: yield* Clock.currentTimeMillis,
+    });
     return yield* createDevice(userId, deviceName);
   });
 
-export const login = (username: string, password: string, deviceName: string) =>
+export const login = ({
+  username,
+  password,
+  deviceName,
+}: {
+  readonly username: string;
+  readonly password: string;
+  readonly deviceName: string;
+}) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const [row] = yield* db
-      .select()
-      .from(user)
-      .where(eq(user.username, username))
-      .limit(1)
-      .pipe(Effect.orDie);
+    const [row] = yield* db.select().from(user).where(eq(user.username, username)).limit(1);
     if (row === undefined) {
       return yield* new AuthenticationFailed({ reason: "invalid_credentials" });
     }

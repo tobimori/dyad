@@ -1,8 +1,10 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { eq } from "drizzle-orm";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import * as Drizzle from "drizzle-orm/effect-sqlite-node";
 import { migrate } from "drizzle-orm/effect-sqlite-node/migrator";
 import { Clock, Context, Crypto, Effect, Layer, Path, Schema } from "effect";
+import { SqlError } from "effect/sql";
 
 import { relations } from "./relations.ts";
 import { replicaIdentity } from "./schema/replica.ts";
@@ -27,6 +29,16 @@ const makeDatabase = Effect.gen(function* () {
 export class Database extends Context.Service<Database, Effect.Success<typeof makeDatabase>>()(
   "@dyad/db/Database",
 ) {}
+
+// RETURN TYPE: the guard keeps the other errors of `E`, so `catchIf` removes only database errors
+const isDatabaseError = <E>(
+  error: E,
+): error is Extract<E, SqlError.SqlError | EffectDrizzleQueryError> =>
+  SqlError.isSqlError(error) || Schema.is(EffectDrizzleQueryError)(error);
+
+/** Makes database errors defects, so that a handler fails only with the errors of its contract */
+export const orDieOnDatabaseError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.catchIf(effect, isDatabaseError, Effect.die);
 
 export const nodeDatabaseLayer = (filename: string) =>
   Layer.effect(

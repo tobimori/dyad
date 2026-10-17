@@ -31,6 +31,8 @@ export class ServerDescriptor extends Schema.Class<ServerDescriptor>("ServerDesc
 
 export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")({
   id: Schema.String,
+  /** `local` for a file on the server, else the provider name, for example `apple_music` */
+  provider: Schema.String,
   title: Schema.NullOr(Schema.String),
   artist: Schema.NullOr(Schema.String),
   album: Schema.NullOr(Schema.String),
@@ -71,7 +73,12 @@ export class PlaybackUnavailable extends Schema.TaggedError<PlaybackUnavailable>
  * the browser has all `cookies` of `domain`, the client gives their values to `linkAccount`.
  */
 export class BrowserLogin extends Schema.Class<BrowserLogin>("BrowserLogin")({
-  url: Schema.String,
+  // The client gives `url` to the browser as an argument, so it must not look like a flag
+  url: Schema.String.check(
+    Schema.makeFilter((url) =>
+      URL.parse(url)?.protocol === "https:" ? undefined : "Expected an HTTPS URL",
+    ),
+  ),
   domain: Schema.String,
   cookies: Schema.NonEmptyArray(Schema.String),
 }) {}
@@ -105,7 +112,8 @@ export type DeviceId = typeof DeviceId.Type;
 
 const Username = Schema.String.check(Schema.isPattern(/^[a-z0-9._-]{1,64}$/));
 const DeviceName = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100));
-// The upper limit stops very long inputs from making password hashing slow
+// The upper limit only bounds the request size. HMAC hashes a long password once, so the length
+// does not make each PBKDF2 iteration slower.
 const Password = Schema.String.check(Schema.isMinLength(8), Schema.isMaxLength(1024));
 
 /** The user and device of an authenticated request */
@@ -165,7 +173,12 @@ const PublicRpc = RpcGroup.make(
     error: AuthenticationFailed,
   }),
   Rpc.make("login", {
-    payload: { username: Schema.String, password: Schema.String, deviceName: DeviceName },
+    // Without the setup rules, so that a wrong input gives `invalid_credentials`
+    payload: {
+      username: Schema.String.check(Schema.isMaxLength(64)),
+      password: Schema.String.check(Schema.isMaxLength(1024)),
+      deviceName: DeviceName,
+    },
     success: DeviceSession,
     error: AuthenticationFailed,
   }),
@@ -179,6 +192,15 @@ const PublicRpc = RpcGroup.make(
 
 const UserRpc = RpcGroup.make(
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
+  /**
+   * Streams matches as they arrive: sources on this server first, then the results of each linked
+   * provider. Every result can play at once with `preparePlayback`.
+   */
+  Rpc.make("search", {
+    payload: { query: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)) },
+    success: SourceSummary,
+    stream: true,
+  }),
   Rpc.make("preparePlayback", {
     payload: {
       sourceId: Schema.String.check(Schema.isUUID()),

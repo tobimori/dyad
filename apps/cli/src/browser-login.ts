@@ -91,6 +91,8 @@ export const browserLogin = (login: BrowserLogin) =>
             "--remote-debugging-port=0",
             "--no-first-run",
             "--no-default-browser-check",
+            // Chromium reads no switches after `--`, so the URL cannot become one
+            "--",
             login.url,
           ],
           { stdout: "ignore", stderr: "ignore" },

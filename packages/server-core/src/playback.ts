@@ -2,7 +2,7 @@
 import { Readable } from "node:stream";
 
 import { libraryRoot, localFile, source, sourceVariant } from "@dyad/db";
-import { Database } from "@dyad/db/node";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AudioCodec,
   AudioContainer,
@@ -14,7 +14,7 @@ import {
   UserId,
 } from "@dyad/domain";
 import { MediaStream, encodeFlac, remuxAudio } from "@dyad/media/node";
-import type { ProviderAudio, Resolve, ResolveError } from "@dyad/plugin";
+import type { ProviderAudio, ResolveError } from "@dyad/plugin";
 import { eq } from "drizzle-orm";
 import {
   Clock,
@@ -32,14 +32,10 @@ import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import { loadCredentials } from "./accounts.ts";
 import { fromHex, hex } from "./auth.ts";
-import { audioContainer, choosePlayback, contentTypes } from "./playback-formats.ts";
-
-/** Resolvers that plugins add, by provider name */
-export class SourceResolvers extends Context.Service<SourceResolvers, Map<string, Resolve>>()(
-  "@dyad/server-core/SourceResolvers",
-) {}
-
-export const sourceResolversLayer = Layer.sync(SourceResolvers, () => new Map());
+import { addProviderSource } from "./library.ts";
+import { SourceFormat, audioContainer, choosePlayback, contentTypes } from "./playback-formats.ts";
+import { SourceResolvers } from "./providers.ts";
+import { cachedProviderSource } from "./search.ts";
 
 const generateStreamKey = Effect.promise(() =>
   globalThis.crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [
@@ -98,24 +94,20 @@ const verifyGrant = (grant: StreamGrant, signature: string) =>
   });
 
 class FilePlayback extends Data.Class<{
-  readonly format: { readonly container: string; readonly codec: string };
+  readonly format: SourceFormat;
   readonly path: string;
 }> {}
 
 class ProviderPlayback extends Data.Class<{
-  readonly format: { readonly container: string; readonly codec: string };
+  readonly format: SourceFormat;
   /** FFmpeg demuxer for the resolved bytes */
   readonly demuxer: string;
   readonly resolve: Effect.Effect<ProviderAudio, ResolveError>;
 }> {}
 
-// A file on this replica plays before a provider stream of the same source
-const playableSource = (sourceId: string, userId: UserId) =>
+const selectSource = (sourceId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const path = yield* Path.Path;
-    const resolvers = yield* SourceResolvers;
-
     const [row] = yield* db
       .select({ source, variant: sourceVariant, root: libraryRoot.path, file: localFile.path })
       .from(source)
@@ -123,42 +115,79 @@ const playableSource = (sourceId: string, userId: UserId) =>
       .leftJoin(localFile, eq(localFile.sourceId, source.id))
       .leftJoin(libraryRoot, eq(libraryRoot.id, localFile.libraryRootId))
       .where(eq(source.id, sourceId))
-      .limit(1)
-      .pipe(Effect.orDie);
-    if (row === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
+      .limit(1);
+    return row;
+  });
 
-    const format = {
-      container: audioContainer(row.variant.container),
-      codec: row.variant.codec,
-    };
+const providerPlayback = (
+  item: {
+    readonly provider: string;
+    readonly externalId: string;
+    readonly container: string;
+    readonly codec: string;
+  },
+  userId: UserId,
+) =>
+  Effect.gen(function* () {
+    const resolvers = yield* SourceResolvers;
 
-    if (row.root !== null && row.file !== null) {
-      return new FilePlayback({ format, path: path.join(row.root, row.file) });
-    }
-
-    const resolve = resolvers.get(row.source.provider);
+    const resolve = resolvers.get(item.provider);
     if (resolve === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
 
-    const credentials = yield* loadCredentials(userId, row.source.provider);
+    const credentials = yield* loadCredentials(userId, item.provider);
     if (Option.isNone(credentials)) {
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
 
     return new ProviderPlayback({
-      format,
-      demuxer: row.variant.container,
-      resolve: resolve(row.source.externalId, credentials.value),
+      format: new SourceFormat({ container: audioContainer(item.container), codec: item.codec }),
+      demuxer: item.container,
+      resolve: resolve(item.externalId, credentials.value),
     });
+  });
+
+const playableSource = (sourceId: string, userId: UserId) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+
+    const row = yield* selectSource(sourceId);
+    if (row === undefined) {
+      const cached = yield* cachedProviderSource(sourceId);
+      if (Option.isNone(cached)) return yield* new PlaybackUnavailable({ reason: "not_found" });
+
+      // A search result is only in the provider cache until it is played. Check that the user can
+      // play it before it enters the shared catalog.
+      const playable = yield* providerPlayback(cached.value, userId);
+      yield* addProviderSource(cached.value);
+      return playable;
+    }
+
+    if (row.root !== null && row.file !== null) {
+      return new FilePlayback({
+        format: new SourceFormat({
+          container: audioContainer(row.variant.container),
+          codec: row.variant.codec,
+        }),
+        path: path.join(row.root, row.file),
+      });
+    }
+
+    return yield* providerPlayback(
+      {
+        provider: row.source.provider,
+        externalId: row.source.externalId,
+        container: row.variant.container,
+        codec: row.variant.codec,
+      },
+      userId,
+    );
   });
 
 export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabilities) =>
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
     const playable = yield* playableSource(sourceId, principal.userId);
-    const selection = choosePlayback(playable.format, capabilities);
-    if (Option.isNone(selection))
-      return yield* new PlaybackUnavailable({ reason: "unsupported_format" });
-    const choice = selection.value;
+    const choice = yield* choosePlayback(playable.format, capabilities);
 
     const grant = new StreamGrant({
       sourceId,
@@ -190,7 +219,9 @@ const providerStream = <E>(
     const options =
       keys.length === 0
         ? {}
-        : { decryption_keys: keys.map(([kid, key]) => `${kid}=${key}`).join(":") };
+        : {
+            decryption_keys: Redacted.make(keys.map(([kid, key]) => `${kid}=${key}`).join(":")),
+          };
 
     return Stream.unwrap(
       Effect.gen(function* () {
@@ -235,14 +266,10 @@ export const streamRoute = HttpRouter.add(
     const playable = yield* playableSource(request.sourceId, grant.userId);
 
     // A stream URL is stateless. Recheck the selected output against the current source.
-    const selection = choosePlayback(
+    const choice = yield* choosePlayback(
       playable.format,
       new PlaybackCapabilities({ formats: [grant.format] }),
     );
-    if (Option.isNone(selection)) {
-      return yield* new PlaybackUnavailable({ reason: "unsupported_format" });
-    }
-    const choice = selection.value;
     const contentType = contentTypes[choice.format.container];
 
     if (playable instanceof FilePlayback && choice.operation === "direct") {
@@ -261,16 +288,21 @@ export const streamRoute = HttpRouter.add(
 
     return HttpServerResponse.stream(
       body.pipe(
-        // Provider URLs and key material must not enter logs
-        Stream.tapError(() =>
+        // The error text can contain provider URLs or key material, so only its name is logged
+        Stream.tapError((error) =>
           Effect.logError("Playback stream failed").pipe(
-            Effect.annotateLogs({ sourceId: request.sourceId, operation: choice.operation }),
+            Effect.annotateLogs({
+              sourceId: request.sourceId,
+              operation: choice.operation,
+              error: error.name,
+            }),
           ),
         ),
       ),
       { contentType },
     );
   }).pipe(
+    orDieOnDatabaseError,
     Effect.catchTags({
       SchemaError: () => Effect.succeed(HttpServerResponse.empty({ status: 400 })),
       PlaybackUnavailable: (error) =>

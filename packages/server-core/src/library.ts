@@ -1,36 +1,35 @@
 import { libraryRoot, localFile, providerAccount, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
+import type { UserId } from "@dyad/domain";
 import { readAudioFile } from "@dyad/media/node";
 import type { AudioFile } from "@dyad/media/node";
 import type { ProviderSource } from "@dyad/plugin";
-import { eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path, Schema } from "effect";
 
-import { SourceResolvers } from "./playback.ts";
+import { AccountProviders } from "./accounts.ts";
+import { fromHex, hex } from "./auth.ts";
+import { SourceResolvers } from "./providers.ts";
 
 // Every catalog ID depends on this namespace; it must never change
-const namespaceHex = "5162e6fc8cee458490d95da3fb86a603";
-const namespace = Array.from({ length: 16 }, (_, index) =>
-  Number.parseInt(namespaceHex.slice(index * 2, index * 2 + 2), 16),
-);
+const namespace = fromHex("5162e6fc8cee458490d95da3fb86a603");
 
-const uuidV5 = (name: string) =>
+export const uuidV5 = (name: string) =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
-    const digest = yield* crypto.digest(
-      "SHA-1",
-      new Uint8Array([...namespace, ...new TextEncoder().encode(name)]),
-    );
-    const hex = Array.from(digest.subarray(0, 16), (byte, index) => {
+    const digest = yield* crypto
+      .digest("SHA-1", new Uint8Array([...namespace, ...new TextEncoder().encode(name)]))
+      .pipe(Effect.orDie);
+    const bytes = digest.subarray(0, 16).map((byte, index) => {
       if (index === 6) return (byte & 0x0f) | 0x50;
       // RFC 9562 variant
       if (index === 8) return (byte & 0x3f) | 0x80;
       return byte;
-    })
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    });
+    const digits = hex(bytes);
+    return `${digits.slice(0, 8)}-${digits.slice(8, 12)}-${digits.slice(12, 16)}-${digits.slice(16, 20)}-${digits.slice(20)}`;
   });
 
 class Stat extends Data.Class<{ readonly size: number; readonly mtime: number }> {}
@@ -196,44 +195,61 @@ export const addProviderSource = (providerSource: ProviderSource) =>
     );
   });
 
-const Tags = Schema.Record(Schema.String, Schema.String);
+export const Tags = Schema.Record(Schema.String, Schema.String);
 
 // Tags such as `3/12` give the position and the total
 const position = (tags: typeof Tags.Type, key: string, fallback: number) =>
   Number.parseInt(tags[key] ?? "", 10) || fallback;
 
-/** Sources with a file on this replica, or with a resolver and an account of the user, in album order */
+/** Query for the sources with a file on this replica, or with a resolver and, if the provider needs one, an account of the user */
+export const selectPlayableSources = (userId: UserId, match?: SQL) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const resolvers = yield* SourceResolvers;
+    const accountProviders = yield* AccountProviders;
+    const accounts = yield* db
+      .select({ provider: providerAccount.provider })
+      .from(providerAccount)
+      .where(eq(providerAccount.userId, userId));
+    const linkedProviders = new Set(accounts.map((account) => account.provider));
+    const playableProviders = [...resolvers.keys()].filter(
+      (provider) => !accountProviders.has(provider) || linkedProviders.has(provider),
+    );
+
+    return db
+      .select({ source, variant: sourceVariant, tags: localFile.tags })
+      .from(source)
+      .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
+      .leftJoin(localFile, eq(localFile.sourceId, source.id))
+      .where(and(or(isNotNull(localFile.id), inArray(source.provider, playableProviders)), match));
+  });
+
+export const sourceSummary = (
+  row: typeof source.$inferSelect,
+  variant: typeof sourceVariant.$inferSelect,
+) =>
+  new SourceSummary({
+    id: row.id,
+    provider: row.provider,
+    title: row.rawTitle,
+    artist: row.rawArtist,
+    album: row.rawAlbum,
+    durationMs: row.rawDurationMs,
+    codec: variant.codec,
+  });
+
+/** Playable sources in album order */
 export const listSources = Effect.gen(function* () {
-  const db = yield* Database;
   const principal = yield* CurrentPrincipal;
-  const resolvers = yield* SourceResolvers;
-  const accounts = yield* db
-    .select({ provider: providerAccount.provider })
-    .from(providerAccount)
-    .where(eq(providerAccount.userId, principal.userId));
-  const playableProviders = accounts
-    .map((account) => account.provider)
-    .filter((provider) => resolvers.has(provider));
-  const rows = yield* db
-    .select({ source, variant: sourceVariant, tags: localFile.tags })
-    .from(source)
-    .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
-    .leftJoin(localFile, eq(localFile.sourceId, source.id))
-    .where(or(isNotNull(localFile.id), inArray(source.provider, playableProviders)));
+  const query = yield* selectPlayableSources(principal.userId);
+  const rows = yield* query;
   const unique = [...new Map(rows.map((row) => [row.source.id, row] as const)).values()];
 
   return unique
     .map((row) => {
       const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
       return {
-        summary: new SourceSummary({
-          id: row.source.id,
-          title: row.source.rawTitle,
-          artist: row.source.rawArtist,
-          album: row.source.rawAlbum,
-          durationMs: row.source.rawDurationMs,
-          codec: row.variant.codec,
-        }),
+        summary: sourceSummary(row.source, row.variant),
         disc: position(tags, "disc", 1),
         track: position(tags, "track", 0),
       };

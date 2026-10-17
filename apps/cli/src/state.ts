@@ -1,13 +1,10 @@
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
-import { Effect } from "effect";
-import type { Option, Redacted } from "effect";
+import { Effect, Option } from "effect";
+import type { Redacted } from "effect";
 import { Atom } from "effect/reactivity";
 
-export const serverAtoms = (
-  serverUrl: string,
-  deviceToken: Option.Option<Redacted.Redacted<string>>,
-) => {
-  const runtime = Atom.runtime(serverConnectionLayer(serverUrl, deviceToken));
+export const serverAtoms = (serverUrl: string, deviceToken: Redacted.Redacted<string>) => {
+  const runtime = Atom.runtime(serverConnectionLayer(serverUrl, Option.some(deviceToken)));
   return {
     connection: runtime.atom(ServerConnection),
     server: runtime.atom(

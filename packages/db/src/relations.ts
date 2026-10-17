@@ -5,6 +5,7 @@ import * as assertion from "./schema/assertion.ts";
 import * as auth from "./schema/auth.ts";
 import * as catalog from "./schema/catalog.ts";
 import * as local from "./schema/local.ts";
+import * as providerCache from "./schema/provider-cache.ts";
 import * as replica from "./schema/replica.ts";
 import * as source from "./schema/source.ts";
 
@@ -16,6 +17,7 @@ export const schema = {
   ...assertion,
   ...source,
   ...local,
+  ...providerCache,
 };
 
 export const relations = defineRelations(schema, (r) => ({

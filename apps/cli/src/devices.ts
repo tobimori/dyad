@@ -25,29 +25,28 @@ const writeTokens = (tokens: typeof DeviceTokens.Type) =>
     const path = yield* Path.Path;
     const file = yield* tokenFile;
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-    // The token gives full access to the user's account on the server
+    // The token gives full access to the user's account on the server. `mode` applies only when
+    // the write creates the file.
     yield* fs.writeFileString(file, yield* Schema.encodeEffect(DeviceTokens)(tokens), {
       mode: 0o600,
     });
+    yield* fs.chmod(file, 0o600);
   });
 
-export const loadDeviceToken = (serverUrl: string) =>
+export const loadDeviceToken = (origin: string) =>
   readTokens.pipe(
-    Effect.map((tokens) =>
-      Option.map(Option.fromUndefinedOr(tokens[new URL(serverUrl).origin]), Redacted.make),
-    ),
+    Effect.map((tokens) => Option.map(Option.fromUndefinedOr(tokens[origin]), Redacted.make)),
   );
 
-export const saveDeviceToken = (serverUrl: string, token: string) =>
+export const saveDeviceToken = (origin: string, token: string) =>
   Effect.gen(function* () {
     const tokens = yield* readTokens;
-    yield* writeTokens({ ...tokens, [new URL(serverUrl).origin]: token });
+    yield* writeTokens({ ...tokens, [origin]: token });
   });
 
-export const deleteDeviceToken = (serverUrl: string) =>
+export const deleteDeviceToken = (origin: string) =>
   Effect.gen(function* () {
     const tokens = yield* readTokens;
-    const origin = new URL(serverUrl).origin;
     yield* writeTokens(
       Object.fromEntries(Object.entries(tokens).filter(([key]) => key !== origin)),
     );

@@ -7,7 +7,7 @@ import {
   ProviderAccountSummary,
 } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import type { AccountProvider } from "@dyad/plugin";
+import type { AccountProvider, Credentials } from "@dyad/plugin";
 import { and, eq } from "drizzle-orm";
 import { Clock, Context, Crypto, Effect, Layer, Option, Redacted, Schema } from "effect";
 
@@ -46,17 +46,19 @@ export const listAccounts = Effect.gen(function* () {
   );
 });
 
-/** Credentials of the user's account of `provider` */
+/** Credentials of the user's account of `provider`, empty when the provider needs no account */
 export const loadCredentials = (userId: UserId, provider: string) =>
   Effect.gen(function* () {
+    const providers = yield* AccountProviders;
+    if (!providers.has(provider)) return Option.some<Credentials>(new Map());
+
     const db = yield* Database;
     const [row] = yield* db
       .select({ values: credential.values })
       .from(credential)
       .innerJoin(providerAccount, eq(providerAccount.id, credential.providerAccountId))
       .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, provider)))
-      .limit(1)
-      .pipe(Effect.orDie);
+      .limit(1);
     if (row === undefined) return Option.none();
 
     const values = yield* Schema.decodeUnknownEffect(StoredCredentials)(row.values).pipe(
@@ -64,25 +66,6 @@ export const loadCredentials = (userId: UserId, provider: string) =>
     );
     return Option.some(
       new Map(Object.entries(values).map(([name, value]) => [name, Redacted.make(value)])),
-    );
-  });
-
-const deleteAccount = (userId: UserId, provider: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-
-    // SQLite does not enforce foreign keys here, so the credential is deleted explicitly
-    yield* db.transaction((tx) =>
-      Effect.gen(function* () {
-        const accounts = yield* tx
-          .select({ id: providerAccount.id })
-          .from(providerAccount)
-          .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, provider)));
-        for (const account of accounts) {
-          yield* tx.delete(credential).where(eq(credential.providerAccountId, account.id));
-          yield* tx.delete(providerAccount).where(eq(providerAccount.id, account.id));
-        }
-      }),
     );
   });
 
@@ -98,30 +81,50 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
       return yield* new AccountLinkFailed({ reason: "Unknown provider" });
     }
 
+    // Only the cookies that the provider declares are stored, not other keys from the client
+    const DeclaredCookies = Schema.Record(
+      Schema.Literals(accountProvider.login.cookies),
+      Schema.String,
+    );
+    const stored = yield* Schema.decodeEffect(DeclaredCookies)(values).pipe(
+      Effect.mapError(
+        () => new AccountLinkFailed({ reason: "The sign-in did not give all cookies" }),
+      ),
+    );
     const credentials = new Map(
-      Object.entries(values).map(([name, value]) => [name, Redacted.make(value)]),
+      Object.entries(stored).map(([name, value]) => [name, Redacted.make(value)]),
     );
     const displayName = yield* accountProvider.link(credentials);
 
     const id = yield* crypto.randomUUIDv7().pipe(Effect.orDie);
     const createdAt = yield* Clock.currentTimeMillis;
-    yield* deleteAccount(principal.userId, provider).pipe(Effect.orDie);
-    yield* db
-      .transaction((tx) =>
-        Effect.gen(function* () {
-          yield* tx
-            .insert(providerAccount)
-            .values({ id, userId: principal.userId, provider, displayName, createdAt });
-          yield* tx.insert(credential).values({ providerAccountId: id, values });
-        }),
-      )
-      .pipe(Effect.orDie);
+    yield* db.transaction((tx) =>
+      Effect.gen(function* () {
+        yield* tx
+          .delete(providerAccount)
+          .where(
+            and(
+              eq(providerAccount.userId, principal.userId),
+              eq(providerAccount.provider, provider),
+            ),
+          );
+        yield* tx
+          .insert(providerAccount)
+          .values({ id, userId: principal.userId, provider, displayName, createdAt });
+        yield* tx.insert(credential).values({ providerAccountId: id, values: stored });
+      }),
+    );
 
     return new ProviderAccountSummary({ provider, displayName });
   });
 
 export const unlinkAccount = (provider: string) =>
   Effect.gen(function* () {
+    const db = yield* Database;
     const principal = yield* CurrentPrincipal;
-    yield* deleteAccount(principal.userId, provider);
+    yield* db
+      .delete(providerAccount)
+      .where(
+        and(eq(providerAccount.userId, principal.userId), eq(providerAccount.provider, provider)),
+      );
   });

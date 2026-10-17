@@ -1,25 +1,42 @@
-import { Data, Effect, Redacted, Schema } from "effect";
+import { ProviderSource } from "@dyad/plugin";
+import { Cache, Context, Data, Effect, Exit, Layer, Redacted, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+
+export const provider = "apple_music";
 
 const origin = "https://music.apple.com";
 const amp = "https://amp-api.music.apple.com";
 const playback = "https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa";
 
 /** `stage` and `reason` go into logs, so they never contain tokens, signed URLs or keys */
-export class AppleMusicError extends Schema.TaggedError<AppleMusicError>()("AppleMusicError", {
-  stage: Schema.String,
-  reason: Schema.String,
-}) {}
+export class AppleMusicError extends Data.TaggedError("AppleMusicError")<{
+  readonly stage: string;
+  readonly reason: string;
+}> {}
 
-export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
+// Apple answered 401. The web client token can expire before the plugin refreshes it.
+class AppleTokenRejected extends Data.TaggedError("AppleTokenRejected")<{
+  readonly stage: string;
+  readonly reason: string;
+}> {}
+
+class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
   id: Schema.String,
   attributes: Schema.Struct({
     name: Schema.String,
     artistName: Schema.String,
     albumName: Schema.optional(Schema.String),
     durationInMillis: Schema.Finite,
+    isrc: Schema.optional(Schema.String),
   }),
 }) {}
+
+// Apple leaves out `songs` when nothing matches
+const SearchResults = Schema.Struct({
+  results: Schema.Struct({
+    songs: Schema.optional(Schema.Struct({ data: Schema.Array(AppleTrack) })),
+  }),
+});
 
 const Account = Schema.Struct({
   meta: Schema.Struct({
@@ -48,32 +65,56 @@ const requestJson = <S extends Schema.Constraint>(
   stage: string,
 ) =>
   Effect.gen(function* () {
-    const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient);
-    const response = yield* client.execute(request);
-    return yield* HttpClientResponse.schemaBodyJson(schema)(response);
-  }).pipe(
-    Effect.mapError(
-      () => new AppleMusicError({ stage, reason: "Request or response validation failed" }),
-    ),
-  );
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client
+      .execute(request)
+      .pipe(Effect.mapError(() => new AppleMusicError({ stage, reason: "Request failed" })));
 
-const authorizeClient =
+    const status = response.status;
+    if (status === 401) {
+      return yield* new AppleTokenRejected({ stage, reason: "Apple rejected the token" });
+    }
+    // A new web client token does not help, because the subscriber's token is the problem
+    if (status === 403 && request.url.startsWith(`${amp}/v1/me/`)) {
+      return yield* new AppleMusicError({
+        stage,
+        reason: "Apple rejected the account token. Link the account again.",
+      });
+    }
+    if (status === 429) {
+      return yield* new AppleMusicError({ stage, reason: "Apple throttled the request" });
+    }
+    if (status < 200 || status >= 300) {
+      return yield* new AppleMusicError({ stage, reason: `Apple answered status ${status}` });
+    }
+
+    return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
+      Effect.mapError(() => new AppleMusicError({ stage, reason: "Unexpected response" })),
+    );
+  });
+
+const withBearer =
   (bearer: Redacted.Redacted<string>) => (request: HttpClientRequest.HttpClientRequest) =>
     request.pipe(
       HttpClientRequest.bearerToken(bearer),
       HttpClientRequest.setHeader("Origin", origin),
     );
 
-const authorize = (session: AppleSession) => (request: HttpClientRequest.HttpClientRequest) =>
-  request.pipe(
-    authorizeClient(session.bearer),
-    HttpClientRequest.setHeader(
-      "Cookie",
-      `media-user-token=${Redacted.value(session.mediaUserToken)}`,
-    ),
-  );
+const authorize =
+  (user: {
+    readonly bearer: Redacted.Redacted<string>;
+    readonly mediaUserToken: Redacted.Redacted<string>;
+  }) =>
+  (request: HttpClientRequest.HttpClientRequest) =>
+    request.pipe(
+      withBearer(user.bearer),
+      HttpClientRequest.setHeader(
+        "Cookie",
+        `media-user-token=${Redacted.value(user.mediaUserToken)}`,
+      ),
+    );
 
-export const getWebBearer = Effect.gen(function* () {
+const getWebBearer = Effect.gen(function* () {
   const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient);
   const homepage = yield* client.get(origin);
   const html = yield* homepage.text;
@@ -97,12 +138,14 @@ export const getWebBearer = Effect.gen(function* () {
   ),
 );
 
-export const openAppleSession = (mediaUserToken: Redacted.Redacted<string>) =>
+const getStorefront = (
+  bearer: Redacted.Redacted<string>,
+  mediaUserToken: Redacted.Redacted<string>,
+) =>
   Effect.gen(function* () {
-    const bearer = yield* getWebBearer;
     const account = yield* requestJson(
       HttpClientRequest.get(`${amp}/v1/me/account?meta=subscription`).pipe(
-        authorize(new AppleSession({ bearer, mediaUserToken, storefront: "" })),
+        authorize({ bearer, mediaUserToken }),
       ),
       Account,
       "account",
@@ -113,26 +156,87 @@ export const openAppleSession = (mediaUserToken: Redacted.Redacted<string>) =>
         reason: "No active Apple Music subscription",
       });
     }
-    return new AppleSession({
-      bearer,
-      mediaUserToken,
-      storefront: account.meta.subscription.storefront,
-    });
+
+    return account.meta.subscription.storefront;
   });
 
+// Failures are not cached, so the next request tries again
+const keepSuccess = (exit: Exit.Exit<unknown, unknown>) => (Exit.isSuccess(exit) ? "6 hours" : 0);
+
+const makeSessions = Effect.gen(function* () {
+  const [bearer, invalidateBearer] = yield* Effect.cachedInvalidateWithTTL(
+    getWebBearer,
+    keepSuccess,
+  );
+
+  const storefronts = yield* Cache.makeWith(
+    (mediaUserToken: Redacted.Redacted<string>) =>
+      Effect.flatMap(bearer, (token) => getStorefront(token, mediaUserToken)),
+    { capacity: 1000, timeToLive: keepSuccess },
+  );
+
+  const openSession = (mediaUserToken: Redacted.Redacted<string>) =>
+    Effect.gen(function* () {
+      const storefront = yield* Cache.get(storefronts, mediaUserToken);
+      return new AppleSession({ bearer: yield* bearer, mediaUserToken, storefront });
+    });
+
+  /** Runs `use` once more with a new web client token when Apple rejects the cached one */
+  const withSession = <A, E, R>(
+    mediaUserToken: Redacted.Redacted<string>,
+    use: (session: AppleSession) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.flatMap(openSession(mediaUserToken), use).pipe(
+      Effect.catchTag("AppleTokenRejected", () =>
+        invalidateBearer.pipe(Effect.andThen(openSession(mediaUserToken)), Effect.flatMap(use)),
+      ),
+    );
+
+  return { withSession };
+});
+
+/**
+ * Keeps the web client token and the storefront of each subscriber in memory, because they cost
+ * up to three requests, which is too slow for each search and each play
+ */
+export class AppleSessions extends Context.Service<
+  AppleSessions,
+  Effect.Success<typeof makeSessions>
+>()("@dyad/plugin-apple-music/AppleSessions") {}
+
+export const appleSessionsLayer = Layer.effect(AppleSessions, makeSessions);
+
 /** The catalog needs only the web client token, not a subscriber */
-export const getCatalogTrack = (
+export const searchCatalog = (
   bearer: Redacted.Redacted<string>,
   storefront: string,
-  songId: string,
+  term: string,
 ) =>
-  requestJson(
-    HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/songs/${songId}`).pipe(
-      authorizeClient(bearer),
-    ),
-    Schema.Struct({ data: Schema.NonEmptyArray(AppleTrack) }),
-    "catalog",
-  ).pipe(Effect.map((response) => response.data[0]));
+  Effect.gen(function* () {
+    const request = HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/search`).pipe(
+      HttpClientRequest.setUrlParams({ term, types: "songs", limit: 25 }),
+      withBearer(bearer),
+    );
+    const response = yield* requestJson(request, SearchResults, "search");
+    const songs = response.results.songs?.data ?? [];
+
+    return songs.map(
+      (song) =>
+        new ProviderSource({
+          provider,
+          externalId: song.id,
+          title: song.attributes.name,
+          artist: song.attributes.artistName,
+          album: song.attributes.albumName ?? null,
+          durationMs: song.attributes.durationInMillis,
+          isrc: song.attributes.isrc ?? null,
+          container: "mov",
+          codec: "aac",
+          lossless: false,
+          encrypted: true,
+        }),
+    );
+  });
 
 /** URL of the HLS media playlist of the 256 kbps AAC web asset */
 export const resolveAacAsset = (session: AppleSession, songId: string) =>

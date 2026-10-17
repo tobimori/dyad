@@ -2,25 +2,19 @@ import { RegistryProvider } from "@effect/atom-react";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { createCliRenderer, setupAudio } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { Console, Data, Effect, Option } from "effect";
+import { Data, Effect } from "effect";
 import { Command } from "effect/cli";
 
 import { accountCommands } from "./accounts.ts";
 import { App } from "./app.tsx";
-import { authCommands, notSignedIn, serverUrl as serverUrlConfig } from "./auth.ts";
-import { loadDeviceToken } from "./devices.ts";
+import { authCommands, deviceToken, reportFailures, serverUrl as serverUrlConfig } from "./auth.ts";
 import { serverAtoms } from "./state.ts";
 
 class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: unknown }> {}
 
 const player = Effect.gen(function* () {
   const serverUrl = yield* serverUrlConfig;
-  const deviceToken = yield* loadDeviceToken(serverUrl);
-  if (Option.isNone(deviceToken)) {
-    return yield* Console.error(notSignedIn);
-  }
-
-  const atoms = serverAtoms(serverUrl, deviceToken);
+  const atoms = serverAtoms(serverUrl, yield* deviceToken);
   const audio = yield* Effect.acquireRelease(
     Effect.sync(() => setupAudio()),
     (audio) => Effect.sync(() => audio.dispose()),
@@ -49,7 +43,7 @@ const player = Effect.gen(function* () {
   });
 });
 
-const dyad = Command.make("dyad", {}, () => Effect.scoped(player)).pipe(
+const dyad = Command.make("dyad", {}, () => Effect.scoped(player).pipe(reportFailures)).pipe(
   Command.withDescription("Play the library of a Dyad server"),
   Command.withSubcommands([...authCommands, ...accountCommands]),
 );

@@ -6,7 +6,14 @@ import type { Crypto, FileSystem, Path } from "effect";
 
 import { AccountProviders } from "./accounts.ts";
 import { addProviderSource, syncLibraryRoot } from "./library.ts";
-import { SourceResolvers } from "./playback.ts";
+import { SourceResolvers, SourceSearches } from "./providers.ts";
+
+// Closing the plugin scope removes the registration
+const register = <A>(registry: Map<string, A>, provider: string, value: A) =>
+  Effect.acquireRelease(
+    Effect.sync(() => registry.set(provider, value)),
+    () => Effect.sync(() => registry.delete(provider)),
+  ).pipe(Effect.asVoid);
 
 /** Starts each plugin in its own scope. If setup fails, only that plugin stops. */
 export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
@@ -14,6 +21,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
       const resolvers = yield* SourceResolvers;
+      const searches = yield* SourceSearches;
       const accountProviders = yield* AccountProviders;
       const services = yield* Effect.context<
         Database | Crypto.Crypto | FileSystem.FileSystem | Path.Path
@@ -33,19 +41,14 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
               Effect.provide(services),
             ),
         },
+        search: {
+          add: (provider, search) => register(searches, provider, search),
+        },
         account: {
-          add: (provider, accountProvider) =>
-            Effect.acquireRelease(
-              Effect.sync(() => accountProviders.set(provider, accountProvider)),
-              () => Effect.sync(() => accountProviders.delete(provider)),
-            ).pipe(Effect.asVoid),
+          add: (provider, accountProvider) => register(accountProviders, provider, accountProvider),
         },
         resolver: {
-          add: (provider, resolve) =>
-            Effect.acquireRelease(
-              Effect.sync(() => resolvers.set(provider, resolve)),
-              () => Effect.sync(() => resolvers.delete(provider)),
-            ).pipe(Effect.asVoid),
+          add: (provider, resolve) => register(resolvers, provider, resolve),
         },
       });
       yield* Effect.forEach(
