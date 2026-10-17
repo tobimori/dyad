@@ -1,13 +1,17 @@
+import type { ClientPlugin } from "@dyad/plugin/client";
 import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
 import { Data } from "effect";
-import { useEffect, useRef } from "react";
+import type { Effect, Fiber } from "effect";
+import { useEffect, useRef, useState } from "react";
 
 import { Dialog, useDialog } from "./dialog.tsx";
 import { commands, helpColumns, keyLabel, useCommands } from "./keymap.ts";
 import type { Command } from "./keymap.ts";
+import type { PluginHost } from "./plugins.ts";
 import { SelectList, SelectOption } from "./select-list.tsx";
 import { useTheme } from "./theme.ts";
+import { useToast } from "./toast.tsx";
 
 /** A command for one track, with a label that can name the artist or the album */
 export class Action extends Data.Class<{
@@ -40,6 +44,43 @@ export function ActionsDialog(props: {
   return (
     <Dialog title={props.title} width={actionsWidth}>
       <SelectList options={options} width={actionsWidth - 4} rows={12} onChoose={run} />
+    </Dialog>
+  );
+}
+
+const pluginsWidth = 48;
+
+/** Turns the plugins of this device on and off. It stays open, so that the user sees the change. */
+export function PluginsDialog(props: {
+  readonly host: PluginHost;
+  /** Runs an effect with the log file of the CLI */
+  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+}) {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState(() =>
+    props.host.plugins.filter((plugin) => props.host.isEnabled(plugin.id)),
+  );
+
+  const options = props.host.plugins.map(
+    (plugin) =>
+      new SelectOption({
+        value: plugin,
+        title: plugin.name,
+        detail: enabled.includes(plugin) ? "on" : "off",
+      }),
+  );
+
+  const toggle = (plugin: ClientPlugin) => {
+    const enable = !enabled.includes(plugin);
+    setEnabled(enable ? [...enabled, plugin] : enabled.filter((other) => other !== plugin));
+
+    props.run(props.host.setEnabled(plugin.id, enable));
+    toast("notice", enable ? plugin.notice : `${plugin.name} off`);
+  };
+
+  return (
+    <Dialog title="Plugins" width={pluginsWidth}>
+      <SelectList options={options} width={pluginsWidth - 4} rows={12} onChoose={toggle} />
     </Dialog>
   );
 }

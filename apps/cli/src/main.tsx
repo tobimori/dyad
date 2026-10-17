@@ -1,12 +1,14 @@
 import "./sea-assets.ts";
 
 import type { SavedSession } from "@dyad/client-runtime";
+import { ClientPluginContext } from "@dyad/plugin/client";
+import type { NowPlaying } from "@dyad/plugin/client";
 import { RegistryProvider } from "@effect/atom-react";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { createCliRenderer, setupAudio } from "@opentui/core";
 import { KeymapProvider } from "@opentui/keymap/react";
 import { createRoot } from "@opentui/react";
-import { Cause, Data, Effect, FileSystem, Layer, Option, Path } from "effect";
+import { Cause, Data, Effect, FileSystem, Layer, Option, Path, SubscriptionRef } from "effect";
 import { Command } from "effect/cli";
 
 import { accountCommands } from "./accounts.ts";
@@ -16,6 +18,7 @@ import { DialogProvider } from "./dialog.tsx";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import { createKeymap } from "./keymap.ts";
 import { fileLogging, processErrorLogging } from "./log.ts";
+import { pluginCommands, startPluginHost } from "./plugins.ts";
 import { loadSession, saveSession } from "./session.ts";
 import { serverAtoms } from "./state.ts";
 import { ThemeProvider } from "./theme-provider.tsx";
@@ -47,6 +50,14 @@ const player = Effect.gen(function* () {
       Effect.provideContext(logServices),
       Effect.ignore,
     );
+
+  const nowPlaying = yield* SubscriptionRef.make<NowPlaying | null>(null);
+  const plugins = yield* startPluginHost(
+    new ClientPluginContext({
+      serverOrigin: serverUrl,
+      playback: { nowPlaying: SubscriptionRef.changes(nowPlaying) },
+    }),
+  ).pipe(Effect.provideContext(logServices));
 
   const audio = yield* Effect.acquireRelease(
     Effect.sync(() => setupAudio()),
@@ -94,6 +105,8 @@ const player = Effect.gen(function* () {
                     restore={() => latest.session}
                     save={save}
                     run={run}
+                    nowPlaying={nowPlaying}
+                    plugins={plugins}
                   />
                 </DialogProvider>
               </ToastProvider>
@@ -107,7 +120,7 @@ const player = Effect.gen(function* () {
 
 const dyad = Command.make("dyad", {}, () => Effect.scoped(player).pipe(reportFailures)).pipe(
   Command.withDescription("Play the library of a Dyad server"),
-  Command.withSubcommands([...authCommands, ...accountCommands]),
+  Command.withSubcommands([...authCommands, ...accountCommands, ...pluginCommands]),
 );
 
 Command.run(dyad, { version: "0.0.0" }).pipe(

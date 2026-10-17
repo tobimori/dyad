@@ -23,8 +23,9 @@ import {
 import type { CurrentPlay, PlayQueue, SavedSession } from "@dyad/client-runtime";
 import { PlaybackUnavailable } from "@dyad/domain";
 import type { PlayContext, SourceSummary } from "@dyad/domain";
+import { NowPlaying } from "@dyad/plugin/client";
 import type { Audio } from "@opentui/core";
-import { Cause, Clock, Effect, Fiber, Option, Schedule, Schema } from "effect";
+import { Cause, Clock, Effect, Fiber, Option, Schedule, Schema, SubscriptionRef } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { useEffect, useRef, useState } from "react";
 
@@ -62,6 +63,8 @@ export function usePlayer(props: {
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly onPlayRecorded: () => void;
+  /** Client plugins, such as the Discord presence, read the playback from it */
+  readonly nowPlaying: SubscriptionRef.SubscriptionRef<NowPlaying | null>;
 }) {
   const [saved] = useState(props.restore);
   const [queue, setQueue] = useState(() =>
@@ -141,6 +144,7 @@ export function usePlayer(props: {
   useEffect(
     () => () => {
       props.run(stop());
+      Effect.runSync(SubscriptionRef.set(props.nowPlaying, null));
     },
     [],
   );
@@ -214,7 +218,14 @@ export function usePlayer(props: {
     if (playing === null) return;
 
     Effect.runFork(
-      playing.seek(Math.max(0, ms)).pipe(Effect.andThen(Effect.sync(() => setTick((t) => t + 1)))),
+      playing.seek(Math.max(0, ms)).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            setTick((t) => t + 1);
+            publishNowPlaying();
+          }),
+        ),
+      ),
     );
   };
 
@@ -222,6 +233,26 @@ export function usePlayer(props: {
 
   // Some providers, such as Bandcamp, give no duration before playback
   const durationMs = () => current?.source.durationMs ?? track.current?.durationMs() ?? null;
+
+  const publishNowPlaying = () => {
+    const entry = currentEntry(queueRef.current);
+    const nowPlaying =
+      entry === undefined || state === "stopped"
+        ? null
+        : new NowPlaying({
+            source: entry.source,
+            state: state === "paused" ? "paused" : "playing",
+            positionMs: position(),
+            at: now(),
+            durationMs: durationMs(),
+          });
+    Effect.runSync(SubscriptionRef.set(props.nowPlaying, nowPlaying));
+  };
+
+  // While the next source loads, plugins keep the previous one, so that a skip is one change
+  useEffect(() => {
+    if (state !== "loading") publishNowPlaying();
+  }, [state, current?.key]);
 
   const previous = () => {
     const next = step(queueRef.current, -1, "skip");

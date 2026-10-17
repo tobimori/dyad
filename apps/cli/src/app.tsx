@@ -1,22 +1,24 @@
 import { songLine } from "@dyad/client-runtime";
 import type { SavedSession } from "@dyad/client-runtime";
 import type { PlayContext, SourceSummary } from "@dyad/domain";
+import type { NowPlaying } from "@dyad/plugin/client";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
 import type { Audio, BoxRenderable, InputRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
 import { Data, Effect } from "effect";
-import type { Fiber, Option } from "effect";
+import type { Fiber, Option, SubscriptionRef } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useDialog } from "./dialog.tsx";
-import { Action, ActionsDialog, HelpDialog } from "./dialogs.tsx";
+import { Action, ActionsDialog, HelpDialog, PluginsDialog } from "./dialogs.tsx";
 import { Footer } from "./footer.tsx";
 import { Header, SearchField } from "./header.tsx";
 import { commands, useCommands } from "./keymap.ts";
 import type { Command } from "./keymap.ts";
 import { NowPlayingPanel, NowPlayingView } from "./now-playing.tsx";
+import type { PluginHost } from "./plugins.ts";
 import { Sidebar } from "./sidebar.tsx";
 import type { ServerAtoms } from "./state.ts";
 import { useCoverAccent } from "./theme-provider.tsx";
@@ -60,6 +62,8 @@ export function App(props: {
   readonly save: (session: SavedSession) => Effect.Effect<void>;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+  readonly nowPlaying: SubscriptionRef.SubscriptionRef<NowPlaying | null>;
+  readonly plugins: PluginHost;
 }) {
   const renderer = useRenderer();
   const screen = useTerminalDimensions();
@@ -85,6 +89,7 @@ export function App(props: {
     save: props.save,
     run: props.run,
     onPlayRecorded: refreshRecent,
+    nowPlaying: props.nowPlaying,
   });
   const search = useSearch({
     connection: client,
@@ -320,6 +325,7 @@ export function App(props: {
 
   const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [commands.help, () => dialog.push(<HelpDialog />)],
+    [commands.plugins, () => dialog.push(<PluginsDialog host={props.plugins} run={props.run} />)],
     [commands.queue, () => openSection("queue")],
     [commands.search, startTyping],
     [commands.nextSection, () => moveSection(1)],

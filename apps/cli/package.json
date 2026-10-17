@@ -16,6 +16,8 @@
   "dependencies": {
     "@dyad/client-runtime": "workspace:*",
     "@dyad/domain": "workspace:*",
+    "@dyad/plugin": "workspace:*",
+    "@dyad/plugin-discord-presence": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@effect/platform-node": "catalog:",
     "@opentui/core": "catalog:",

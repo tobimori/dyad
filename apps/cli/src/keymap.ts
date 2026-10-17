@@ -29,6 +29,7 @@ export const commands = {
   quit: command("app.quit", "Quit", "Other", ["ctrl+c"]),
   help: command("app.help", "Help", "Other", ["?"], "help"),
   reload: command("app.reload", "Reload", "Other", ["r"]),
+  plugins: command("app.plugins", "Plugins", "Other", ["shift+p"]),
   close: command("app.close", "Close, go back", "Other", ["escape"], "close"),
 
   togglePause: command("playback.toggle", "Play or pause", "Playback", ["space"]),
