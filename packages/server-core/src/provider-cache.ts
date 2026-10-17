@@ -2,13 +2,16 @@ import { providerItem } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { ProviderSource } from "@dyad/plugin";
 import { eq, lt } from "drizzle-orm";
-import { Clock, Data, Effect, Layer, Option, Schedule, Schema } from "effect";
+import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
 
 import { sourceId } from "./ids.ts";
+import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
 
 // Played results are in `source` and do not expire. The TTL only limits the size of the cache.
 const cacheLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+const sweepIntervalMs = 6 * 60 * 60 * 1000;
+const sweepJob = "provider-cache.sweep";
 
 /** A search result in the provider cache of this replica */
 export class CachedSource extends Data.Class<{
@@ -83,12 +86,17 @@ export const cachedProviderSource = (id: string) =>
 export const providerCacheSweepLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const db = yield* Database;
+    const jobs = yield* Jobs;
 
-    const sweep = Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      yield* db.delete(providerItem).where(lt(providerItem.fetchedAt, now - cacheLifetimeMs));
-    }).pipe(Effect.catch((error) => Effect.logError("Cannot sweep the provider cache", error)));
+    yield* jobs.register(sweepJob, Schema.Struct({}), () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        yield* db.delete(providerItem).where(lt(providerItem.fetchedAt, now - cacheLifetimeMs));
+        yield* jobs.enqueue(sweepJob, sweepJob, {}, { runAt: now + sweepIntervalMs });
+      }),
+    );
 
-    yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced("6 hours"))));
-  }),
+    // Enqueue keeps the earlier run time, so this also moves a waiting run from before the restart to now
+    yield* jobs.enqueue(sweepJob, sweepJob, {});
+  }).pipe(Effect.orDie),
 );

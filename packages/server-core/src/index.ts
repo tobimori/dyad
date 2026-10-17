@@ -16,6 +16,7 @@ import {
   setup,
 } from "./auth.ts";
 import { listRecentPlays, recordPlay } from "./history.ts";
+import { jobsLayer } from "./jobs.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
@@ -35,7 +36,7 @@ export const coreServicesLayer = Layer.mergeAll(
   streamKeyLayer,
   authCodesLayer,
   providerCacheSweepLayer,
-);
+).pipe(Layer.provideMerge(jobsLayer));
 
 export const serverRoutes = Layer.unwrap(
   Effect.gen(function* () {
