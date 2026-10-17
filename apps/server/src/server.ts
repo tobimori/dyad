@@ -88,7 +88,14 @@ export const serverLayer = Layer.unwrap(
       // The first library imports need the providers that the plugins add
       librarySyncLayer.pipe(Layer.provide(pluginLayer(builtinPlugins, packageJson.version))),
       HttpRouter.serve(routes).pipe(
-        Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
+        Layer.provide(
+          NodeHttpServer.layer(() => createServer(), {
+            host: "127.0.0.1",
+            port,
+            // RPC WebSockets stay open, so the default 20 second grace period always runs out
+            gracefulShutdownTimeout: "500 millis",
+          }),
+        ),
       ),
     ).pipe(
       Layer.provide(
