@@ -35,6 +35,8 @@ catalog:
   node-av: 6.1.1
   "@li0ard/widevine": 0.1.6
   fractional-indexing: 3.2.0
+  "@wasm-audio-decoders/flac": 0.2.11
+  mpg123-decoder: 1.0.3
   fast-xml-parser: 5.11.2
   dns-packet: 5.6.1
   "@types/dns-packet": 5.6.5
