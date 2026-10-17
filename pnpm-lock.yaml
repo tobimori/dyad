@@ -178,6 +178,9 @@ importers:
       '@dyad/plugin-apple-music':
         specifier: workspace:*
         version: link:../../plugins/apple-music
+      '@dyad/plugin-bandcamp':
+        specifier: workspace:*
+        version: link:../../plugins/bandcamp
       '@dyad/plugin-local-files':
         specifier: workspace:*
         version: link:../../plugins/local-files
@@ -359,6 +362,15 @@ importers:
       '@li0ard/widevine':
         specifier: 'catalog:'
         version: 0.1.6(typescript@7.0.2)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  plugins/bandcamp:
+    dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
       effect:
         specifier: 'catalog:'
         version: 4.0.5
