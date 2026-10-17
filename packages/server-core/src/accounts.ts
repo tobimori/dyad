@@ -9,6 +9,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { Clock, Crypto, Effect, Schema } from "effect";
 
+import { forgetLibrary, queueLibrarySync } from "./library-sync.ts";
 import { Providers, toCredentials } from "./providers.ts";
 
 export const listAccountProviders = Effect.gen(function* () {
@@ -73,6 +74,7 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
         yield* tx.insert(credential).values({ providerAccountId: id, values: stored });
       }),
     );
+    yield* queueLibrarySync(principal.userId, provider);
 
     return new ProviderAccountSummary({ provider, displayName });
   });
@@ -81,11 +83,19 @@ export const unlinkAccount = (provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const principal = yield* CurrentPrincipal;
-    yield* db
-      .delete(providerAccount)
-      .where(
-        and(eq(providerAccount.userId, principal.userId), eq(providerAccount.provider, provider)),
-      );
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        yield* db
+          .delete(providerAccount)
+          .where(
+            and(
+              eq(providerAccount.userId, principal.userId),
+              eq(providerAccount.provider, provider),
+            ),
+          );
+        yield* forgetLibrary(principal.userId, provider);
+      }),
+    );
 
     // `secure_delete` overwrites the deleted credentials in the database file. The write-ahead log
     // still has copies of earlier pages until a checkpoint truncates it.

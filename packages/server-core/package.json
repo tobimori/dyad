@@ -15,7 +15,9 @@
     "@dyad/domain": "workspace:*",
     "@dyad/media": "workspace:*",
     "@dyad/plugin": "workspace:*",
+    "@dyad/sync": "workspace:*",
     "drizzle-orm": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "fractional-indexing": "catalog:"
   }
 }

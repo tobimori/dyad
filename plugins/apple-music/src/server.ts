@@ -1,13 +1,31 @@
 import { AccountLinkFailed, BrowserLogin } from "@dyad/domain";
-import { Plugin, Provider, ProviderAudio, ProviderError } from "@dyad/plugin";
+import {
+  LibraryError,
+  Plugin,
+  Provider,
+  ProviderAudio,
+  ProviderError,
+  ProviderLibrary,
+} from "@dyad/plugin";
 import type { Credentials } from "@dyad/plugin";
+import { makePacer } from "@dyad/plugin/http";
+import type { HttpStatusError } from "@dyad/plugin/http";
 import { Cache, Data, Effect, Exit, Option, Stream } from "effect";
 import type { Redacted } from "effect";
 import { HttpClient } from "effect/http";
 
-import { AppleMusicError, sessionCache, provider, resolveAacAsset, searchCatalog } from "./api.ts";
+import {
+  AppleAccountError,
+  AppleMusicError,
+  AppleThrottled,
+  sessionCache,
+  provider,
+  resolveAacAsset,
+  searchCatalog,
+} from "./api.ts";
 import type { AppleSession } from "./api.ts";
 import { readSegments, segmentBytes } from "./hls.ts";
+import { probeLibrary, readLibrarySongs, readPlaylists, readPlaylistTracks } from "./library.ts";
 import { acquireAppleKeys } from "./widevine.ts";
 
 // The web player sets this cookie after the subscriber signs in
@@ -23,7 +41,7 @@ const mediaUserToken = (credentials: Credentials) =>
   Effect.gen(function* () {
     const token = credentials.get(tokenCookie);
     if (token === undefined) {
-      return yield* new AppleMusicError({ stage: "account", reason: `No ${tokenCookie} cookie` });
+      return yield* new AppleAccountError({ stage: "account", reason: `No ${tokenCookie} cookie` });
     }
     return token;
   });
@@ -34,8 +52,26 @@ class SongPlay extends Data.Class<{
   readonly songId: string;
 }> {}
 
-const toProviderError = (error: AppleMusicError) =>
+type AppleError = AppleMusicError | AppleAccountError | AppleThrottled;
+
+const toProviderError = (error: AppleError) =>
   new ProviderError({ reason: `${error.stage}: ${error.reason}` });
+
+const toLibraryError = (error: AppleError) => {
+  const reason = `${error.stage}: ${error.reason}`;
+
+  if (error instanceof AppleAccountError) {
+    return new LibraryError({ kind: "account", reason, retryAfterSeconds: null });
+  }
+  if (error instanceof AppleThrottled) {
+    return new LibraryError({
+      kind: "throttled",
+      reason,
+      retryAfterSeconds: error.retryAfterSeconds,
+    });
+  }
+  return new LibraryError({ kind: "failed", reason, retryAfterSeconds: null });
+};
 
 /**
  * Searches the Apple Music catalog and plays its songs through the web playback route of each
@@ -116,6 +152,29 @@ export const appleMusicPlugin = new Plugin({
           );
         }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
 
+      // Apple throttles fast library reads. Search and playback do not wait for this queue.
+      const libraryPace = yield* makePacer(1000);
+
+      const readLibrary =
+        <A>(
+          read: (
+            session: AppleSession,
+          ) => Effect.Effect<A, AppleError | HttpStatusError, HttpClient.HttpClient>,
+        ) =>
+        (credentials: Credentials) =>
+          Effect.gen(function* () {
+            const token = yield* mediaUserToken(credentials);
+            return yield* withSession(token, read);
+          }).pipe(Effect.mapError(toLibraryError), Effect.provide(services));
+
+      const library = new ProviderLibrary({
+        probe: readLibrary((session) => probeLibrary(libraryPace, session)),
+        songs: readLibrary((session) => readLibrarySongs(libraryPace, session)),
+        playlists: readLibrary((session) => readPlaylists(libraryPace, session)),
+        playlistSongs: (credentials, remoteId) =>
+          readLibrary((session) => readPlaylistTracks(libraryPace, session, remoteId))(credentials),
+      });
+
       const link = (credentials: Credentials) =>
         Effect.gen(function* () {
           const token = yield* mediaUserToken(credentials);
@@ -128,7 +187,13 @@ export const appleMusicPlugin = new Plugin({
 
       yield* context.provider.add(
         provider,
-        new Provider({ name: "Apple Music", resolve, search, account: { login, link } }),
+        new Provider({
+          name: "Apple Music",
+          resolve,
+          search,
+          account: { login, link },
+          library,
+        }),
       );
     }),
 });

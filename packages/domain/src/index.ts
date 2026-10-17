@@ -155,6 +155,74 @@ export class AlbumPage extends Schema.Class<AlbumPage>("AlbumPage")({
 /** No page has this ref, for example a library ref after a tag edit changed the keys */
 export class PageNotFound extends Schema.TaggedError<PageNotFound>()("PageNotFound", {}) {}
 
+/**
+ * Why the user cannot play a library entry. `library_only`: the song is only in the user's
+ * provider library, for example an upload. `not_in_catalog`: the provider's catalog for the
+ * user's country does not have the song. `account_required`: the user has no linked account for
+ * its sources.
+ */
+export const LibraryEntryUnavailable = Schema.Literals([
+  "library_only",
+  "not_in_catalog",
+  "account_required",
+]);
+
+export class LibraryEntry extends Schema.Class<LibraryEntry>("LibraryEntry")({
+  /** Two saved versions that matching merged give one entry */
+  recordingId: RecordingId,
+  title: Schema.NullOr(Schema.String),
+  artist: Schema.NullOr(Schema.String),
+  album: Schema.NullOr(Schema.String),
+  durationMs: Schema.NullOr(Schema.Number),
+  artworkUrl: Schema.NullOr(Schema.String),
+  addedAt: Schema.Int,
+  /** The best source that the user can play. `null` when `unavailable` is set. */
+  source: Schema.NullOr(SourceSummary),
+  sourceCount: Schema.Int,
+  unavailable: Schema.NullOr(LibraryEntryUnavailable),
+}) {}
+
+export class PlaylistEntry extends LibraryEntry.extend<PlaylistEntry>("PlaylistEntry")({
+  /** Unique in the playlist. The same recording can be in a playlist more than once. */
+  entryId: Schema.String,
+}) {}
+
+export class PlaylistSummary extends Schema.Class<PlaylistSummary>("PlaylistSummary")({
+  id: Schema.String,
+  name: Schema.String,
+  provider: Schema.NullOr(Schema.String),
+  entryCount: Schema.Int,
+  /** An imported playlist changes only in the provider's app */
+  readOnly: Schema.Boolean,
+}) {}
+
+export class PlaylistNotFound extends Schema.TaggedError<PlaylistNotFound>()(
+  "PlaylistNotFound",
+  {},
+) {}
+
+export class LibrarySyncStatus extends Schema.Class<LibrarySyncStatus>("LibrarySyncStatus")({
+  provider: Schema.String,
+  /**
+   * `pending`: no run has ended yet. `needs_relink`: the provider rejected the account, and the
+   * import stops until the user links it again. `throttled`: the next run waits longer.
+   */
+  status: Schema.Literals(["pending", "ok", "needs_relink", "throttled", "error"]),
+  running: Schema.Boolean,
+  /** `lastCompleteAt`: the last read that saw all songs */
+  lastCompleteAt: Schema.NullOr(Schema.Int),
+  lastAttemptAt: Schema.NullOr(Schema.Int),
+  nextRunAt: Schema.NullOr(Schema.Int),
+  /**
+   * Why the last read did not see all songs, for example `read 903 of 904 songs`. Then the import
+   * adds songs but removes none. Safe to show, like `error`.
+   */
+  incompleteReason: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+  itemCount: Schema.Int,
+  notPlayableCount: Schema.Int,
+}) {}
+
 /** Search results, best first */
 export class SearchResults extends Schema.Class<SearchResults>("SearchResults")({
   sources: Schema.Array(SourceSummary),
@@ -326,7 +394,19 @@ const PublicRpc = RpcGroup.make(
 );
 
 const UserRpc = RpcGroup.make(
+  // The files on the server. Provider sources are in `listLibrary`.
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
+  // One entry per recording. It reads only server data, so it never waits for providers.
+  Rpc.make("listLibrary", { success: Schema.Array(LibraryEntry) }),
+  Rpc.make("listPlaylists", { success: Schema.Array(PlaylistSummary) }),
+  Rpc.make("listPlaylistEntries", {
+    payload: { playlistId: Schema.String },
+    success: Schema.Array(PlaylistEntry),
+    error: PlaylistNotFound,
+  }),
+  Rpc.make("getLibrarySyncStatus", { success: Schema.Array(LibrarySyncStatus) }),
+  // Returns at once; does nothing without a linked account
+  Rpc.make("syncLibrary", { payload: { provider: Schema.String } }),
   // The sources that the user played and can still play, newest play first, one entry per source
   Rpc.make("listRecentPlays", { success: Schema.Array(SourceSummary) }),
   // Streams the complete ranked list again each time that a provider answers; the last list is
@@ -386,7 +466,8 @@ const UserRpc = RpcGroup.make(
     success: ProviderAccountSummary,
     error: AccountLinkFailed,
   }),
-  // Removes the account and its stored credentials from this server
+  // Removes the account and its stored credentials from this server, and the songs and playlists
+  // that it imported from the user's library
   Rpc.make("unlinkAccount", { payload: { provider: Schema.String } }),
 ).middleware(Authentication);
 

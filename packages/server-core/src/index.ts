@@ -17,13 +17,16 @@ import {
 } from "./auth.ts";
 import { listRecentPlays, recordPlay } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
+import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { search } from "./search.ts";
 import { listSources } from "./sources.ts";
+import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
+export { librarySyncLayer } from "./library-sync.ts";
 export { pluginLayer } from "./plugin.ts";
 
 export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescriptor>()(
@@ -48,6 +51,14 @@ export const serverRoutes = Layer.unwrap(
       login: (payload) => login(payload).pipe(orDieOnDatabaseError("login")),
       pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError("pair")),
       listSources: () => listSources.pipe(orDieOnDatabaseError("listSources")),
+      listLibrary: () => listLibrary.pipe(orDieOnDatabaseError("listLibrary")),
+      listPlaylists: () => listPlaylists.pipe(orDieOnDatabaseError("listPlaylists")),
+      listPlaylistEntries: ({ playlistId }) =>
+        listPlaylistEntries(playlistId).pipe(orDieOnDatabaseError("listPlaylistEntries")),
+      getLibrarySyncStatus: () =>
+        getLibrarySyncStatus.pipe(orDieOnDatabaseError("getLibrarySyncStatus")),
+      syncLibrary: ({ provider }) =>
+        syncLibrary(provider).pipe(orDieOnDatabaseError("syncLibrary")),
       listRecentPlays: () => listRecentPlays.pipe(orDieOnDatabaseError("listRecentPlays")),
       search: ({ query }) =>
         // Only database errors remain

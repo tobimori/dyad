@@ -6,6 +6,8 @@ import * as auth from "./schema/auth.ts";
 import * as catalog from "./schema/catalog.ts";
 import * as history from "./schema/history.ts";
 import * as job from "./schema/job.ts";
+import * as librarySync from "./schema/library-sync.ts";
+import * as library from "./schema/library.ts";
 import * as local from "./schema/local.ts";
 import * as providerCache from "./schema/provider-cache.ts";
 import * as replica from "./schema/replica.ts";
@@ -22,6 +24,8 @@ export const schema = {
   ...providerCache,
   ...history,
   ...job,
+  ...library,
+  ...librarySync,
 };
 
 export const relations = defineRelations(schema, (r) => ({
@@ -152,6 +156,16 @@ export const relations = defineRelations(schema, (r) => ({
   },
   libraryRoot: {
     files: r.many.localFile(),
+  },
+  playlist: {
+    entries: r.many.playlistEntry(),
+  },
+  playlistEntry: {
+    playlist: r.one.playlist({
+      from: r.playlistEntry.playlistId,
+      to: r.playlist.id,
+      optional: false,
+    }),
   },
   localFile: {
     libraryRoot: r.one.libraryRoot({

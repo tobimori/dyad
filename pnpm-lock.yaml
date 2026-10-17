@@ -69,6 +69,9 @@ catalogs:
     env-paths:
       specifier: 4.0.0
       version: 4.0.0
+    fractional-indexing:
+      specifier: 3.2.0
+      version: 3.2.0
     node-av:
       specifier: 6.1.1
       version: 6.1.1
@@ -214,6 +217,9 @@ importers:
       '@dyad/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
+      '@dyad/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
       '@dyad/web':
         specifier: workspace:*
         version: link:../web
@@ -362,12 +368,18 @@ importers:
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../plugin
+      '@dyad/sync':
+        specifier: workspace:*
+        version: link:../sync
       drizzle-orm:
         specifier: 'catalog:'
         version: 1.0.0-rc.5-5935859(patch_hash=bfff9df9913bbbf1647bc8a85e43bf69b2316c928c5eaa85c242656e9f6a5a56)(@effect/sql-sqlite-node@4.0.5(effect@4.0.5))(effect@4.0.5)(zod@4.6.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+      fractional-indexing:
+        specifier: 'catalog:'
+        version: 3.2.0
 
   packages/sync:
     dependencies:
@@ -2264,6 +2276,10 @@ packages:
 
   flatted@3.4.4:
     resolution: {integrity: sha512-5+ybhBZANEJxaH3X5evAFatUxLfEHSr7n6kYJ+1Qd0mUqr4eu9gIf6GDbWHf8RJijHrjjO8G+la14SlL2SeS1Q==}
+
+  fractional-indexing@3.2.0:
+    resolution: {integrity: sha512-PcOxmqwYCW7O2ovKRU8OoQQj2yqTfEB/yeTYk4gPid6dN5ODRfU1hXd9tTVZzax/0NkO7AxpHykvZnT1aYp/BQ==}
+    engines: {node: ^14.13.1 || >=16.0.0}
 
   fs-extra@11.3.1:
     resolution: {integrity: sha512-eXvGGwZ5CL17ZSwHWd3bbgk7UUpF6IFHtP57NYYakPvHOs8GDgDe5KJI36jIJzDkJ6eJjuzRA8eBQb6SkKue0g==}
@@ -4354,6 +4370,8 @@ snapshots:
   fflate@0.8.3: {}
 
   flatted@3.4.4: {}
+
+  fractional-indexing@3.2.0: {}
 
   fs-extra@11.3.1:
     dependencies:

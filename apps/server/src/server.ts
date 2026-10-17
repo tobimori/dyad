@@ -2,14 +2,21 @@
 import { createServer } from "node:http";
 
 import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
-import { ServerDescriptor } from "@dyad/domain";
+import { ReplicaId, ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
 import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
 import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
-import { ServerIdentity, coreServicesLayer, pluginLayer, serverRoutes } from "@dyad/server-core";
+import {
+  ServerIdentity,
+  coreServicesLayer,
+  librarySyncLayer,
+  pluginLayer,
+  serverRoutes,
+} from "@dyad/server-core";
+import { hlcClockLayer } from "@dyad/sync";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -45,6 +52,12 @@ export const serverLayer = Layer.unwrap(
       ),
     );
 
+    const hlcClock = Layer.unwrap(
+      ReplicaDatabase.use(({ replicaId }) =>
+        Effect.map(Schema.decodeEffect(ReplicaId)(replicaId), hlcClockLayer),
+      ),
+    );
+
     const isAllowedOrigin = (origin: string) => allowedOrigins.includes(origin);
     const cors = HttpMiddleware.cors({
       allowedOrigins: isAllowedOrigin,
@@ -67,10 +80,15 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(identity),
     );
     return Layer.mergeAll(
-      pluginLayer(builtinPlugins, packageJson.version),
+      // The first library imports need the providers that the plugins add
+      librarySyncLayer.pipe(Layer.provide(pluginLayer(builtinPlugins, packageJson.version))),
       HttpRouter.serve(routes).pipe(
         Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
       ),
-    ).pipe(Layer.provide(coreServicesLayer.pipe(Layer.provideMerge(database))));
+    ).pipe(
+      Layer.provide(
+        coreServicesLayer.pipe(Layer.provideMerge(hlcClock), Layer.provideMerge(database)),
+      ),
+    );
   }),
 );

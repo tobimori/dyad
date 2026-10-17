@@ -1,12 +1,14 @@
-import { localFile, providerItem, source, sourceVariant } from "@dyad/db";
+import { localFile, providerItem, recording, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import type { ProviderSource } from "@dyad/plugin";
+import { and, eq, getColumns, inArray, isNotNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
-import { sourceId, variantId } from "./ids.ts";
+import { boundRecordingId, sourceId, variantId } from "./ids.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { usableProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef } from "./refs.ts";
@@ -14,8 +16,17 @@ import { libraryAlbumRef, libraryArtistRef } from "./refs.ts";
 // Projection columns before replication assigns revisions
 const projection = { policyVersion: 1, revision: 0 };
 
+// An upsert changes a row only when a value of `set` differs, so that later replication sees only
+// real changes
+const differs = (table: SQLiteTable, keys: ReadonlyArray<string>) => {
+  const changes = Object.entries(getColumns(table))
+    .filter(([key]) => keys.includes(key))
+    .map(([, column]) => sql`${column} IS NOT excluded.${sql.identifier(column.name)}`);
+  return sql`(${sql.join(changes, sql` OR `)})`;
+};
+
 /**
- * Adds or updates a source and its variant in the shared catalog, and returns the source ID. All
+ * Adds or updates a source, its variant and its bound recording, and returns the source ID. All
  * writes of `source` and `source_variant` go through here.
  */
 export const writeSource = (
@@ -33,11 +44,13 @@ export const writeSource = (
   Effect.gen(function* () {
     const db = yield* Database;
     const id = yield* sourceId(item.provider, item.externalId);
+    const recordingId = yield* boundRecordingId(item.provider, item.externalId);
     const sourceRow = {
       id,
       provider: item.provider,
       externalId: item.externalId,
       kind: item.kind,
+      recordingId,
       rawTitle: item.title,
       rawArtist: item.artist,
       rawAlbum: item.album,
@@ -49,38 +62,56 @@ export const writeSource = (
     yield* db.transaction((tx) =>
       Effect.gen(function* () {
         yield* tx
+          .insert(recording)
+          .values({
+            id: recordingId,
+            origin: item.provider === "local" ? "local" : "provider",
+            ...projection,
+          })
+          .onConflictDoNothing();
+        yield* tx
           .insert(source)
           .values(sourceRow)
-          .onConflictDoUpdate({ target: source.id, set: sourceRow });
+          .onConflictDoUpdate({
+            target: source.id,
+            set: sourceRow,
+            setWhere: differs(source, Object.keys(sourceRow)),
+          });
         yield* tx
           .insert(sourceVariant)
           .values(variantRow)
-          .onConflictDoUpdate({ target: sourceVariant.id, set: variantRow });
+          .onConflictDoUpdate({
+            target: sourceVariant.id,
+            set: variantRow,
+            setWhere: differs(sourceVariant, Object.keys(variantRow)),
+          });
       }),
     );
 
     return id;
   });
 
-/** Adds a played search result to the shared catalog */
-export const addProviderSource = (cached: CachedSource) =>
+export const writeProviderSource = (provider: string, item: ProviderSource) =>
   writeSource(
     {
-      provider: cached.provider,
-      externalId: cached.source.externalId,
+      provider,
+      externalId: item.externalId,
       kind: "stream",
-      title: cached.source.title,
-      artist: cached.source.artist,
-      album: cached.source.album,
-      durationMs: cached.source.durationMs,
+      title: item.title,
+      artist: item.artist,
+      album: item.album,
+      durationMs: item.durationMs,
     },
     {
-      codec: cached.source.codec,
-      container: cached.source.container,
-      lossless: cached.source.lossless,
-      encrypted: cached.source.encrypted,
+      codec: item.codec,
+      container: item.container,
+      lossless: item.lossless,
+      encrypted: item.encrypted,
     },
   );
+
+export const addProviderSource = (cached: CachedSource) =>
+  writeProviderSource(cached.provider, cached.source);
 
 export const Tags = Schema.Record(Schema.String, Schema.String);
 
@@ -147,10 +178,10 @@ export const sourceSummary = (row: {
 export const position = (tags: typeof Tags.Type, key: "disc" | "track") =>
   Number.parseInt(tags[key] ?? "", 10) || null;
 
-/** Playable sources in album order */
+/** Local files only: provider sources come from other users' private libraries */
 export const listSources = Effect.gen(function* () {
   const principal = yield* CurrentPrincipal;
-  const rows = yield* playableSources(principal.userId);
+  const rows = yield* playableSources(principal.userId, isNotNull(localFile.id));
 
   const entries = rows.map((row) => {
     const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));

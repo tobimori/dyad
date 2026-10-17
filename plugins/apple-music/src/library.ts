@@ -1,7 +1,7 @@
-import type { ProviderSource } from "@dyad/plugin";
+import { LibraryPlaylist, LibraryProbe, LibrarySnapshot, LibrarySong } from "@dyad/plugin";
 import { getJson, HttpStatusError } from "@dyad/plugin/http";
 import type { makePacer } from "@dyad/plugin/http";
-import { Data, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import { amp, appleError, AppleTrack, authorize, catalogSource, requestJson } from "./api.ts";
@@ -31,8 +31,7 @@ const LibraryPlaylistItem = Schema.Struct({
   id: Schema.String,
   attributes: Schema.Struct({
     name: Schema.String,
-    canEdit: Schema.Boolean,
-    lastModifiedDate: Schema.optional(Schema.DateFromString),
+    lastModifiedDate: Schema.optional(Schema.String),
   }),
 });
 
@@ -44,55 +43,21 @@ const ProbePage = Schema.Struct({
   meta: Schema.Struct({ total: Schema.Finite }),
 });
 
-/** Items of one remote list. Only a complete snapshot can show that an item was removed. */
-export class LibrarySnapshot<A> extends Data.Class<{
-  readonly items: ReadonlyArray<A>;
-  readonly complete: boolean;
-}> {}
-
-/** One song of the user's library or of a library playlist */
-export class LibrarySong extends Data.Class<{
-  /** `i.` ID that removes the song from the library */
-  readonly libraryId: string;
-  readonly catalogId: string | null;
-  readonly title: string;
-  readonly artist: string | null;
-  readonly album: string | null;
-  readonly durationMs: number | null;
-  /**
-   * `null` for uploads, iTunes Match songs, purchases and songs that the storefront does not have.
-   * Dyad cannot play them.
-   */
-  readonly source: ProviderSource | null;
-}> {}
-
-export class LibraryPlaylist extends Data.Class<{
-  /** `p.` ID */
-  readonly libraryId: string;
-  readonly name: string;
-  /** Apple also sets `false` for the automatic Favorite Songs playlist */
-  readonly canEdit: boolean;
-  readonly lastModifiedDate: Date | null;
-}> {}
-
-/** A change of `total` or `newestId` shows that songs were added or removed */
-export class LibraryProbe extends Data.Class<{
-  readonly total: number;
-  readonly newestId: string | null;
-}> {}
-
+// Remote IDs start with `i.` and catalog IDs are numbers, so the core can use a remote ID where no
+// catalog ID exists
 const toLibrarySong = (item: typeof LibrarySongItem.Type) => {
   const attributes = item.attributes;
   const catalogSong = item.relationships?.catalog.data[0];
 
   return new LibrarySong({
-    libraryId: item.id,
-    catalogId: attributes.playParams?.catalogId ?? null,
+    remoteId: item.id,
+    // A song that is not released yet has a catalog song, but no `catalogId` (October 2026)
+    catalogId: attributes.playParams?.catalogId ?? catalogSong?.id ?? null,
+    source: catalogSong?.attributes.playParams === undefined ? null : catalogSource(catalogSong),
     title: attributes.name,
     artist: attributes.artistName ?? null,
     album: attributes.albumName ?? null,
     durationMs: attributes.durationInMillis ?? null,
-    source: catalogSong === undefined ? null : catalogSource(catalogSong),
   });
 };
 
@@ -117,14 +82,21 @@ const readPages = <S extends Schema.Top>(
         ),
         Effect.mapError(appleError(stage, pageRequest)),
       );
-      if (Option.isNone(page)) return new LibrarySnapshot({ items, complete: false });
+      if (Option.isNone(page)) {
+        return new LibrarySnapshot({ items, incompleteReason: `404 at offset ${items.length}` });
+      }
 
       if (page.value.data.length === 0 && page.value.next !== undefined) {
-        return new LibrarySnapshot({ items, complete: false });
+        return new LibrarySnapshot({
+          items,
+          incompleteReason: `empty page at offset ${items.length}`,
+        });
       }
 
       items.push(...page.value.data);
-      if (page.value.next === undefined) return new LibrarySnapshot({ items, complete: true });
+      if (page.value.next === undefined) {
+        return new LibrarySnapshot({ items, incompleteReason: null });
+      }
     }
   });
 
@@ -143,7 +115,7 @@ export const readLibrarySongs = (pace: Pace, session: AppleSession) =>
 
     return new LibrarySnapshot({
       items: snapshot.items.map(toLibrarySong),
-      complete: snapshot.complete,
+      incompleteReason: snapshot.incompleteReason,
     });
   });
 
@@ -156,13 +128,12 @@ export const readPlaylists = (pace: Pace, session: AppleSession) =>
       items: snapshot.items.map(
         (item) =>
           new LibraryPlaylist({
-            libraryId: item.id,
+            remoteId: item.id,
             name: item.attributes.name,
-            canEdit: item.attributes.canEdit,
-            lastModifiedDate: item.attributes.lastModifiedDate ?? null,
+            version: item.attributes.lastModifiedDate ?? null,
           }),
       ),
-      complete: snapshot.complete,
+      incompleteReason: snapshot.incompleteReason,
     });
   });
 
@@ -177,11 +148,11 @@ export const readPlaylistTracks = (pace: Pace, session: AppleSession, playlistId
 
     return new LibrarySnapshot({
       items: snapshot.items.map(toLibrarySong),
-      complete: snapshot.complete,
+      incompleteReason: snapshot.incompleteReason,
     });
   });
 
-/** One request that shows whether a full read of the library songs is necessary */
+/** One request. The newest song and the count change when songs are added or removed. */
 export const probeLibrary = (pace: Pace, session: AppleSession) =>
   Effect.gen(function* () {
     const request = HttpClientRequest.get(`${amp}/v1/me/library/songs`).pipe(
@@ -189,6 +160,7 @@ export const probeLibrary = (pace: Pace, session: AppleSession) =>
       authorize(session),
     );
     const page = yield* pace(requestJson(request, ProbePage, "library probe"));
+    const newestId = page.data[0]?.id ?? "";
 
-    return new LibraryProbe({ total: page.meta.total, newestId: page.data[0]?.id ?? null });
+    return new LibraryProbe({ version: `${page.meta.total}:${newestId}`, total: page.meta.total });
   });

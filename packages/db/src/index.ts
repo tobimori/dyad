@@ -4,6 +4,8 @@ export * from "./schema/auth.ts";
 export * from "./schema/catalog.ts";
 export * from "./schema/history.ts";
 export * from "./schema/job.ts";
+export * from "./schema/library-sync.ts";
+export * from "./schema/library.ts";
 export * from "./schema/local.ts";
 export * from "./schema/provider-cache.ts";
 export * from "./schema/replica.ts";

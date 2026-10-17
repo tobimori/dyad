@@ -21,6 +21,18 @@ export class AppleMusicError extends Data.TaggedError("AppleMusicError")<{
   readonly reason: string;
 }> {}
 
+/** Only a new link can help: Apple rejected the subscriber's token, or the subscription ended */
+export class AppleAccountError extends Data.TaggedError("AppleAccountError")<{
+  readonly stage: string;
+  readonly reason: string;
+}> {}
+
+export class AppleThrottled extends Data.TaggedError("AppleThrottled")<{
+  readonly stage: string;
+  readonly reason: string;
+  readonly retryAfterSeconds: number | null;
+}> {}
+
 /** Song of the Apple Music catalog */
 export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
   id: Schema.String,
@@ -28,7 +40,9 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
     name: Schema.String,
     artistName: Schema.String,
     albumName: Schema.optional(Schema.String),
-    durationInMillis: Schema.Finite,
+    // Apple leaves out both for a song that is not released yet (October 2026)
+    durationInMillis: Schema.optional(Schema.Finite),
+    playParams: Schema.optional(Schema.Struct({ id: Schema.String })),
     isrc: Schema.optional(Schema.String),
     // `url` is a template with `{w}` and `{h}` for the size in pixels
     artwork: Schema.optional(Schema.Struct({ url: Schema.String })),
@@ -75,13 +89,17 @@ export const appleError =
 
     // A new web client token does not help, because the subscriber's token is the problem
     if (error.status === 403 && request.url.startsWith(`${amp}/v1/me/`)) {
-      return new AppleMusicError({
+      return new AppleAccountError({
         stage,
         reason: "Apple rejected the account token. Link the account again.",
       });
     }
     if (error.status === 429) {
-      return new AppleMusicError({ stage, reason: "Apple throttled the request" });
+      return new AppleThrottled({
+        stage,
+        reason: "Apple throttled the request",
+        retryAfterSeconds: error.retryAfterSeconds,
+      });
     }
 
     return new AppleMusicError({ stage, reason: `Apple answered status ${error.status}` });
@@ -155,7 +173,7 @@ const getStorefront = (
       "account",
     );
     if (!account.meta.subscription.active) {
-      return yield* new AppleMusicError({
+      return yield* new AppleAccountError({
         stage: "account",
         reason: "No active Apple Music subscription",
       });
@@ -225,7 +243,7 @@ export const catalogSource = (song: AppleTrack) =>
     title: song.attributes.name,
     artist: song.attributes.artistName,
     album: song.attributes.albumName ?? null,
-    durationMs: song.attributes.durationInMillis,
+    durationMs: song.attributes.durationInMillis ?? null,
     isrc: song.attributes.isrc ?? null,
     container: "mov",
     codec: "aac",

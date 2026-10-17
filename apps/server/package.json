@@ -21,6 +21,7 @@
     "@dyad/plugin-local-files": "workspace:*",
     "@dyad/plugin-soundcloud": "workspace:*",
     "@dyad/server-core": "workspace:*",
+    "@dyad/sync": "workspace:*",
     "@dyad/web": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",

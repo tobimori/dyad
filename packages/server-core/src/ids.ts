@@ -38,5 +38,9 @@ export const uuidV5 = (name: string) =>
 export const sourceId = (provider: string, externalId: string) =>
   uuidV5(`${provider}:${externalId}`);
 
+/** The binding of a source never changes. Matching merges the recording into others. */
+export const boundRecordingId = (provider: string, externalId: string) =>
+  uuidV5(`${provider}:recording:${externalId}`);
+
 /** A source has one variant until a provider gives several formats of one item */
 export const variantId = (source: string) => uuidV5(`${source}:variant`);

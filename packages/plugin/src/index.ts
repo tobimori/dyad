@@ -48,6 +48,72 @@ export class ProviderAudio extends Data.Class<{
 export type Credentials = ReadonlyMap<string, Redacted.Redacted<string>>;
 
 /**
+ * The core logs and shows `reason`, so it must not contain tokens, signed URLs or keys.
+ * `account`: the user must link the account again. `throttled`: the provider wants fewer requests.
+ */
+export class LibraryError extends Data.TaggedError("LibraryError")<{
+  readonly kind: "account" | "throttled" | "failed";
+  readonly reason: string;
+  /** From the provider's `Retry-After`, for `throttled` only */
+  readonly retryAfterSeconds: number | null;
+}> {}
+
+/** A cheap check of the user's library songs, so that the core reads them only after a change */
+export class LibraryProbe extends Data.Class<{
+  /** Changes when songs are added or removed. It is a hint: some changes can keep the same value. */
+  readonly version: string;
+  readonly total: number | null;
+}> {}
+
+export class LibrarySnapshot<A> extends Data.Class<{
+  readonly items: ReadonlyArray<A>;
+  /** `null` when the read is complete. The core removes nothing after an incomplete read. */
+  readonly incompleteReason: string | null;
+}> {}
+
+export class LibrarySong extends Data.Class<{
+  /** A later write needs it to remove the song */
+  readonly remoteId: string;
+  /**
+   * `null` for a song that is only in the user's library, for example an upload. The core then
+   * identifies the song by `remoteId`, so a remote ID must never be equal to a catalog ID.
+   */
+  readonly catalogId: string | null;
+  /** `null` when the user cannot play the song, for example when the storefront does not have it */
+  readonly source: ProviderSource | null;
+  readonly title: string;
+  readonly artist: string | null;
+  readonly album: string | null;
+  readonly durationMs: number | null;
+}> {}
+
+export class LibraryPlaylist extends Data.Class<{
+  readonly remoteId: string;
+  readonly name: string;
+  /** Changes when the playlist changes. `null` if unknown: then the core reads the songs each time. */
+  readonly version: string | null;
+}> {}
+
+/**
+ * The library of a linked account, which the core reads in the background. The core does not
+ * pace the calls: the plugin keeps its requests within the provider's limits.
+ */
+export class ProviderLibrary extends Data.Class<{
+  readonly probe: (credentials: Credentials) => Effect.Effect<LibraryProbe, LibraryError>;
+  readonly songs: (
+    credentials: Credentials,
+  ) => Effect.Effect<LibrarySnapshot<LibrarySong>, LibraryError>;
+  readonly playlists: (
+    credentials: Credentials,
+  ) => Effect.Effect<LibrarySnapshot<LibraryPlaylist>, LibraryError>;
+  /** In playlist order. A song can be in the list more than once. */
+  readonly playlistSongs: (
+    credentials: Credentials,
+    remoteId: string,
+  ) => Effect.Effect<LibrarySnapshot<LibrarySong>, LibraryError>;
+}> {}
+
+/**
  * A streaming service. The core calls each function with the credentials of the user who plays or
  * searches. Without `account`, the credentials are empty.
  */
@@ -74,6 +140,8 @@ export class Provider extends Data.Class<{
     /** Checks the credentials with the provider and returns the account name to show */
     readonly link: (credentials: Credentials) => Effect.Effect<string, AccountLinkFailed>;
   };
+  /** Only for providers with `account` */
+  readonly library?: ProviderLibrary;
 }> {}
 
 /** Popularity of one recording, for search ranking */
