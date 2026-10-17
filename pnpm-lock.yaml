@@ -187,6 +187,9 @@ importers:
       '@dyad/plugin-local-files':
         specifier: workspace:*
         version: link:../../plugins/local-files
+      '@dyad/plugin-soundcloud':
+        specifier: workspace:*
+        version: link:../../plugins/soundcloud
       '@dyad/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
@@ -388,6 +391,15 @@ importers:
         version: 4.0.5
 
   plugins/local-files:
+    dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  plugins/soundcloud:
     dependencies:
       '@dyad/plugin':
         specifier: workspace:*

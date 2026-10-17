@@ -8,6 +8,7 @@ import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
 import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
+import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
 import { ServerIdentity, coreServicesLayer, pluginLayer, serverRoutes } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
@@ -21,6 +22,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   appleMusicPlugin,
   bandcampPlugin,
   deezerPlugin,
+  soundcloudPlugin,
 ];
 
 export const serverLayer = Layer.unwrap(
