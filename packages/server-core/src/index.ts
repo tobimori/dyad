@@ -25,6 +25,7 @@ import { prefetch, preparePlayback, streamKeyLayer, streamRoute } from "./playba
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { search } from "./search.ts";
+import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { listSources } from "./sources.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
@@ -38,15 +39,20 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescri
 ) {}
 
 /** Replica services that plugins and routes share */
-export const coreServicesLayer = Layer.mergeAll(
-  providersLayer,
-  popularitiesLayer,
-  streamKeyLayer,
-  authCodesLayer,
-  providerCacheSweepLayer,
-  mediaCacheLayer,
-  musicbrainzLookupsLayer,
-).pipe(Layer.provideMerge(jobsLayer));
+export const coreServicesLayer = sessionsLayer.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      providersLayer,
+      popularitiesLayer,
+      streamKeyLayer,
+      authCodesLayer,
+      providerCacheSweepLayer,
+      mediaCacheLayer,
+      musicbrainzLookupsLayer,
+    ),
+  ),
+  Layer.provideMerge(jobsLayer),
+);
 
 export const serverRoutes = Layer.unwrap(
   Effect.gen(function* () {
@@ -79,6 +85,11 @@ export const serverRoutes = Layer.unwrap(
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
       prefetch: ({ sourceIds }) => prefetch(sourceIds).pipe(orDieOnDatabaseError("prefetch")),
       recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError("recordPlay")),
+      connectDevice: (payload) =>
+        Stream.unwrap(connectDevice(payload).pipe(orDieOnDatabaseError("connectDevice"))),
+      controlSession: (payload) =>
+        controlSession(payload).pipe(orDieOnDatabaseError("controlSession")),
+      reportPlayback: (payload) => reportPlayback(payload),
       createPairingCode: () => createPairingCode,
       listDevices: () => listDevices.pipe(orDieOnDatabaseError("listDevices")),
       removeDevice: ({ deviceId }) =>

@@ -1,6 +1,8 @@
 import { Context, Effect, Schema } from "effect";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 
+export * from "./session.ts";
+
 export const HttpUrl = Schema.URLFromString.check(
   Schema.makeFilter((url) =>
     url.protocol === "http:" || url.protocol === "https:"
@@ -369,6 +371,149 @@ export class DeviceSummary extends Schema.Class<DeviceSummary>("DeviceSummary")(
   current: Schema.Boolean,
 }) {}
 
+/** Unique in the user's session. The server never uses an ID again, also after a restart. */
+export const EntryId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("EntryId"));
+export type EntryId = typeof EntryId.Type;
+
+/** `device:<DeviceId>` for a Dyad device that plays */
+export const OutputId = Schema.String.check(Schema.isMaxLength(256)).pipe(Schema.brand("OutputId"));
+export type OutputId = typeof OutputId.Type;
+
+export const RepeatMode = Schema.Literals(["off", "all", "one"]);
+
+export class QueueEntry extends Schema.Class<QueueEntry>("QueueEntry")({
+  id: EntryId,
+  source: SourceSummary,
+  context: PlayContext,
+  /** The entry failed to play. Skips and ends pass over it; `JumpTo` tries it again. */
+  unplayable: Schema.Boolean,
+}) {}
+
+/** The transport of the user's session. `positionAt` gives the position at a server time. */
+export class Playback extends Schema.Class<Playback>("Playback")({
+  state: Schema.Literals(["stopped", "paused", "playing"]),
+  /** Entries before it are the history that a skip back goes to */
+  entryId: Schema.NullOr(EntryId),
+  positionMs: Schema.Number,
+  /** Server time of `positionMs` */
+  at: Schema.Number,
+  /** 0 while paused, while the output loads, and after a lost output passed the end of the entry */
+  rate: Schema.Literals([0, 1]),
+  /** Changes at each command that changes the transport, but not at the natural end of an entry */
+  revision: Schema.Int,
+  outputId: Schema.NullOr(OutputId),
+  /** The output stopped reporting. It can still play from its buffer. */
+  lost: Schema.Boolean,
+  shuffle: Schema.Boolean,
+  repeat: RepeatMode,
+}) {}
+
+export class Output extends Schema.Class<Output>("Output")({
+  id: OutputId,
+  kind: Schema.Literals(["device", "url", "timed"]),
+  name: Schema.String,
+  /** 0 to 1, `null` when unknown */
+  volume: Schema.NullOr(Schema.Number),
+}) {}
+
+/** Removes `remove` entries at `index`, then inserts `insert` there */
+export class QueueSplice extends Schema.Class<QueueSplice>("QueueSplice")({
+  index: Schema.Int,
+  remove: Schema.Int,
+  insert: Schema.Array(QueueEntry),
+}) {}
+
+export const SessionEvent = Schema.TaggedUnion({
+  /**
+   * Always the first event. Reports of this connection send `generation`. `serverTime` gives the
+   * clock offset to the server.
+   */
+  Snapshot: {
+    generation: Schema.Int,
+    serverTime: Schema.Number,
+    queueVersion: Schema.Int,
+    entries: Schema.Array(QueueEntry),
+    playback: Playback,
+    outputs: Schema.Array(Output),
+  },
+  /** Apply only when `fromVersion` is the version of the local queue, else connect again */
+  QueueChanged: {
+    fromVersion: Schema.Int,
+    version: Schema.Int,
+    splices: Schema.Array(QueueSplice),
+  },
+  PlaybackChanged: { serverTime: Schema.Number, playback: Playback },
+  OutputsChanged: { outputs: Schema.Array(Output) },
+  /** A newer connection of the same device plays. This connection continues as a controller. */
+  Superseded: {},
+});
+
+const SourceIds = Schema.NonEmptyArray(Schema.String.check(Schema.isUUID())).check(
+  Schema.isMaxLength(10_000),
+);
+
+export const SessionCommand = Schema.TaggedUnion({
+  /** Replaces the queue and plays `sourceIds[index]` */
+  Play: { sourceIds: SourceIds, index: Schema.Int, context: PlayContext, shuffle: Schema.Boolean },
+  Enqueue: {
+    sourceIds: SourceIds,
+    context: PlayContext,
+    after: Schema.Union([Schema.Literals(["current", "end"]), EntryId]),
+  },
+  Remove: { entryIds: Schema.NonEmptyArray(EntryId) },
+  /** `after: null` moves the entries to the start */
+  Move: { entryIds: Schema.NonEmptyArray(EntryId), after: Schema.NullOr(EntryId) },
+  Clear: { keepCurrent: Schema.Boolean },
+  JumpTo: { entryId: EntryId, positionMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)) },
+  Resume: {},
+  Pause: {},
+  Stop: {},
+  Seek: { entryId: EntryId, positionMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)) },
+  /** Ignores `repeat: "one"`. Does nothing when `fromEntryId` is no longer the current entry. */
+  Skip: { fromEntryId: EntryId, direction: Schema.Literals([1, -1]) },
+  SetShuffle: { on: Schema.Boolean },
+  SetRepeat: { mode: RepeatMode },
+  /** `play: null` keeps the state */
+  Transfer: { outputId: OutputId, play: Schema.NullOr(Schema.Boolean) },
+  SetVolume: {
+    outputId: OutputId,
+    volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  },
+});
+
+export class SessionCommandResult extends Schema.Class<SessionCommandResult>(
+  "SessionCommandResult",
+)({
+  queueVersion: Schema.Int,
+  revision: Schema.Int,
+  /** The new entries of `Play` and `Enqueue` */
+  entryIds: Schema.Array(EntryId),
+}) {}
+
+export class SessionCommandFailed extends Schema.TaggedError<SessionCommandFailed>()(
+  "SessionCommandFailed",
+  {
+    reason: Schema.Literals([
+      "stale_queue",
+      "entry_not_found",
+      "queue_full",
+      "output_unavailable",
+      "nothing_to_play",
+    ]),
+  },
+) {}
+
+/**
+ * What a device played before it lost the server. The server continues from it only when the device
+ * is still the output and nobody changed the transport since `revision`.
+ */
+export class PlayerResume extends Schema.Class<PlayerResume>("PlayerResume")({
+  revision: Schema.Int,
+  entryId: EntryId,
+  positionMs: Schema.Number,
+  state: Schema.Literals(["playing", "paused"]),
+}) {}
+
 const PublicRpc = RpcGroup.make(
   Rpc.make("describe", { success: ServerDescriptor }),
   // Creates the first admin with the setup code from the server log
@@ -463,6 +608,45 @@ const UserRpc = RpcGroup.make(
       playedMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
       completed: Schema.Boolean,
       context: PlayContext,
+    },
+  }),
+  // A `Snapshot` of the user's session, then its changes. A device that can play sends `player`;
+  // the newest such connection of a device plays when the device is the output.
+  Rpc.make("connectDevice", {
+    payload: {
+      player: Schema.NullOr(
+        Schema.Struct({
+          capabilities: PlaybackCapabilities,
+          volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+        }),
+      ),
+      resume: Schema.NullOr(PlayerResume),
+    },
+    success: SessionEvent,
+    stream: true,
+  }),
+  // A retry with the same `requestId` gets the first result and changes nothing.
+  // `ifQueueVersion` is for commands that a client built from queue positions.
+  Rpc.make("controlSession", {
+    payload: {
+      requestId: Schema.String.check(Schema.isUUID()),
+      command: SessionCommand,
+      ifQueueVersion: Schema.NullOr(Schema.Int),
+    },
+    success: SessionCommandResult,
+    error: SessionCommandFailed,
+  }),
+  // From the output device, on each change and every 5 seconds while it plays. The server ignores
+  // a report of an older connection or an older revision.
+  Rpc.make("reportPlayback", {
+    payload: {
+      generation: Schema.Int,
+      revision: Schema.Int,
+      entryId: EntryId,
+      state: Schema.Literals(["playing", "paused", "buffering", "ended", "failed"]),
+      positionMs: Schema.Number,
+      failure: Schema.NullOr(PlaybackUnavailable.fields.reason),
+      volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
     },
   }),
   Rpc.make("createPairingCode", { success: PairingCode }),

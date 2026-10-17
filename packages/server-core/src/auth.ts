@@ -16,6 +16,7 @@ import { and, eq } from "drizzle-orm";
 import { Clock, Context, Crypto, Data, Effect, Layer, Option, Ref } from "effect";
 
 import { fromHex, hex } from "./ids.ts";
+import { Sessions } from "./sessions.ts";
 
 // Compares all characters, so that the time does not show how many characters match
 const equalSecrets = (a: string, b: string) => {
@@ -272,6 +273,9 @@ export const removeDevice = (deviceId: DeviceId) =>
     yield* db
       .delete(device)
       .where(and(eq(device.id, deviceId), eq(device.userId, principal.userId)));
+
+    // Authentication checks a token only when a request starts, so open streams must end
+    yield* (yield* Sessions).removeDevice(principal.userId, deviceId);
   });
 
 export const authenticationLayer = Layer.effect(
