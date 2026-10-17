@@ -13,6 +13,9 @@ export const serverAtoms = (serverUrl: string, deviceToken: Redacted.Redacted<st
     sources: runtime.atom(
       ServerConnection.use((client) => client.listSources()).pipe(Effect.timeout("5 seconds")),
     ),
+    recentPlays: runtime.atom(
+      ServerConnection.use((client) => client.listRecentPlays()).pipe(Effect.timeout("5 seconds")),
+    ),
   };
 };
 

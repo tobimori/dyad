@@ -2,12 +2,14 @@ import { RegistryProvider } from "@effect/atom-react";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { createCliRenderer, setupAudio } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { Data, Effect } from "effect";
+import { Data, Effect, FileSystem, Path } from "effect";
 import { Command } from "effect/cli";
 
 import { accountCommands } from "./accounts.ts";
 import { App } from "./app.tsx";
 import { authCommands, deviceToken, reportFailures, serverUrl as serverUrlConfig } from "./auth.ts";
+import { loadSession, saveSession } from "./session.ts";
+import type { SavedSession } from "./session.ts";
 import { serverAtoms } from "./state.ts";
 
 class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: unknown }> {}
@@ -15,6 +17,11 @@ class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: 
 const player = Effect.gen(function* () {
   const serverUrl = yield* serverUrlConfig;
   const atoms = serverAtoms(serverUrl, yield* deviceToken);
+  const saved = yield* loadSession(serverUrl);
+  const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  // A failed save must not stop the player; the next change saves again
+  const save = (session: SavedSession) =>
+    saveSession(serverUrl, session).pipe(Effect.provideContext(services), Effect.ignore);
   const audio = yield* Effect.acquireRelease(
     Effect.sync(() => setupAudio()),
     (audio) => Effect.sync(() => audio.dispose()),
@@ -38,7 +45,7 @@ const player = Effect.gen(function* () {
     renderer.once("destroy", () => resume(Effect.void));
     createRoot(renderer).render(
       <RegistryProvider>
-        <App serverUrl={serverUrl} atoms={atoms} audio={audio} />
+        <App serverUrl={serverUrl} atoms={atoms} audio={audio} saved={saved} save={save} />
       </RegistryProvider>,
     );
   });
