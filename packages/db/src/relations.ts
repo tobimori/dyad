@@ -128,7 +128,6 @@ export const relations = defineRelations(schema, (r) => ({
     }),
     variants: r.many.sourceVariant(),
     segments: r.many.sourceSegment(),
-    matches: r.many.sourceMatch(),
     localFiles: r.many.localFile(),
   },
   sourceVariant: {
@@ -147,21 +146,6 @@ export const relations = defineRelations(schema, (r) => ({
     recording: r.one.recording({
       from: r.sourceSegment.recordingId,
       to: r.recording.id,
-    }),
-  },
-  sourceMatch: {
-    source: r.one.source({
-      from: r.sourceMatch.sourceId,
-      to: r.source.id,
-      optional: false,
-    }),
-    recording: r.one.recording({
-      from: r.sourceMatch.recordingId,
-      to: r.recording.id,
-    }),
-    track: r.one.track({
-      from: r.sourceMatch.trackId,
-      to: r.track.id,
     }),
   },
   libraryRoot: {

@@ -1,10 +1,9 @@
 import { RecordingId, ReplicaId, WorkspaceId } from "@dyad/domain";
 import { Schema } from "effect";
 
-export class HybridLogicalClock extends Schema.Class<HybridLogicalClock>("HybridLogicalClock")({
-  wallTime: Schema.Natural,
-  counter: Schema.Natural,
-}) {}
+import { HybridLogicalClock } from "./hlc.ts";
+
+export * from "./hlc.ts";
 
 export class FavoriteSetOperation extends Schema.Class<FavoriteSetOperation>(
   "FavoriteSetOperation",

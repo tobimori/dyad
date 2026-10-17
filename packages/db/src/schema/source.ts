@@ -2,7 +2,6 @@ import {
   index,
   integer,
   primaryKey,
-  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -20,7 +19,8 @@ export const source = sqliteTable(
     provider: text("provider").notNull(),
     externalId: text("external_id").notNull(),
     kind: text("kind", { enum: ["stream", "live", "file", "purchase"] }).notNull(),
-    // Null until matched
+    // The recording that the source binds to when it enters `source`. It never changes; matching
+    // merges this recording into others with `entity_merge`.
     recordingId: text("recording_id"),
     // Set when the source is a known album position
     trackId: text("track_id"),
@@ -81,25 +81,5 @@ export const sourceSegment = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.sourceId, table.position] }),
     index("source_segment_recording_idx").on(table.recordingId),
-  ],
-);
-
-/** Automatic matches. User decisions are in the user layer (`match_decision`). */
-export const sourceMatch = sqliteTable(
-  "source_match",
-  {
-    id: text("id").primaryKey(),
-    sourceId: text("source_id").notNull(),
-    recordingId: text("recording_id"),
-    trackId: text("track_id"),
-    method: text("method", {
-      enum: ["mbid", "isrc", "fingerprint", "mapper", "fuzzy", "manual"],
-    }).notNull(),
-    confidence: real("confidence").notNull(),
-    matchedAt: integer("matched_at").notNull(),
-  },
-  (table) => [
-    index("source_match_source_idx").on(table.sourceId),
-    index("source_match_recording_idx").on(table.recordingId),
   ],
 );

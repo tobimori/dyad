@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import { projection } from "./projection.ts";
 
@@ -7,7 +7,7 @@ import { projection } from "./projection.ts";
 // There are no foreign key constraints: assertions arrive in any order, and clients hold only some
 // related rows. Relations are declared in `relations.ts`.
 
-export const entityOrigins = ["musicbrainz", "provider", "local", "admin"] as const;
+export const entityOrigins = ["musicbrainz", "isrc", "provider", "local", "admin"] as const;
 
 // Entities that can be merged, hidden and identified
 const entity = {
@@ -66,9 +66,14 @@ export const recording = sqliteTable(
     artistCreditId: text("artist_credit_id"),
     durationMs: integer("duration_ms"),
     disambiguation: text("disambiguation"),
+    // Root of the merge tree, resolved from the effective `entity_merge` edges. Null for a root.
+    mergedIntoId: text("merged_into_id"),
     ...entity,
   },
-  (table) => [index("recording_artist_credit_idx").on(table.artistCreditId)],
+  (table) => [
+    index("recording_artist_credit_idx").on(table.artistCreditId),
+    index("recording_merged_into_idx").on(table.mergedIntoId),
+  ],
 );
 
 export const releaseGroup = sqliteTable(
@@ -157,8 +162,9 @@ export const track = sqliteTable(
 export const entityTypes = ["artist", "recording", "release_group", "release", "track"] as const;
 
 /**
- * Merge decisions. Replicated directly in the workspace scope; not a projection.
- * For each pair, an `admin` row wins over a `system` row.
+ * Identity decisions between entities. Replicated directly in the workspace scope; not a
+ * projection. For each pair, an `admin` row wins over a `system` row, and an `admin` row on an
+ * entity freezes all `system` rows from that entity.
  */
 export const entityMerge = sqliteTable(
   "entity_merge",
@@ -170,7 +176,12 @@ export const entityMerge = sqliteTable(
     intoId: text("into_id").notNull(),
     decision: text("decision", { enum: ["merge", "reject"] }).notNull(),
     origin: text("origin", { enum: ["system", "admin"] }).notNull(),
-    authorUserId: text("author_user_id").notNull(),
+    method: text("method", { enum: ["mbid_tag", "isrc", "mapper", "manual"] }).notNull(),
+    confidence: real("confidence").notNull(),
+    // Lookup response fields or tag names that support the decision
+    evidence: text("evidence", { mode: "json" }),
+    // Null for `system` rows
+    authorUserId: text("author_user_id"),
     // Newer row with the same ID wins
     hlc: text("hlc").notNull(),
   },
