@@ -1,0 +1,100 @@
+import {
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+
+import { projection } from "./projection.ts";
+
+// Shared source metadata. Access and file locations belong to replicas; see `local.ts`.
+
+export const source = sqliteTable(
+  "source",
+  {
+    // UUIDv5 of `<provider>:<external_id>`, or `local:<audio_hash>`
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    kind: text("kind", { enum: ["stream", "live", "file", "purchase"] }).notNull(),
+    // Null until matched
+    recordingId: text("recording_id"),
+    // Set when the source is a known album position
+    trackId: text("track_id"),
+    rawTitle: text("raw_title"),
+    rawArtist: text("raw_artist"),
+    rawAlbum: text("raw_album"),
+    rawDurationMs: integer("raw_duration_ms"),
+    availability: text("availability", {
+      enum: ["available", "unavailable", "region_locked", "removed"],
+    })
+      .notNull()
+      .default("available"),
+    checkedAt: integer("checked_at"),
+    ...projection,
+  },
+  (table) => [
+    uniqueIndex("source_provider_idx").on(table.provider, table.externalId),
+    index("source_recording_idx").on(table.recordingId),
+    index("source_track_idx").on(table.trackId),
+  ],
+);
+
+export const sourceVariant = sqliteTable(
+  "source_variant",
+  {
+    id: text("id").primaryKey(),
+    sourceId: text("source_id").notNull(),
+    codec: text("codec").notNull(),
+    container: text("container").notNull(),
+    sampleRate: integer("sample_rate"),
+    bitDepth: integer("bit_depth"),
+    channels: integer("channels"),
+    bitrate: integer("bitrate"),
+    lossless: integer("lossless", { mode: "boolean" }).notNull(),
+    encrypted: integer("encrypted", { mode: "boolean" }).notNull(),
+  },
+  (table) => [index("source_variant_source_idx").on(table.sourceId)],
+);
+
+/**
+ * Time range of one track in a DJ set source. Derived from the selected `source.tracklist`
+ * assertion. Offsets belong to the source: another upload of the same set has other offsets.
+ */
+export const sourceSegment = sqliteTable(
+  "source_segment",
+  {
+    sourceId: text("source_id").notNull(),
+    position: integer("position").notNull(),
+    trackId: text("track_id").notNull(),
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceId, table.position] }),
+    index("source_segment_track_idx").on(table.trackId),
+  ],
+);
+
+/** Automatic matches. User decisions are in the user layer (`match_decision`). */
+export const sourceMatch = sqliteTable(
+  "source_match",
+  {
+    id: text("id").primaryKey(),
+    sourceId: text("source_id").notNull(),
+    recordingId: text("recording_id"),
+    trackId: text("track_id"),
+    method: text("method", {
+      enum: ["mbid", "isrc", "fingerprint", "mapper", "fuzzy", "manual"],
+    }).notNull(),
+    confidence: real("confidence").notNull(),
+    matchedAt: integer("matched_at").notNull(),
+  },
+  (table) => [
+    index("source_match_source_idx").on(table.sourceId),
+    index("source_match_recording_idx").on(table.recordingId),
+  ],
+);

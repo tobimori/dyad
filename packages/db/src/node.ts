@@ -4,7 +4,8 @@ import * as Drizzle from "drizzle-orm/effect-sqlite-node";
 import { migrate } from "drizzle-orm/effect-sqlite-node/migrator";
 import { Clock, Context, Crypto, Effect, Layer, Path, Schema } from "effect";
 
-import { replicaIdentity } from "./schema.ts";
+import { relations } from "./relations.ts";
+import { replicaIdentity } from "./schema/replica.ts";
 
 const Identity = Schema.Struct({
   replicaId: Schema.String.check(Schema.isUUID()),
@@ -24,7 +25,7 @@ export const nodeDatabaseLayer = (options: NodeDatabaseOptions) =>
   Layer.effect(
     ReplicaDatabase,
     Effect.gen(function* () {
-      const db = yield* Drizzle.makeWithDefaults();
+      const db = yield* Drizzle.makeWithDefaults({ relations });
       const crypto = yield* Crypto.Crypto;
       const path = yield* Path.Path;
       const migrationsFolder = yield* path.fromFileUrl(new URL("../migrations/", import.meta.url));

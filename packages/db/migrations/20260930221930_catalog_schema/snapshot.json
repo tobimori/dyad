@@ -1,0 +1,2109 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "88df74ae-ccec-4af9-aab3-dc18efdb6100",
+  "prevIds": ["e1098378-396d-4eae-b786-d52baeceeb7e"],
+  "ddl": [
+    {
+      "name": "catalog_assertion",
+      "entityType": "tables"
+    },
+    {
+      "name": "artist",
+      "entityType": "tables"
+    },
+    {
+      "name": "artist_credit",
+      "entityType": "tables"
+    },
+    {
+      "name": "artist_credit_name",
+      "entityType": "tables"
+    },
+    {
+      "name": "entity_merge",
+      "entityType": "tables"
+    },
+    {
+      "name": "identifier",
+      "entityType": "tables"
+    },
+    {
+      "name": "medium",
+      "entityType": "tables"
+    },
+    {
+      "name": "recording",
+      "entityType": "tables"
+    },
+    {
+      "name": "release",
+      "entityType": "tables"
+    },
+    {
+      "name": "release_group",
+      "entityType": "tables"
+    },
+    {
+      "name": "track",
+      "entityType": "tables"
+    },
+    {
+      "name": "library_root",
+      "entityType": "tables"
+    },
+    {
+      "name": "local_file",
+      "entityType": "tables"
+    },
+    {
+      "name": "replica_identity",
+      "entityType": "tables"
+    },
+    {
+      "name": "source",
+      "entityType": "tables"
+    },
+    {
+      "name": "source_match",
+      "entityType": "tables"
+    },
+    {
+      "name": "source_variant",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "entity_type",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "entity_id",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "field",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_ref",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_revision",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "evidence",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "confidence",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "author_user_id",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "author_replica_id",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "hlc",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "retracted",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "schema_version",
+      "entityType": "columns",
+      "table": "catalog_assertion"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "local_key",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sort_name",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "country",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "disambiguation",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "artist"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "artist_credit"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "artist_credit"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "artist_credit"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artist_credit_id",
+      "entityType": "columns",
+      "table": "artist_credit_name"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "position",
+      "entityType": "columns",
+      "table": "artist_credit_name"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artist_id",
+      "entityType": "columns",
+      "table": "artist_credit_name"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "credited_as",
+      "entityType": "columns",
+      "table": "artist_credit_name"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "''",
+      "generated": null,
+      "name": "join_phrase",
+      "entityType": "columns",
+      "table": "artist_credit_name"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "entity_type",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "from_id",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "into_id",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "decision",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "author_user_id",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "hlc",
+      "entityType": "columns",
+      "table": "entity_merge"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "entity_type",
+      "entityType": "columns",
+      "table": "identifier"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "entity_id",
+      "entityType": "columns",
+      "table": "identifier"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scheme",
+      "entityType": "columns",
+      "table": "identifier"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "identifier"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "release_id",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "position",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "format",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "medium"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artist_credit_id",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "duration_ms",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "disambiguation",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "recording"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "release_group_id",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artist_credit_id",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "date",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "country",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "release_status",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "label",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "catalog_number",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "release"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "local_key",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artist_credit_id",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "primary_type",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'uncertain'",
+      "generated": null,
+      "name": "classification_status",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'[]'",
+      "generated": null,
+      "name": "secondary_types",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_release_date",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "release_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "medium_id",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "position",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "number",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artist_credit_id",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recording_id",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "duration_ms",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "track"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "library_root"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_id",
+      "entityType": "columns",
+      "table": "library_root"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "entityType": "columns",
+      "table": "library_root"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "library_root"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "library_root_id",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "size",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "mtime",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "audio_hash",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tags",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fingerprint",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "loudness_lufs",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "true_peak",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "track_gain",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "album_gain",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scanned_at",
+      "entityType": "columns",
+      "table": "local_file"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "slot",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "replica_id",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "replica_identity"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "external_id",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recording_id",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "track_id",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "raw_title",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "raw_artist",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "raw_album",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "raw_duration_ms",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'available'",
+      "generated": null,
+      "name": "availability",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checked_at",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy_version",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recording_id",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "track_id",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "method",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "confidence",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "matched_at",
+      "entityType": "columns",
+      "table": "source_match"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "codec",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "container",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sample_rate",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "bit_depth",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "channels",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "bitrate",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lossless",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "encrypted",
+      "entityType": "columns",
+      "table": "source_variant"
+    },
+    {
+      "columns": ["library_root_id"],
+      "tableTo": "library_root",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_local_file_library_root_id_library_root_id_fk",
+      "entityType": "fks",
+      "table": "local_file"
+    },
+    {
+      "columns": ["artist_credit_id", "position"],
+      "nameExplicit": false,
+      "name": "artist_credit_name_pk",
+      "entityType": "pks",
+      "table": "artist_credit_name"
+    },
+    {
+      "columns": ["entity_type", "entity_id", "scheme", "value"],
+      "nameExplicit": false,
+      "name": "identifier_pk",
+      "entityType": "pks",
+      "table": "identifier"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "catalog_assertion_pk",
+      "table": "catalog_assertion",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "artist_pk",
+      "table": "artist",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "artist_credit_pk",
+      "table": "artist_credit",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "entity_merge_pk",
+      "table": "entity_merge",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "medium_pk",
+      "table": "medium",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "recording_pk",
+      "table": "recording",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "release_pk",
+      "table": "release",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "release_group_pk",
+      "table": "release_group",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "track_pk",
+      "table": "track",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "library_root_pk",
+      "table": "library_root",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "local_file_pk",
+      "table": "local_file",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["slot"],
+      "nameExplicit": false,
+      "name": "replica_identity_pk",
+      "table": "replica_identity",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "source_pk",
+      "table": "source",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "source_match_pk",
+      "table": "source_match",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "source_variant_pk",
+      "table": "source_variant",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "entity_type",
+          "isExpression": false
+        },
+        {
+          "value": "entity_id",
+          "isExpression": false
+        },
+        {
+          "value": "field",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "catalog_assertion_entity_idx",
+      "entityType": "indexes",
+      "table": "catalog_assertion"
+    },
+    {
+      "columns": [
+        {
+          "value": "origin_ref",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "catalog_assertion_origin_idx",
+      "entityType": "indexes",
+      "table": "catalog_assertion"
+    },
+    {
+      "columns": [
+        {
+          "value": "local_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "artist_local_key_idx",
+      "entityType": "indexes",
+      "table": "artist"
+    },
+    {
+      "columns": [
+        {
+          "value": "artist_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "artist_credit_name_artist_idx",
+      "entityType": "indexes",
+      "table": "artist_credit_name"
+    },
+    {
+      "columns": [
+        {
+          "value": "entity_type",
+          "isExpression": false
+        },
+        {
+          "value": "from_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "entity_merge_from_idx",
+      "entityType": "indexes",
+      "table": "entity_merge"
+    },
+    {
+      "columns": [
+        {
+          "value": "entity_type",
+          "isExpression": false
+        },
+        {
+          "value": "into_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "entity_merge_into_idx",
+      "entityType": "indexes",
+      "table": "entity_merge"
+    },
+    {
+      "columns": [
+        {
+          "value": "scheme",
+          "isExpression": false
+        },
+        {
+          "value": "value",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "identifier_lookup_idx",
+      "entityType": "indexes",
+      "table": "identifier"
+    },
+    {
+      "columns": [
+        {
+          "value": "release_id",
+          "isExpression": false
+        },
+        {
+          "value": "position",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "medium_release_idx",
+      "entityType": "indexes",
+      "table": "medium"
+    },
+    {
+      "columns": [
+        {
+          "value": "artist_credit_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "recording_artist_credit_idx",
+      "entityType": "indexes",
+      "table": "recording"
+    },
+    {
+      "columns": [
+        {
+          "value": "release_group_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "release_release_group_idx",
+      "entityType": "indexes",
+      "table": "release"
+    },
+    {
+      "columns": [
+        {
+          "value": "artist_credit_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "release_artist_credit_idx",
+      "entityType": "indexes",
+      "table": "release"
+    },
+    {
+      "columns": [
+        {
+          "value": "artist_credit_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "release_group_artist_credit_idx",
+      "entityType": "indexes",
+      "table": "release_group"
+    },
+    {
+      "columns": [
+        {
+          "value": "local_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "release_group_local_key_idx",
+      "entityType": "indexes",
+      "table": "release_group"
+    },
+    {
+      "columns": [
+        {
+          "value": "medium_id",
+          "isExpression": false
+        },
+        {
+          "value": "position",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "track_medium_idx",
+      "entityType": "indexes",
+      "table": "track"
+    },
+    {
+      "columns": [
+        {
+          "value": "recording_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "track_recording_idx",
+      "entityType": "indexes",
+      "table": "track"
+    },
+    {
+      "columns": [
+        {
+          "value": "library_root_id",
+          "isExpression": false
+        },
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "local_file_path_idx",
+      "entityType": "indexes",
+      "table": "local_file"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "local_file_source_idx",
+      "entityType": "indexes",
+      "table": "local_file"
+    },
+    {
+      "columns": [
+        {
+          "value": "provider",
+          "isExpression": false
+        },
+        {
+          "value": "external_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "source_provider_idx",
+      "entityType": "indexes",
+      "table": "source"
+    },
+    {
+      "columns": [
+        {
+          "value": "recording_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "source_recording_idx",
+      "entityType": "indexes",
+      "table": "source"
+    },
+    {
+      "columns": [
+        {
+          "value": "track_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "source_track_idx",
+      "entityType": "indexes",
+      "table": "source"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "source_match_source_idx",
+      "entityType": "indexes",
+      "table": "source_match"
+    },
+    {
+      "columns": [
+        {
+          "value": "recording_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "source_match_recording_idx",
+      "entityType": "indexes",
+      "table": "source_match"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "source_variant_source_idx",
+      "entityType": "indexes",
+      "table": "source_variant"
+    },
+    {
+      "columns": ["path"],
+      "nameExplicit": false,
+      "name": "library_root_path_unique",
+      "entityType": "uniques",
+      "table": "library_root"
+    },
+    {
+      "columns": ["replica_id"],
+      "nameExplicit": false,
+      "name": "replica_identity_replica_id_unique",
+      "entityType": "uniques",
+      "table": "replica_identity"
+    }
+  ],
+  "renames": []
+}

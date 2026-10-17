@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "generate": "drizzle-kit generate"
+    "generate": "drizzle-kit generate --name"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "catalog:",
