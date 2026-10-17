@@ -1,14 +1,17 @@
 import { eslintCompatPlugin } from "vite-plus/lint/plugins";
 
+import { noArrayFilterMapRule } from "./rules/no-array-filter-map.ts";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.ts";
 import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.ts";
 import { noExplicitReturnTypesRule } from "./rules/no-explicit-return-types.ts";
 import { noInternalExportAllRule } from "./rules/no-internal-export-all.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
+import { noLowValueCommentsRule } from "./rules/no-low-value-comments.ts";
 import { noManualTagsRule } from "./rules/no-manual-tags.ts";
 import { noModuleMockingRule } from "./rules/no-module-mocking.ts";
 import { noNestedTernariesRule } from "./rules/no-nested-ternaries.ts";
 import { noObjectParametersRule } from "./rules/no-object-parameters.ts";
+import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
 import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
 import { noReflectGetRule } from "./rules/no-reflect-get.ts";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.ts";
@@ -22,20 +25,24 @@ import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.ts
 import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.ts";
 import { preferEffectFnRule } from "./rules/prefer-effect-fn.ts";
 import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety-comment-for-type-assertion.ts";
+import { requireSuppressionReasonRule } from "./rules/require-suppression-reason.ts";
 
 /** Project rules for TypeScript and Effect */
 const projectPlugin = eslintCompatPlugin({
   meta: { name: "@project" },
   rules: {
+    "no-array-filter-map": noArrayFilterMapRule,
     "no-chained-type-assertions": noChainedTypeAssertionsRule,
     "no-conditional-empty-object-spread": noConditionalEmptyObjectSpreadRule,
     "no-explicit-return-types": noExplicitReturnTypesRule,
     "no-internal-export-all": noInternalExportAllRule,
     "no-known-value-widening": noKnownValueWideningRule,
+    "no-low-value-comments": noLowValueCommentsRule,
     "no-manual-tags": noManualTagsRule,
     "no-module-mocking": noModuleMockingRule,
     "no-nested-ternaries": noNestedTernariesRule,
     "no-object-parameters": noObjectParametersRule,
+    "no-reduce-accumulator-copy": noReduceAccumulatorCopyRule,
     "no-reflect-apply": noReflectApplyRule,
     "no-reflect-get": noReflectGetRule,
     "no-runtime-typeof": noRuntimeTypeofRule,
@@ -49,6 +56,7 @@ const projectPlugin = eslintCompatPlugin({
     "no-widen-then-assert": noWidenThenAssertRule,
     "prefer-effect-fn": preferEffectFnRule,
     "require-safety-comment-for-type-assertion": requireSafetyCommentForTypeAssertionRule,
+    "require-suppression-reason": requireSuppressionReasonRule,
   },
 });
 
