@@ -1,6 +1,7 @@
-import { PopularityHit, SearchError } from "@dyad/plugin";
+import { PopularityHit, ProviderError } from "@dyad/plugin";
+import { getJson } from "@dyad/plugin/http";
 import { Effect, Schema } from "effect";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClientRequest } from "effect/http";
 
 // Public endpoint without a key
 const searchUrl = "https://api.deezer.com/search/track";
@@ -27,23 +28,18 @@ const SearchResults = Schema.Union([
 /** Deezer's global popularity of the tracks that match `query` */
 export const trackPopularity = (query: string) =>
   Effect.gen(function* () {
-    const httpClient = yield* HttpClient.HttpClient;
     const request = HttpClientRequest.get(searchUrl).pipe(
       HttpClientRequest.setUrlParams({ q: query, limit: resultLimit }),
     );
-    const response = yield* httpClient
-      .execute(request)
-      .pipe(Effect.mapError(() => new SearchError({ reason: "Request failed" })));
-
-    if (response.status < 200 || response.status >= 300) {
-      return yield* new SearchError({ reason: `Deezer answered status ${response.status}` });
-    }
-
-    const results = yield* HttpClientResponse.schemaBodyJson(SearchResults)(response).pipe(
-      Effect.mapError(() => new SearchError({ reason: "Unexpected response" })),
+    const results = yield* getJson(request, SearchResults).pipe(
+      Effect.catchTags({
+        HttpStatusError: (error) =>
+          Effect.fail(new ProviderError({ reason: `Deezer answered status ${error.status}` })),
+        HttpRequestError: (error) => Effect.fail(new ProviderError({ reason: error.reason })),
+      }),
     );
     if ("error" in results) {
-      return yield* new SearchError({ reason: `Deezer: ${results.error.message}` });
+      return yield* new ProviderError({ reason: `Deezer: ${results.error.message}` });
     }
 
     return results.data.map(

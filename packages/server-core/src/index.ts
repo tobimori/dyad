@@ -1,16 +1,10 @@
-import { orDieOnDatabaseError } from "@dyad/db/node";
+import { dieOnDatabaseError, orDieOnDatabaseError } from "@dyad/db/node";
 import { ServerDescriptor, ServerRpc } from "@dyad/domain";
 import { Context, Effect, Layer, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 
-import {
-  accountProvidersLayer,
-  linkAccount,
-  listAccountProviders,
-  listAccounts,
-  unlinkAccount,
-} from "./accounts.ts";
+import { linkAccount, listAccountProviders, listAccounts, unlinkAccount } from "./accounts.ts";
 import {
   authCodesLayer,
   authenticationLayer,
@@ -22,10 +16,11 @@ import {
   setup,
 } from "./auth.ts";
 import { listRecentPlays, recordPlay } from "./history.ts";
-import { listSources } from "./library.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
-import { sourcePopularitiesLayer, sourceResolversLayer, sourceSearchesLayer } from "./providers.ts";
-import { providerCacheSweepLayer, search } from "./search.ts";
+import { providerCacheSweepLayer } from "./provider-cache.ts";
+import { popularitiesLayer, providersLayer } from "./providers.ts";
+import { search } from "./search.ts";
+import { listSources } from "./sources.ts";
 
 export { pluginLayer } from "./plugin.ts";
 
@@ -35,10 +30,8 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescri
 
 /** Replica services that plugins and routes share */
 export const coreServicesLayer = Layer.mergeAll(
-  sourceResolversLayer,
-  sourceSearchesLayer,
-  sourcePopularitiesLayer,
-  accountProvidersLayer,
+  providersLayer,
+  popularitiesLayer,
   streamKeyLayer,
   authCodesLayer,
   providerCacheSweepLayer,
@@ -49,23 +42,27 @@ export const serverRoutes = Layer.unwrap(
     const descriptor = yield* ServerIdentity;
     const handlers = ServerRpc.toLayer({
       describe: () => Effect.succeed(descriptor),
-      setup: (payload) => setup(payload).pipe(orDieOnDatabaseError),
-      login: (payload) => login(payload).pipe(orDieOnDatabaseError),
-      pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError),
-      listSources: () => listSources.pipe(orDieOnDatabaseError),
-      listRecentPlays: () => listRecentPlays.pipe(orDieOnDatabaseError),
-      search: ({ query }) => search(query).pipe(Stream.orDie),
+      setup: (payload) => setup(payload).pipe(orDieOnDatabaseError("setup")),
+      login: (payload) => login(payload).pipe(orDieOnDatabaseError("login")),
+      pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError("pair")),
+      listSources: () => listSources.pipe(orDieOnDatabaseError("listSources")),
+      listRecentPlays: () => listRecentPlays.pipe(orDieOnDatabaseError("listRecentPlays")),
+      search: ({ query }) =>
+        // Only database errors remain
+        search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
       preparePlayback: ({ sourceId, capabilities }) =>
-        preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError),
-      recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError),
+        preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
+      recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError("recordPlay")),
       createPairingCode: () => createPairingCode,
-      listDevices: () => listDevices.pipe(orDieOnDatabaseError),
-      removeDevice: ({ deviceId }) => removeDevice(deviceId).pipe(orDieOnDatabaseError),
+      listDevices: () => listDevices.pipe(orDieOnDatabaseError("listDevices")),
+      removeDevice: ({ deviceId }) =>
+        removeDevice(deviceId).pipe(orDieOnDatabaseError("removeDevice")),
       listAccountProviders: () => listAccountProviders,
-      listAccounts: () => listAccounts.pipe(orDieOnDatabaseError),
+      listAccounts: () => listAccounts.pipe(orDieOnDatabaseError("listAccounts")),
       linkAccount: ({ provider, credentials }) =>
-        linkAccount(provider, credentials).pipe(orDieOnDatabaseError),
-      unlinkAccount: ({ provider }) => unlinkAccount(provider).pipe(orDieOnDatabaseError),
+        linkAccount(provider, credentials).pipe(orDieOnDatabaseError("linkAccount")),
+      unlinkAccount: ({ provider }) =>
+        unlinkAccount(provider).pipe(orDieOnDatabaseError("unlinkAccount")),
     });
 
     return Layer.mergeAll(

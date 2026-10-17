@@ -6,30 +6,18 @@ import {
   CurrentPrincipal,
   ProviderAccountSummary,
 } from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
-import type { AccountProvider, Credentials } from "@dyad/plugin";
-import { and, eq } from "drizzle-orm";
-import { Clock, Context, Crypto, Effect, Layer, Option, Redacted, Schema } from "effect";
+import { and, eq, sql } from "drizzle-orm";
+import { Clock, Crypto, Effect, Schema } from "effect";
 
-/** Account providers that plugins add, by provider name */
-export class AccountProviders extends Context.Service<
-  AccountProviders,
-  Map<string, AccountProvider>
->()("@dyad/server-core/AccountProviders") {}
-
-export const accountProvidersLayer = Layer.sync(AccountProviders, () => new Map());
-
-const StoredCredentials = Schema.Record(Schema.String, Schema.String);
+import { Providers, toCredentials } from "./providers.ts";
 
 export const listAccountProviders = Effect.gen(function* () {
-  const providers = yield* AccountProviders;
-  return [...providers].map(
-    ([provider, accountProvider]) =>
-      new AccountProviderSummary({
-        provider,
-        name: accountProvider.name,
-        login: accountProvider.login,
-      }),
+  const providers = yield* Providers;
+
+  return [...providers].flatMap(([provider, { name, account }]) =>
+    account === undefined
+      ? []
+      : [new AccountProviderSummary({ provider, name, login: account.login })],
   );
 });
 
@@ -46,55 +34,26 @@ export const listAccounts = Effect.gen(function* () {
   );
 });
 
-/** Credentials of the user's account of `provider`, empty when the provider needs no account */
-export const loadCredentials = (userId: UserId, provider: string) =>
-  Effect.gen(function* () {
-    const providers = yield* AccountProviders;
-    if (!providers.has(provider)) return Option.some<Credentials>(new Map());
-
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({ values: credential.values })
-      .from(credential)
-      .innerJoin(providerAccount, eq(providerAccount.id, credential.providerAccountId))
-      .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, provider)))
-      .limit(1);
-    if (row === undefined) return Option.none();
-
-    const values = yield* Schema.decodeUnknownEffect(StoredCredentials)(row.values).pipe(
-      Effect.orDie,
-    );
-    return Option.some(
-      new Map(Object.entries(values).map(([name, value]) => [name, Redacted.make(value)])),
-    );
-  });
-
 export const linkAccount = (provider: string, values: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
     const principal = yield* CurrentPrincipal;
-    const providers = yield* AccountProviders;
+    const providers = yield* Providers;
 
-    const accountProvider = providers.get(provider);
-    if (accountProvider === undefined) {
+    const account = providers.get(provider)?.account;
+    if (account === undefined) {
       return yield* new AccountLinkFailed({ reason: "Unknown provider" });
     }
 
     // Only the cookies that the provider declares are stored, not other keys from the client
-    const DeclaredCookies = Schema.Record(
-      Schema.Literals(accountProvider.login.cookies),
-      Schema.String,
-    );
+    const DeclaredCookies = Schema.Record(Schema.Literals(account.login.cookies), Schema.String);
     const stored = yield* Schema.decodeEffect(DeclaredCookies)(values).pipe(
       Effect.mapError(
         () => new AccountLinkFailed({ reason: "The sign-in did not give all cookies" }),
       ),
     );
-    const credentials = new Map(
-      Object.entries(stored).map(([name, value]) => [name, Redacted.make(value)]),
-    );
-    const displayName = yield* accountProvider.link(credentials);
+    const displayName = yield* account.link(toCredentials(stored));
 
     const id = yield* crypto.randomUUIDv7().pipe(Effect.orDie);
     const createdAt = yield* Clock.currentTimeMillis;
@@ -127,4 +86,8 @@ export const unlinkAccount = (provider: string) =>
       .where(
         and(eq(providerAccount.userId, principal.userId), eq(providerAccount.provider, provider)),
       );
+
+    // `secure_delete` overwrites the deleted credentials in the database file. The write-ahead log
+    // still has copies of earlier pages until a checkpoint truncates it.
+    yield* db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`);
   });

@@ -3,30 +3,81 @@ import { PluginContext } from "@dyad/plugin";
 import type { Plugin } from "@dyad/plugin";
 import { Effect, Exit, Layer, Scope } from "effect";
 import type { Crypto, FileSystem, Path } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
-import { AccountProviders } from "./accounts.ts";
-import { addProviderSource, syncLibraryRoot } from "./library.ts";
-import { SourcePopularities, SourceResolvers, SourceSearches } from "./providers.ts";
+import { syncLibraryRoot } from "./library.ts";
+import { Popularities, Providers } from "./providers.ts";
 
-// Closing the plugin scope removes the registration
-const register = <A>(registry: Map<string, A>, provider: string, value: A) =>
+// A second registration of a key would replace the first, and closing either plugin scope would
+// remove both. The defect fails the setup of the second plugin only.
+const register = <A>(registry: Map<string, A>, key: string, value: A) =>
   Effect.acquireRelease(
-    Effect.sync(() => registry.set(provider, value)),
-    () => Effect.sync(() => registry.delete(provider)),
+    Effect.suspend(() =>
+      registry.has(key)
+        ? Effect.die(new Error(`"${key}" is already registered by another plugin`))
+        : Effect.sync(() => registry.set(key, value)),
+    ),
+    () => Effect.sync(() => registry.delete(key)),
   ).pipe(Effect.asVoid);
 
-/** Starts each plugin in its own scope. If setup fails, only that plugin stops. */
-export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
+// Page refs will use `library` and `catalog` as namespaces next to the provider IDs. The core writes
+// local files with the provider `local`, so a plugin with that ID would mix its sources with them.
+const reservedProviderIds = new Set(["library", "catalog", "local"]);
+
+// A request without a response after this time fails. A response body, such as an audio stream,
+// has no time limit.
+const responseTimeout = "30 seconds";
+
+const pluginHttpClient = (version: string) =>
+  Layer.effect(
+    HttpClient.HttpClient,
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+
+      return client.pipe(
+        // A plugin can send its own `User-Agent`, for example with the contact URL that MusicBrainz
+        // requires
+        HttpClient.mapRequest((request) =>
+          request.headers["user-agent"] === undefined
+            ? HttpClientRequest.setHeader(request, "User-Agent", `Dyad/${version}`)
+            : request,
+        ),
+        HttpClient.transform((response, request) =>
+          response.pipe(
+            Effect.timeoutOrElse({
+              duration: responseTimeout,
+              orElse: () =>
+                Effect.fail(
+                  new HttpClientError.HttpClientError({
+                    reason: new HttpClientError.TransportError({
+                      request,
+                      description: "No response",
+                    }),
+                  }),
+                ),
+            }),
+            // Spans hold the full URL, and many provider URLs are signed or carry a key
+            Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+          ),
+        ),
+      );
+    }),
+  ).pipe(Layer.provide(FetchHttpClient.layer));
+
+/**
+ * Starts each plugin in its own scope. If setup fails, only that plugin stops. `version` goes
+ * into the `User-Agent` of plugin requests.
+ */
+export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
-      const resolvers = yield* SourceResolvers;
-      const searches = yield* SourceSearches;
-      const popularities = yield* SourcePopularities;
-      const accountProviders = yield* AccountProviders;
+      const providers = yield* Providers;
+      const popularities = yield* Popularities;
       const services = yield* Effect.context<
         Database | Crypto.Crypto | FileSystem.FileSystem | Path.Path
       >();
+
       const context = new PluginContext({
         library: {
           sync: (root, paths) =>
@@ -35,26 +86,17 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
               Effect.provide(services),
             ),
         },
-        source: {
-          add: (providerSource) =>
-            addProviderSource(providerSource).pipe(
-              Effect.catch((error) => Effect.logError("Cannot add the source", error)),
-              Effect.provide(services),
-            ),
-        },
-        search: {
-          add: (provider, search) => register(searches, provider, search),
+        provider: {
+          add: (id, provider) =>
+            reservedProviderIds.has(id)
+              ? Effect.die(new Error(`"${id}" is a reserved provider ID`))
+              : register(providers, id, provider),
         },
         popularity: {
           add: (name, popularity) => register(popularities, name, popularity),
         },
-        account: {
-          add: (provider, accountProvider) => register(accountProviders, provider, accountProvider),
-        },
-        resolver: {
-          add: (provider, resolve) => register(resolvers, provider, resolve),
-        },
       });
+
       yield* Effect.forEach(
         plugins,
         (plugin) =>
@@ -62,6 +104,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
             const pluginScope = yield* Scope.fork(scope);
             const exit = yield* plugin.setup(context).pipe(Scope.provide(pluginScope), Effect.exit);
             if (Exit.isSuccess(exit)) return;
+
             yield* Scope.close(pluginScope, exit);
             yield* Effect.logError("Plugin setup failed", exit.cause).pipe(
               Effect.annotateLogs("pluginId", plugin.id),
@@ -70,4 +113,4 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
         { discard: true },
       );
     }),
-  );
+  ).pipe(Layer.provide(pluginHttpClient(version)));

@@ -1,6 +1,13 @@
 import { ProviderSource } from "@dyad/plugin";
-import { Cache, Context, Data, Effect, Exit, Layer, Redacted, Schema } from "effect";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import {
+  getJson,
+  getText,
+  HttpRequestError,
+  HttpStatusError,
+  makeScrapedToken,
+} from "@dyad/plugin/http";
+import { Cache, Data, Effect, Exit, Redacted, Schema } from "effect";
+import { HttpClientRequest } from "effect/http";
 
 export const provider = "apple_music";
 
@@ -10,12 +17,6 @@ const playback = "https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa";
 
 /** `stage` and `reason` go into logs, so they never contain tokens, signed URLs or keys */
 export class AppleMusicError extends Data.TaggedError("AppleMusicError")<{
-  readonly stage: string;
-  readonly reason: string;
-}> {}
-
-// Apple answered 401. The web client token can expire before the plugin refreshes it.
-class AppleTokenRejected extends Data.TaggedError("AppleTokenRejected")<{
   readonly stage: string;
   readonly reason: string;
 }> {}
@@ -34,7 +35,7 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
   }),
 }) {}
 
-// Apple leaves out `songs` when nothing matches
+// Apple leaves out `songs` when nothing matches (October 2026)
 const SearchResults = Schema.Struct({
   results: Schema.Struct({
     songs: Schema.optional(Schema.Struct({ data: Schema.Array(AppleTrack) })),
@@ -61,50 +62,36 @@ export class AppleSession extends Data.Class<{
   readonly storefront: string;
 }> {}
 
-// HTTP errors contain requests and response bodies, including cookies and signed asset URLs
-export const sendRequest = (request: HttpClientRequest.HttpClientRequest, stage: string) =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    return yield* client
-      .execute(request)
-      .pipe(Effect.mapError(() => new AppleMusicError({ stage, reason: "Request failed" })));
-  });
+/**
+ * Gives each Apple status its meaning. A 401 stays an `HttpStatusError`, because a new web client
+ * token can help, and the session then retries once.
+ */
+export const appleError =
+  (stage: string, request: HttpClientRequest.HttpClientRequest) =>
+  (error: HttpStatusError | HttpRequestError) => {
+    if (error instanceof HttpRequestError)
+      return new AppleMusicError({ stage, reason: error.reason });
+    if (error.status === 401) return error;
 
-export const readResponse = <S extends Schema.Constraint>(
-  response: HttpClientResponse.HttpClientResponse,
-  schema: S,
-  stage: string,
-) =>
-  Effect.gen(function* () {
-    const status = response.status;
-    if (status === 401) {
-      return yield* new AppleTokenRejected({ stage, reason: "Apple rejected the token" });
-    }
     // A new web client token does not help, because the subscriber's token is the problem
-    if (status === 403 && response.request.url.startsWith(`${amp}/v1/me/`)) {
-      return yield* new AppleMusicError({
+    if (error.status === 403 && request.url.startsWith(`${amp}/v1/me/`)) {
+      return new AppleMusicError({
         stage,
         reason: "Apple rejected the account token. Link the account again.",
       });
     }
-    if (status === 429) {
-      return yield* new AppleMusicError({ stage, reason: "Apple throttled the request" });
-    }
-    if (status < 200 || status >= 300) {
-      return yield* new AppleMusicError({ stage, reason: `Apple answered status ${status}` });
+    if (error.status === 429) {
+      return new AppleMusicError({ stage, reason: "Apple throttled the request" });
     }
 
-    return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-      Effect.mapError(() => new AppleMusicError({ stage, reason: "Unexpected response" })),
-    );
-  });
+    return new AppleMusicError({ stage, reason: `Apple answered status ${error.status}` });
+  };
 
 export const requestJson = <S extends Schema.Constraint>(
   request: HttpClientRequest.HttpClientRequest,
   schema: S,
   stage: string,
-) =>
-  Effect.flatMap(sendRequest(request, stage), (response) => readResponse(response, schema, stage));
+) => getJson(request, schema).pipe(Effect.mapError(appleError(stage, request)));
 
 const withBearer =
   (bearer: Redacted.Redacted<string>) => (request: HttpClientRequest.HttpClientRequest) =>
@@ -128,27 +115,31 @@ export const authorize =
     );
 
 const getWebBearer = Effect.gen(function* () {
-  const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient);
-  const homepage = yield* client.get(origin);
-  const html = yield* homepage.text;
+  const html = yield* getText(HttpClientRequest.get(origin));
 
-  // Apple Music's web client token is published in its main JavaScript asset
+  // Apple Music's web client token is in its main JavaScript asset (October 2026)
   const asset = html.match(/\/(assets\/index[~-][^/"\s]+\.js)/)?.[1];
   if (asset === undefined) {
     return yield* new AppleMusicError({ stage: "web token", reason: "Web client asset not found" });
   }
 
-  const script = yield* client.get(new URL(asset, origin));
-  const javascript = yield* script.text;
+  const javascript = yield* getText(HttpClientRequest.get(new URL(asset, origin)));
   const token = javascript.match(/"(eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"/)?.[1];
   if (token === undefined) {
     return yield* new AppleMusicError({ stage: "web token", reason: "Web client token not found" });
   }
   return Redacted.make(token);
 }).pipe(
-  Effect.catchTag("HttpClientError", () =>
-    Effect.fail(new AppleMusicError({ stage: "web token", reason: "Cannot read the web client" })),
-  ),
+  Effect.catchTags({
+    HttpStatusError: () =>
+      Effect.fail(
+        new AppleMusicError({ stage: "web token", reason: "Cannot read the web client" }),
+      ),
+    HttpRequestError: () =>
+      Effect.fail(
+        new AppleMusicError({ stage: "web token", reason: "Cannot read the web client" }),
+      ),
+  }),
 );
 
 const getStorefront = (
@@ -173,55 +164,63 @@ const getStorefront = (
     return account.meta.subscription.storefront;
   });
 
-// Failures are not cached, so the next request tries again
-const keepSuccess = (exit: Exit.Exit<unknown, unknown>) => (Exit.isSuccess(exit) ? "6 hours" : 0);
+// Apple publishes a new web client token from time to time and rejects the old one later. A 401
+// replaces the token at once. The time limit also replaces it before Apple rejects it.
+const bearerLifetime = "6 hours";
 
-const makeSessions = Effect.gen(function* () {
-  const [bearer, invalidateBearer] = yield* Effect.cachedInvalidateWithTTL(
-    getWebBearer,
-    keepSuccess,
-  );
+// A subscription can end or move to another country
+const storefrontLifetime = "6 hours";
 
-  const storefronts = yield* Cache.makeWith(
-    (mediaUserToken: Redacted.Redacted<string>) =>
-      Effect.flatMap(bearer, (token) => getStorefront(token, mediaUserToken)),
-    { capacity: 1000, timeToLive: keepSuccess },
-  );
-
-  const openSession = (mediaUserToken: Redacted.Redacted<string>) =>
-    Effect.gen(function* () {
-      const storefront = yield* Cache.get(storefronts, mediaUserToken);
-      return new AppleSession({ bearer: yield* bearer, mediaUserToken, storefront });
-    });
-
-  /** Runs `use` once more with a new web client token when Apple rejects the cached one */
-  const withSession = <A, E, R>(
-    mediaUserToken: Redacted.Redacted<string>,
-    use: (session: AppleSession) => Effect.Effect<A, E, R>,
-  ) =>
-    Effect.flatMap(openSession(mediaUserToken), use).pipe(
-      Effect.catchTag("AppleTokenRejected", () =>
-        invalidateBearer.pipe(Effect.andThen(openSession(mediaUserToken)), Effect.flatMap(use)),
-      ),
-    );
-
-  return { withSession };
-});
+class StorefrontRequest extends Data.Class<{
+  readonly bearer: Redacted.Redacted<string>;
+  readonly mediaUserToken: Redacted.Redacted<string>;
+}> {}
 
 /**
  * Keeps the web client token and the storefront of each subscriber in memory, because they cost
- * up to three requests, which is too slow for each search and each play
+ * up to three requests, which is too slow for each search and each play. The result runs `use`
+ * with the session of a subscriber.
  */
-export class AppleSessions extends Context.Service<
-  AppleSessions,
-  Effect.Success<typeof makeSessions>
->()("@dyad/plugin-apple-music/AppleSessions") {}
+export const sessionCache = Effect.gen(function* () {
+  const withWebToken = yield* makeScrapedToken(getWebBearer, {
+    timeToLive: bearerLifetime,
+    rejectedStatuses: [401],
+  });
 
-export const appleSessionsLayer = Layer.effect(AppleSessions, makeSessions);
+  const storefronts = yield* Cache.makeWith(
+    (request: StorefrontRequest) => getStorefront(request.bearer, request.mediaUserToken),
+    {
+      capacity: 1000,
+      // Failures are not cached, so the next request tries again
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? storefrontLifetime : 0),
+    },
+  );
+
+  return <A, E, R>(
+    mediaUserToken: Redacted.Redacted<string>,
+    use: (session: AppleSession) => Effect.Effect<A, E | HttpStatusError, R>,
+  ) =>
+    withWebToken((bearer) =>
+      Effect.gen(function* () {
+        const storefront = yield* Cache.get(
+          storefronts,
+          new StorefrontRequest({ bearer, mediaUserToken }),
+        );
+        return yield* use(new AppleSession({ bearer, mediaUserToken, storefront }));
+      }),
+    ).pipe(
+      Effect.catchIf(
+        (error) => error instanceof HttpStatusError,
+        () =>
+          Effect.fail(
+            new AppleMusicError({ stage: "web token", reason: "Apple rejected the token" }),
+          ),
+      ),
+    );
+});
 
 export const catalogSource = (song: AppleTrack) =>
   new ProviderSource({
-    provider,
     externalId: song.id,
     title: song.attributes.name,
     artist: song.attributes.artistName,
@@ -260,6 +259,9 @@ export const resolveAacAsset = (session: AppleSession, songId: string) =>
       HttpClientRequest.bodyJson({ salableAdamId: songId, language: "en-US" }),
     );
     const response = yield* requestJson(request, WebPlayback, "playback asset");
+
+    // Flavor 28 is the 256 kbps AAC asset with AES-CTR (`cenc`) encryption, which Widevine keys
+    // decrypt
     const asset = response.songList[0].assets.find((item) => item.flavor === "28:ctrp256");
     if (asset === undefined) {
       return yield* new AppleMusicError({

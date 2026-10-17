@@ -1,7 +1,8 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Replica-local cache of provider search results. Not replicated: an item enters the shared
-// `source` table only when it is played. Rows expire after a TTL.
+// `source` table only when it is played. The server deletes rows older than 7 days when it starts
+// and then every 6 hours.
 
 export const providerItem = sqliteTable(
   "provider_item",

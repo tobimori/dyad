@@ -410,6 +410,9 @@ importers:
 
   plugins/musicbrainz:
     dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
       effect:
         specifier: 'catalog:'
         version: 4.0.5

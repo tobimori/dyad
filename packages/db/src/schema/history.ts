@@ -1,9 +1,9 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
- * One play of a source by a user. Append-only user data in the user scope. Sync is not built yet:
- * rows have UUIDv7 IDs and do not change, so that a later sync can replicate them by union.
- * `scrobbled` is the only exception; it changes only from false to true.
+ * One play of a source by a user. Append-only user data in the user scope. Rows have UUIDv7 IDs
+ * and do not change, so that replicas can merge them by union. `scrobbled` is the only exception;
+ * it changes only from false to true.
  */
 export const playEvent = sqliteTable(
   "play_event",

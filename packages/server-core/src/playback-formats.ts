@@ -25,7 +25,7 @@ const streamingCodecs = {
 export const audioContainer = (name: string) => {
   if (name === "mov") return "mp4";
   if (name === "aac") return "adts";
-  // FFmpeg's `matroska` can be either WebM or Matroska. Remux instead of claiming WebM support.
+  // FFmpeg's `matroska` can be WebM or Matroska, so it stays unknown and remuxes
   return name;
 };
 
@@ -45,8 +45,8 @@ export const choosePlayback = (source: SourceFormat, capabilities: PlaybackCapab
   const direct = capabilities.formats.find(
     (format) => format.container === source.container && format.codec === source.codec,
   );
-  // A file MP4 can have its metadata at the end. Always stream fragmented MP4 until range
-  // requests and container layout are part of the direct-play path.
+  // MP4 always remuxes to fragmented MP4. A file MP4 can have its `moov` box at the end, and
+  // direct play has no range requests, so a client could not start it before the last byte.
   if (direct !== undefined && source.container !== "mp4") {
     return Effect.succeed(new PlaybackChoice({ operation: "direct", format: direct }));
   }

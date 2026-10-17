@@ -18,8 +18,8 @@ export const providerAccount = sqliteTable(
 );
 
 /**
- * Secrets of a provider account, such as cookies. They never leave this replica. Not encrypted
- * yet: a key in the same data directory would not protect them.
+ * Secrets of a provider account, such as cookies. They never leave this replica. They are not
+ * encrypted, because a key in the same data directory would not protect them.
  */
 export const credential = sqliteTable("credential", {
   providerAccountId: text("provider_account_id")

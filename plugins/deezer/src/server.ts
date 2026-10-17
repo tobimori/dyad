@@ -1,6 +1,6 @@
 import { Plugin } from "@dyad/plugin";
 import { Effect } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/http";
+import { HttpClient } from "effect/http";
 
 import { trackPopularity } from "./api.ts";
 
@@ -14,5 +14,5 @@ export const deezerPlugin = new Plugin({
       yield* context.popularity.add("deezer", (query) =>
         trackPopularity(query).pipe(Effect.provide(services)),
       );
-    }).pipe(Effect.provide(FetchHttpClient.layer)),
+    }),
 });

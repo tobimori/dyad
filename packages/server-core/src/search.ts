@@ -2,42 +2,23 @@ import { playEvent, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, SearchResults, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import { PopularityHit, ProviderSource } from "@dyad/plugin";
-import type { Popularity, Search } from "@dyad/plugin";
-import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { PopularityHit } from "@dyad/plugin";
+import type { Credentials, Provider, ProviderError } from "@dyad/plugin";
+import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
 import type { Column } from "drizzle-orm";
-import { Clock, Data, Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
+import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
-import { loadCredentials } from "./accounts.ts";
-import { Tags, selectPlayableSources, sourceSummary, uuidV5 } from "./library.ts";
-import { SourcePopularities, SourceSearches } from "./providers.ts";
+import { normalizeIsrc } from "./normalize.ts";
+import { cacheProviderSources } from "./provider-cache.ts";
+import { Popularities, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
+import { Tags, playableSources, sourceSummary } from "./sources.ts";
 
 const localResultLimit = 50;
 
-// Played results are in `source` and do not expire. The TTL only limits the size of the cache.
-const cacheLifetimeMs = 7 * 24 * 60 * 60 * 1000;
-
-class CachedProviderSource extends Schema.Class<CachedProviderSource>("CachedProviderSource")({
-  provider: Schema.String,
-  externalId: Schema.String,
-  title: Schema.String,
-  artist: Schema.NullOr(Schema.String),
-  album: Schema.NullOr(Schema.String),
-  durationMs: Schema.NullOr(Schema.Finite),
-  isrc: Schema.NullOr(Schema.String),
-  container: Schema.String,
-  codec: Schema.String,
-  lossless: Schema.Boolean,
-  encrypted: Schema.Boolean,
-  // Rows that a server cached before artwork existed have no key
-  artworkUrl: Schema.NullOr(Schema.String).pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(null)),
-  ),
-}) {}
-
-// Tags and providers can write an ISRC with hyphens, for example `US-RC1-76-07839`
-const normalizeIsrc = (isrc: string) => isrc.replaceAll("-", "").trim().toUpperCase();
+// One limit for the full answer of a provider search or a popularity source, with the token
+// refreshes and retries of the plugin
+const answerTimeout = "8 seconds";
 
 const searchLocalSources = (query: string, userId: UserId) =>
   Effect.gen(function* () {
@@ -49,20 +30,16 @@ const searchLocalSources = (query: string, userId: UserId) =>
       contains(source.rawArtist),
       contains(source.rawAlbum),
     );
-    const playable = yield* selectPlayableSources(userId, match);
-    const rows = yield* playable.limit(localResultLimit);
+    const rows = yield* playableSources(userId, match, localResultLimit);
 
-    // A source with several files has one row per file
-    const unique = [...new Map(rows.map((row) => [row.source.id, row] as const)).values()];
-
-    return unique.map((row, position) => {
+    return rows.map((row, position) => {
       const tags = Schema.decodeUnknownOption(Tags)(row.tags);
-      // ID3 stores the ISRC in the `TSRC` frame
+      // FFmpeg (`node-av` 6.1.1) keeps the ID3 frame name `TSRC` as the tag key of an MP3 ISRC
       const isrc = Option.flatMapNullishOr(tags, (values) => values.isrc ?? values.tsrc);
 
       return new Candidate({
         summary: sourceSummary(row),
-        isrc: Option.getOrNull(Option.map(isrc, normalizeIsrc)),
+        isrc: Option.getOrNull(Option.flatMapNullishOr(isrc, normalizeIsrc)),
         position,
         local: row.tags !== null,
         lossless: row.variant.lossless,
@@ -70,79 +47,69 @@ const searchLocalSources = (query: string, userId: UserId) =>
     });
   });
 
-const cacheProviderSources = (providerSources: ReadonlyArray<ProviderSource>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const fetchedAt = yield* Clock.currentTimeMillis;
+class Answer extends Data.Class<{
+  readonly candidates: ReadonlyArray<Candidate>;
+  readonly hits: ReadonlyArray<PopularityHit>;
+  readonly unavailable: ReadonlyArray<string>;
+}> {}
 
-    const rows = yield* Effect.forEach(providerSources, (providerSource) =>
-      Effect.gen(function* () {
-        const sourceId = yield* uuidV5(`${providerSource.provider}:${providerSource.externalId}`);
-        const isrc = providerSource.isrc === null ? null : normalizeIsrc(providerSource.isrc);
-        return {
-          sourceId,
-          provider: providerSource.provider,
-          externalId: providerSource.externalId,
-          isrc,
-          data: providerSource,
-          fetchedAt,
-        };
+// A failure, a defect or a timeout of one plugin skips only that provider
+const searchProvider = (
+  id: string,
+  name: string,
+  search: NonNullable<Provider["search"]>,
+  credentials: Credentials,
+  query: string,
+) =>
+  Effect.gen(function* () {
+    const sources = yield* search(query, credentials).pipe(
+      Effect.timeout(answerTimeout),
+      Effect.asSome,
+      Effect.catchTags({
+        ProviderError: (error) =>
+          Effect.logWarning("Provider search failed", error.reason).pipe(Effect.as(Option.none())),
+        TimeoutError: () =>
+          Effect.logWarning("Provider search timed out").pipe(Effect.as(Option.none())),
       }),
-    );
-
-    yield* db.transaction((tx) =>
-      Effect.forEach(
-        rows,
-        (row) =>
-          tx
-            .insert(providerItem)
-            .values(row)
-            .onConflictDoUpdate({ target: providerItem.sourceId, set: row }),
-        { discard: true },
+      Effect.catchDefect((defect) =>
+        Effect.logError("Provider search crashed", defect).pipe(Effect.as(Option.none())),
       ),
+      Effect.annotateLogs("provider", id),
     );
+    if (Option.isNone(sources)) {
+      return new Answer({ candidates: [], hits: [], unavailable: [name] });
+    }
 
-    return rows;
-  });
-
-const searchProvider = (provider: string, providerSearch: Search, query: string, userId: UserId) =>
-  Effect.gen(function* () {
-    const credentials = yield* loadCredentials(userId, provider);
-    if (Option.isNone(credentials)) return [];
-
-    const providerSources = yield* providerSearch(query, credentials.value).pipe(
-      Effect.catchTag("SearchError", (error) =>
-        Effect.logWarning("Provider search failed", error.reason).pipe(
-          Effect.annotateLogs("provider", provider),
-          Effect.as([]),
-        ),
-      ),
-    );
-    const rows = yield* cacheProviderSources(providerSources);
-
-    return rows.map(
-      (row, position) =>
+    const cached = yield* cacheProviderSources(id, sources.value);
+    const candidates = cached.map(
+      (item, position) =>
         new Candidate({
           summary: new SourceSummary({
-            id: row.sourceId,
-            provider: row.provider,
-            title: row.data.title,
-            artist: row.data.artist,
-            album: row.data.album,
-            durationMs: row.data.durationMs,
-            codec: row.data.codec,
-            artworkUrl: row.data.artworkUrl,
+            id: item.sourceId,
+            provider: id,
+            title: item.source.title,
+            artist: item.source.artist,
+            album: item.source.album,
+            durationMs: item.source.durationMs,
+            codec: item.source.codec,
+            artworkUrl: item.source.artworkUrl,
           }),
-          isrc: row.isrc,
+          isrc: item.isrc,
           position,
           local: false,
-          lossless: row.data.lossless,
+          lossless: item.source.lossless,
         }),
     );
+    return new Answer({ candidates, hits: [], unavailable: [] });
   });
 
-const fetchPopularity = (name: string, popularity: Popularity, query: string) =>
+const fetchPopularity = (
+  name: string,
+  popularity: (query: string) => Effect.Effect<ReadonlyArray<PopularityHit>, ProviderError>,
+  query: string,
+) =>
   popularity(query).pipe(
+    Effect.timeout(answerTimeout),
     Effect.map((hits) =>
       hits.map(
         (hit) =>
@@ -152,12 +119,15 @@ const fetchPopularity = (name: string, popularity: Popularity, query: string) =>
           }),
       ),
     ),
-    Effect.catchTag("SearchError", (error) =>
-      Effect.logWarning("Popularity source failed", error.reason).pipe(
-        Effect.annotateLogs("popularity", name),
-        Effect.as([]),
-      ),
+    Effect.catchTags({
+      ProviderError: (error) =>
+        Effect.logWarning("Popularity source failed", error.reason).pipe(Effect.as([])),
+      TimeoutError: () => Effect.logWarning("Popularity source timed out").pipe(Effect.as([])),
+    }),
+    Effect.catchDefect((defect) =>
+      Effect.logError("Popularity source crashed", defect).pipe(Effect.as([])),
     ),
+    Effect.annotateLogs("popularity", name),
   );
 
 // Plays of the candidates, of their ISRCs and of their artists. The ISRC of a played provider
@@ -198,11 +168,6 @@ const loadPlays = (userId: UserId, candidates: ReadonlyArray<Candidate>, now: nu
     return rows.map((row) => new Play(row));
   });
 
-class Answer extends Data.Class<{
-  readonly candidates: ReadonlyArray<Candidate>;
-  readonly hits: ReadonlyArray<PopularityHit>;
-}> {}
-
 const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
@@ -215,7 +180,10 @@ const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
     const plays = yield* loadPlays(userId, candidates, now);
 
     const ranked = rank(query, candidates, answer.hits, plays, now);
-    return new SearchResults({ sources: ranked.map((result) => result.summary) });
+    return new SearchResults({
+      sources: ranked.map((result) => result.summary),
+      unavailable: answer.unavailable,
+    });
   });
 
 /**
@@ -226,64 +194,34 @@ export const search = (query: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const principal = yield* CurrentPrincipal;
-      const searches = yield* SourceSearches;
-      const popularities = yield* SourcePopularities;
+      const popularities = yield* Popularities;
+      const providers = yield* usableProviders(principal.userId);
 
       const local = yield* searchLocalSources(query, principal.userId);
 
-      const providerAnswers = [...searches].map(([provider, providerSearch]) =>
-        searchProvider(provider, providerSearch, query, principal.userId).pipe(
-          Effect.map((candidates) => new Answer({ candidates, hits: [] })),
-        ),
-      );
+      const providerAnswers = [...providers].flatMap(([id, { provider, credentials }]) => {
+        if (provider.search === undefined) return [];
+
+        return [searchProvider(id, provider.name, provider.search, credentials, query)];
+      });
       const popularityAnswers = [...popularities].map(([name, popularity]) =>
         fetchPopularity(name, popularity, query).pipe(
-          Effect.map((hits) => new Answer({ candidates: [], hits })),
+          Effect.map((hits) => new Answer({ candidates: [], hits, unavailable: [] })),
         ),
       );
 
       return Stream.fromIterable([...providerAnswers, ...popularityAnswers]).pipe(
         Stream.flatMap(Stream.fromEffect, { concurrency: "unbounded" }),
         Stream.scan(
-          () => new Answer({ candidates: local, hits: [] }),
+          () => new Answer({ candidates: local, hits: [], unavailable: [] }),
           (all, next) =>
             new Answer({
               candidates: [...all.candidates, ...next.candidates],
               hits: [...all.hits, ...next.hits],
+              unavailable: [...all.unavailable, ...next.unavailable],
             }),
         ),
         Stream.mapEffect((all) => rankAnswers(query, principal.userId, all)),
       );
     }),
   );
-
-/** The cached search result with this source ID */
-export const cachedProviderSource = (sourceId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({ data: providerItem.data })
-      .from(providerItem)
-      .where(eq(providerItem.sourceId, sourceId))
-      .limit(1);
-    if (row === undefined) return Option.none();
-
-    const data = yield* Schema.decodeUnknownEffect(CachedProviderSource)(row.data).pipe(
-      Effect.orDie,
-    );
-    return Option.some(new ProviderSource(data));
-  });
-
-/** Deletes expired search results when the server starts and then every 6 hours */
-export const providerCacheSweepLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const db = yield* Database;
-
-    const sweep = Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      yield* db.delete(providerItem).where(lt(providerItem.fetchedAt, now - cacheLifetimeMs));
-    }).pipe(Effect.catch((error) => Effect.logError("Cannot sweep the provider cache", error)));
-
-    yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced("6 hours"))));
-  }),
-);

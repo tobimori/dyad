@@ -183,7 +183,8 @@ const muxStream = (
       // SAFETY: a `PassThrough` without an encoding gives `Buffer` chunks, which are `Uint8Array`
       evaluate: () => Readable.toWeb(body) as ReadableStream<Uint8Array>,
       onError: (cause) => new MediaError({ input: name, reason: String(cause) }),
-      // The pipeline finalizer closes the producer before awaiting its completion
+      // The finalizer above stops the pipeline before it closes `body`. A cancel of the reader would
+      // close `body` first, while the pipeline still writes to it.
       releaseLockOnEnd: true,
     });
   });
@@ -194,7 +195,8 @@ export const remuxAudio = (media: string | MediaStream, container: string) =>
     Effect.gen(function* () {
       const { input, stream, name } = yield* openAudio(media);
       // Fragmented MP4 needs no seek back to the header. `delay_moov` writes the header after the
-      // first packets, when the AAC configuration from the filter below is known.
+      // first packets, when the AAC configuration from the filter below is known. `frag_duration`
+      // is in microseconds, so each fragment has 1 second of audio.
       const muxer =
         container === "mp4"
           ? {

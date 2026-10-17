@@ -1,5 +1,5 @@
 import { device, user } from "@dyad/db";
-import { Database } from "@dyad/db/node";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   Authentication,
   AuthenticationFailed,
@@ -12,14 +12,10 @@ import {
   Unauthorized,
   UserId,
 } from "@dyad/domain";
-import { and, count, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Clock, Context, Crypto, Data, Effect, Layer, Option, Ref } from "effect";
 
-export const hex = (bytes: Uint8Array) =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-export const fromHex = (value: string) =>
-  Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+import { fromHex, hex } from "./ids.ts";
 
 // Compares all characters, so that the time does not show how many characters match
 const equalSecrets = (a: string, b: string) => {
@@ -36,6 +32,11 @@ const equalSecrets = (a: string, b: string) => {
 // Node, Electron and browsers all have PBKDF2.
 const passwordIterations = 600_000;
 
+// Hash of a random password that nobody knows. `login` checks a password against it when the user
+// does not exist, so that the answer takes as long as for a wrong password.
+const unknownUserHash =
+  "pbkdf2-sha256$600000$d41daee5d6c3fab7525367021d62d6ad$778c3d7ea05bb6eabd68179a70bfedd695ed7dca46eecc3cf346d4c742634f0f";
+
 const pbkdf2 = (password: string, salt: Uint8Array, iterations: number) =>
   Effect.gen(function* () {
     const key = yield* Effect.promise(() =>
@@ -49,7 +50,7 @@ const pbkdf2 = (password: string, salt: Uint8Array, iterations: number) =>
     );
     const bits = yield* Effect.promise(() =>
       globalThis.crypto.subtle.deriveBits(
-        { name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt), iterations },
+        { name: "PBKDF2", hash: "SHA-256", salt, iterations },
         key,
         256,
       ),
@@ -88,7 +89,8 @@ const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const randomCode = Effect.gen(function* () {
   const bytes = yield* randomBytes(8);
-  const characters = Array.from(bytes, (byte) => codeAlphabet[byte % 32]);
+  // 256 is a multiple of the 32 characters, so each character has the same probability
+  const characters = Array.from(bytes, (byte) => codeAlphabet[byte % codeAlphabet.length]);
   return `${characters.slice(0, 4).join("")}-${characters.slice(4).join("")}`;
 });
 
@@ -101,7 +103,10 @@ class PendingPairing extends Data.Class<{ readonly userId: UserId; readonly expi
 
 const pairingLifetimeMs = 5 * 60 * 1000;
 
-/** Short-lived codes stay in memory. A server restart cancels them, which is acceptable. */
+/**
+ * Short-lived codes stay in memory, so a server restart cancels them. The server then logs a new
+ * setup code, and a signed-in device can make a new pairing code.
+ */
 export class AuthCodes extends Context.Service<
   AuthCodes,
   {
@@ -115,10 +120,10 @@ export const authCodesLayer = Layer.effect(
   AuthCodes,
   Effect.gen(function* () {
     const db = yield* Database;
-    const [row] = yield* db.select({ users: count() }).from(user);
+    const users = yield* db.$count(user);
     const setup = yield* Ref.make(Option.none<string>());
 
-    if (row?.users === 0) {
+    if (users === 0) {
       const code = yield* randomCode;
       yield* Ref.set(setup, Option.some(code));
       // The setup code is the only way to create the first admin, so the operator must see it
@@ -165,24 +170,28 @@ export const setup = ({
     const codes = yield* AuthCodes;
 
     // Check and clear in one step, so that two requests with the code cannot create two admins
+    const code = normalizeCode(setupCode);
     const result = yield* Ref.modify(codes.setup, (current) => {
       if (Option.isNone(current)) return ["already_set_up", current] as const;
-      if (!equalSecrets(normalizeCode(setupCode), current.value)) {
-        return ["invalid_code", current] as const;
-      }
+      if (!equalSecrets(code, current.value)) return ["invalid_code", current] as const;
       return ["claimed", Option.none<string>()] as const;
     });
     if (result !== "claimed") return yield* new AuthenticationFailed({ reason: result });
 
-    const userId = UserId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
-    yield* db.insert(user).values({
-      id: userId,
-      username,
-      passwordHash: yield* hashPassword(password),
-      role: "admin",
-      createdAt: yield* Clock.currentTimeMillis,
-    });
-    return yield* createDevice(userId, deviceName);
+    return yield* Effect.gen(function* () {
+      const userId = UserId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
+      yield* db.insert(user).values({
+        id: userId,
+        username,
+        passwordHash: yield* hashPassword(password),
+        role: "admin",
+        createdAt: yield* Clock.currentTimeMillis,
+      });
+      return yield* createDevice(userId, deviceName);
+    }).pipe(
+      // Without the code, a failed setup would leave the server without a way to create an admin
+      Effect.onError(() => Ref.set(codes.setup, Option.some(code))),
+    );
   });
 
 export const login = ({
@@ -197,12 +206,11 @@ export const login = ({
   Effect.gen(function* () {
     const db = yield* Database;
     const [row] = yield* db.select().from(user).where(eq(user.username, username)).limit(1);
-    if (row === undefined) {
+
+    const valid = yield* verifyPassword(password, row?.passwordHash ?? unknownUserHash);
+    if (row === undefined || !valid) {
       return yield* new AuthenticationFailed({ reason: "invalid_credentials" });
     }
-
-    const valid = yield* verifyPassword(password, row.passwordHash);
-    if (!valid) return yield* new AuthenticationFailed({ reason: "invalid_credentials" });
 
     return yield* createDevice(UserId.make(row.id), deviceName);
   });
@@ -283,7 +291,7 @@ export const authenticationLayer = Layer.effect(
           .from(device)
           .where(eq(device.tokenHash, tokenHash))
           .limit(1)
-          .pipe(Effect.orDie);
+          .pipe(orDieOnDatabaseError("authenticate"));
         if (row === undefined) return yield* new Unauthorized();
 
         const principal = new Principal({

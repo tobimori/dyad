@@ -1,4 +1,4 @@
-import { Context, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 
 export const HttpUrl = Schema.URLFromString.check(
@@ -31,7 +31,7 @@ export class ServerDescriptor extends Schema.Class<ServerDescriptor>("ServerDesc
 
 export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")({
   id: Schema.String,
-  /** `local` for a file on the server, else the provider name, for example `apple_music` */
+  /** `local` for a file on the server, else the provider ID, for example `apple_music` */
   provider: Schema.String,
   title: Schema.NullOr(Schema.String),
   artist: Schema.NullOr(Schema.String),
@@ -45,6 +45,8 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
 /** Search results, best first */
 export class SearchResults extends Schema.Class<SearchResults>("SearchResults")({
   sources: Schema.Array(SourceSummary),
+  /** Names of the providers that failed or did not answer in time, for example `Apple Music` */
+  unavailable: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 }) {}
 
 /** Where the user started a play */
@@ -83,7 +85,10 @@ export class PlaybackUnavailable extends Schema.TaggedError<PlaybackUnavailable>
  * the browser has all `cookies` of `domain`, the client gives their values to `linkAccount`.
  */
 export class BrowserLogin extends Schema.Class<BrowserLogin>("BrowserLogin")({
-  // The client gives `url` to the browser as an argument, so it must not look like a flag
+  /**
+   * HTTPS only, because the client gives it to a browser as a command argument, where another
+   * value can act as a flag
+   */
   url: Schema.String.check(
     Schema.makeFilter((url) =>
       URL.parse(url)?.protocol === "https:" ? undefined : "Expected an HTTPS URL",
@@ -171,7 +176,7 @@ export class DeviceSummary extends Schema.Class<DeviceSummary>("DeviceSummary")(
 
 const PublicRpc = RpcGroup.make(
   Rpc.make("describe", { success: ServerDescriptor }),
-  /** Creates the first admin with the setup code from the server log */
+  // Creates the first admin with the setup code from the server log
   Rpc.make("setup", {
     payload: {
       setupCode: Schema.String,
@@ -192,7 +197,7 @@ const PublicRpc = RpcGroup.make(
     success: DeviceSession,
     error: AuthenticationFailed,
   }),
-  /** Adds a device with a code from `createPairingCode` on a device of the same user */
+  // Adds a device with a code from `createPairingCode` on a device of the same user
   Rpc.make("pair", {
     payload: { code: Schema.String, deviceName: DeviceName },
     success: DeviceSession,
@@ -202,12 +207,10 @@ const PublicRpc = RpcGroup.make(
 
 const UserRpc = RpcGroup.make(
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
-  /** The sources that the user played and can still play, newest play first, one entry per source */
+  // The sources that the user played and can still play, newest play first, one entry per source
   Rpc.make("listRecentPlays", { success: Schema.Array(SourceSummary) }),
-  /**
-   * Streams the complete ranked list again each time that a provider answers; the last list is
-   * final. Clients replace their list. Every result can play at once with `preparePlayback`.
-   */
+  // Streams the complete ranked list again each time that a provider answers; the last list is
+  // final. Clients replace their list. Every result can play at once with `preparePlayback`.
   Rpc.make("search", {
     payload: { query: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)) },
     success: SearchResults,
@@ -221,7 +224,7 @@ const UserRpc = RpcGroup.make(
     success: PlaybackPlan,
     error: PlaybackUnavailable,
   }),
-  /** Records one play when the source ends, or when the user skips it, plays another or quits */
+  // Records one play when the source ends, or when the user skips it, plays another or quits
   Rpc.make("recordPlay", {
     payload: {
       sourceId: Schema.String.check(Schema.isUUID()),
@@ -233,11 +236,11 @@ const UserRpc = RpcGroup.make(
   }),
   Rpc.make("createPairingCode", { success: PairingCode }),
   Rpc.make("listDevices", { success: Schema.Array(DeviceSummary) }),
-  /** Removes a device of the current user, also the current device */
+  // Removes a device of the current user, also the current device. Its stream URLs stop working.
   Rpc.make("removeDevice", { payload: { deviceId: DeviceId } }),
   Rpc.make("listAccountProviders", { success: Schema.Array(AccountProviderSummary) }),
   Rpc.make("listAccounts", { success: Schema.Array(ProviderAccountSummary) }),
-  /** Replaces an existing account of the same provider */
+  // Replaces an existing account of the same provider
   Rpc.make("linkAccount", {
     payload: {
       provider: Schema.String,
@@ -246,7 +249,7 @@ const UserRpc = RpcGroup.make(
     success: ProviderAccountSummary,
     error: AccountLinkFailed,
   }),
-  /** Removes the account and its stored credentials from this server */
+  // Removes the account and its stored credentials from this server
   Rpc.make("unlinkAccount", { payload: { provider: Schema.String } }),
 ).middleware(Authentication);
 

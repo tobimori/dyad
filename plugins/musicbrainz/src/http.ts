@@ -1,5 +1,7 @@
-import { Clock, Context, Data, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { getJson, makePacer } from "@dyad/plugin/http";
+import { Context, Data, Effect, Layer } from "effect";
+import type { Schema } from "effect";
+import { HttpClientRequest } from "effect/http";
 
 // MusicBrainz blocks clients without an application name, a version and a contact URL
 const userAgent = "Dyad/0.0.0 ( https://github.com/tobimori/dyad )";
@@ -22,78 +24,54 @@ export class RateLimited extends Data.TaggedError("RateLimited")<{
   readonly retryAfterSeconds: number | null;
 }> {}
 
-// `Retry-After` can also be an HTTP date. A date gives `null`.
-const RetryAfter = Schema.FiniteFromString.check(Schema.isGreaterThanOrEqualTo(0));
-
 // MusicBrainz allows 1 request per second per IP on average. The ListenBrainz labs API has no
 // published limit.
-const intervalMs = { musicbrainz: 1100, listenbrainz: 1000 };
-
-const makeQueue = Effect.gen(function* () {
-  const semaphore = yield* Semaphore.make(1);
-  const nextStart = yield* Ref.make(0);
-  return { semaphore, nextStart };
-});
-
 const makePacing = Effect.gen(function* () {
-  const musicbrainz = yield* makeQueue;
-  const listenbrainz = yield* makeQueue;
+  const musicbrainz = yield* makePacer(1100);
+  const listenbrainz = yield* makePacer(1000);
   return { musicbrainz, listenbrainz };
 });
 
-/** One request queue per service, shared by all lookups of the plugin, because the limits are per IP */
+/**
+ * One request queue per service, shared by all lookups of the plugin, because the limits are per
+ * IP. A queue runs the request of the caller, so it needs what the request needs.
+ *
+ * @effect-expect-leaking R
+ */
 export class Pacing extends Context.Service<Pacing, Effect.Success<typeof makePacing>>()(
   "@dyad/plugin-musicbrainz/Pacing",
 ) {}
 
 export const pacingLayer = Layer.effect(Pacing, makePacing);
 
-// Sends one request at a time per service and starts it `intervalMs` after the previous one ended
+/**
+ * Sends one request at a time per service. Use the plugin `HttpClient`, which times out, because a
+ * request that hangs holds the queue of its service.
+ */
 export const requestJson = <S extends Schema.Constraint>(
   service: Service,
   request: HttpClientRequest.HttpClientRequest,
   schema: S,
 ) =>
   Effect.gen(function* () {
-    const queue = (yield* Pacing)[service];
-    const httpClient = yield* HttpClient.HttpClient;
+    const pace = (yield* Pacing)[service];
 
-    const send = Effect.gen(function* () {
-      const response = yield* httpClient
-        .execute(request.pipe(HttpClientRequest.setHeader("User-Agent", userAgent)))
-        .pipe(Effect.mapError(() => new LookupError({ service, reason: "Request failed" })));
-
-      const status = response.status;
-      if (status === 429 || status === 503) {
-        const retryAfter = Schema.decodeUnknownOption(RetryAfter)(response.headers["retry-after"]);
-        return yield* new RateLimited({ service, retryAfterSeconds: Option.getOrNull(retryAfter) });
-      }
-      if (status < 200 || status >= 300) {
-        return yield* new LookupError({ service, reason: `Answered status ${status}` });
-      }
-
-      return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-        Effect.mapError(() => new LookupError({ service, reason: "Unexpected response" })),
-      );
-    }).pipe(
-      // A request that hangs holds the queue of its service, and Node's own timeout is about 300 s
-      Effect.timeoutOrElse({
-        duration: "30 seconds",
-        orElse: () => Effect.fail(new LookupError({ service, reason: "Timed out" })),
-      }),
-    );
-
-    const markEnd = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-      Ref.set(queue.nextStart, now + intervalMs[service]),
-    );
-
-    return yield* queue.semaphore.withPermit(
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const start = yield* Ref.get(queue.nextStart);
-        yield* Effect.sleep(Math.max(0, start - now));
-
-        return yield* Effect.ensuring(send, markEnd);
+    return yield* pace(
+      getJson(request.pipe(HttpClientRequest.setHeader("User-Agent", userAgent)), schema),
+    ).pipe(
+      Effect.catchTags({
+        HttpStatusError: (error) => {
+          if (error.status === 429 || error.status === 503) {
+            return Effect.fail(
+              new RateLimited({ service, retryAfterSeconds: error.retryAfterSeconds }),
+            );
+          }
+          return Effect.fail(
+            new LookupError({ service, reason: `Answered status ${error.status}` }),
+          );
+        },
+        HttpRequestError: (error) =>
+          Effect.fail(new LookupError({ service, reason: error.reason })),
       }),
     );
   });

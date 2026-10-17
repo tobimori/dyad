@@ -14,6 +14,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
+import packageJson from "../package.json" with { type: "json" };
 import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";
 
@@ -39,7 +40,7 @@ export const serverLayer = Layer.unwrap(
         Schema.decodeEffect(ServerDescriptor)({
           ...value,
           protocolVersion: 1,
-          capabilities: { replication: false, playback: false, providerSync: false },
+          capabilities: { replication: false, playback: true, providerSync: false },
         }),
       ),
     );
@@ -66,7 +67,7 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(identity),
     );
     return Layer.mergeAll(
-      pluginLayer(builtinPlugins),
+      pluginLayer(builtinPlugins, packageJson.version),
       HttpRouter.serve(routes).pipe(
         Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
       ),

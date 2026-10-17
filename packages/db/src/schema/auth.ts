@@ -1,6 +1,6 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-// Replica-local until user replication is designed. Each server replica has its own users.
+// Replica-local: each server replica has its own users and devices
 
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),

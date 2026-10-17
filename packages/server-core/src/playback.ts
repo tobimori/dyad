@@ -1,21 +1,22 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- FFmpeg reads provider bytes from a Node stream
 import { Readable } from "node:stream";
 
-import { libraryRoot, localFile, source, sourceVariant } from "@dyad/db";
+import { device, libraryRoot, localFile, source, sourceVariant } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AudioCodec,
   AudioContainer,
   AudioFormat,
   CurrentPrincipal,
+  DeviceId,
   PlaybackCapabilities,
   PlaybackPlan,
   PlaybackUnavailable,
   UserId,
 } from "@dyad/domain";
 import { MediaStream, encodeFlac, remuxAudio } from "@dyad/media/node";
-import type { ProviderAudio, ResolveError } from "@dyad/plugin";
-import { eq } from "drizzle-orm";
+import type { ProviderAudio, ProviderError } from "@dyad/plugin";
+import { and, eq } from "drizzle-orm";
 import {
   Clock,
   Context,
@@ -30,12 +31,11 @@ import {
 } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
-import { loadCredentials } from "./accounts.ts";
-import { fromHex, hex } from "./auth.ts";
-import { addProviderSource } from "./library.ts";
+import { fromHex, hex } from "./ids.ts";
 import { SourceFormat, audioContainer, choosePlayback, contentTypes } from "./playback-formats.ts";
-import { SourceResolvers } from "./providers.ts";
-import { cachedProviderSource } from "./search.ts";
+import { cachedProviderSource } from "./provider-cache.ts";
+import { Providers, usableProviders } from "./providers.ts";
+import { addProviderSource } from "./sources.ts";
 
 const generateStreamKey = Effect.promise(() =>
   globalThis.crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [
@@ -62,6 +62,9 @@ class StreamGrant extends Data.Class<{
   readonly sourceId: string;
   readonly format: AudioFormat;
   readonly userId: UserId;
+  // The device that prepared the stream. The stream route checks that it still exists, so removing
+  // the device ends its URLs.
+  readonly deviceId: DeviceId;
   readonly expiresAt: number;
 }> {}
 
@@ -72,6 +75,7 @@ const grantMessage = (grant: StreamGrant) =>
       grant.format.container,
       grant.format.codec,
       grant.userId,
+      grant.deviceId,
       grant.expiresAt,
     ].join("\n"),
   );
@@ -102,7 +106,7 @@ class ProviderPlayback extends Data.Class<{
   readonly format: SourceFormat;
   /** FFmpeg demuxer for the resolved bytes */
   readonly demuxer: string;
-  readonly resolve: Effect.Effect<ProviderAudio, ResolveError>;
+  readonly resolve: Effect.Effect<ProviderAudio, ProviderError>;
 }> {}
 
 const selectSource = (sourceId: string) =>
@@ -129,24 +133,32 @@ const providerPlayback = (
   userId: UserId,
 ) =>
   Effect.gen(function* () {
-    const resolvers = yield* SourceResolvers;
+    const providers = yield* Providers;
+    if (!providers.has(item.provider)) {
+      return yield* new PlaybackUnavailable({ reason: "not_found" });
+    }
 
-    const resolve = resolvers.get(item.provider);
-    if (resolve === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
-
-    const credentials = yield* loadCredentials(userId, item.provider);
-    if (Option.isNone(credentials)) {
+    const usable = (yield* usableProviders(userId)).get(item.provider);
+    if (usable === undefined) {
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
 
     return new ProviderPlayback({
       format: new SourceFormat({ container: audioContainer(item.container), codec: item.codec }),
       demuxer: item.container,
-      resolve: resolve(item.externalId, credentials.value),
+      resolve: usable.provider.resolve(item.externalId, usable.credentials),
     });
   });
 
-const playableSource = (sourceId: string, userId: UserId) =>
+/**
+ * How the user can play the source in one of the `capabilities` formats. A search result enters
+ * the shared catalog here, but only when the user can play it.
+ */
+const choosePlayableSource = (
+  sourceId: string,
+  userId: UserId,
+  capabilities: PlaybackCapabilities,
+) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
 
@@ -155,50 +167,61 @@ const playableSource = (sourceId: string, userId: UserId) =>
       const cached = yield* cachedProviderSource(sourceId);
       if (Option.isNone(cached)) return yield* new PlaybackUnavailable({ reason: "not_found" });
 
-      // A search result is only in the provider cache until it is played. Check that the user can
-      // play it before it enters the shared catalog.
-      const playable = yield* providerPlayback(cached.value, userId);
+      const playable = yield* providerPlayback(
+        {
+          provider: cached.value.provider,
+          externalId: cached.value.source.externalId,
+          container: cached.value.source.container,
+          codec: cached.value.source.codec,
+        },
+        userId,
+      );
+      const choice = yield* choosePlayback(playable.format, capabilities);
+
       yield* addProviderSource(cached.value);
-      return playable;
+      return { playable, choice };
     }
 
-    if (row.root !== null && row.file !== null) {
-      return new FilePlayback({
-        format: new SourceFormat({
-          container: audioContainer(row.variant.container),
-          codec: row.variant.codec,
-        }),
-        path: path.join(row.root, row.file),
-      });
-    }
+    const playable =
+      row.root !== null && row.file !== null
+        ? new FilePlayback({
+            format: new SourceFormat({
+              container: audioContainer(row.variant.container),
+              codec: row.variant.codec,
+            }),
+            path: path.join(row.root, row.file),
+          })
+        : yield* providerPlayback(
+            {
+              provider: row.source.provider,
+              externalId: row.source.externalId,
+              container: row.variant.container,
+              codec: row.variant.codec,
+            },
+            userId,
+          );
+    const choice = yield* choosePlayback(playable.format, capabilities);
 
-    return yield* providerPlayback(
-      {
-        provider: row.source.provider,
-        externalId: row.source.externalId,
-        container: row.variant.container,
-        codec: row.variant.codec,
-      },
-      userId,
-    );
+    return { playable, choice };
   });
 
 export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabilities) =>
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
-    const playable = yield* playableSource(sourceId, principal.userId);
-    const choice = yield* choosePlayback(playable.format, capabilities);
+    const { choice } = yield* choosePlayableSource(sourceId, principal.userId, capabilities);
 
     const grant = new StreamGrant({
       sourceId,
       format: choice.format,
       userId: principal.userId,
+      deviceId: principal.deviceId,
       expiresAt: (yield* Clock.currentTimeMillis) + streamLifetimeMs,
     });
     const search = new URLSearchParams({
       container: grant.format.container,
       codec: grant.format.codec,
       user: grant.userId,
+      device: grant.deviceId,
       expires: String(grant.expiresAt),
       signature: yield* signGrant(grant),
     });
@@ -244,7 +267,8 @@ const StreamRequest = Schema.Struct({
   container: AudioContainer,
   codec: AudioCodec,
   user: UserId,
-  expires: Schema.NumberFromString,
+  device: DeviceId,
+  expires: Schema.FiniteFromString,
   signature: Schema.String,
 });
 
@@ -257,17 +281,25 @@ export const streamRoute = HttpRouter.add(
       sourceId: request.sourceId,
       format: new AudioFormat({ container: request.container, codec: request.codec }),
       userId: request.user,
+      deviceId: request.device,
       expiresAt: request.expires,
     });
     const valid = yield* verifyGrant(grant, request.signature);
     const now = yield* Clock.currentTimeMillis;
     if (!valid || grant.expiresAt < now) return HttpServerResponse.empty({ status: 403 });
 
-    const playable = yield* playableSource(request.sourceId, grant.userId);
+    const db = yield* Database;
+    const [grantDevice] = yield* db
+      .select({ id: device.id })
+      .from(device)
+      .where(and(eq(device.id, grant.deviceId), eq(device.userId, grant.userId)))
+      .limit(1);
+    if (grantDevice === undefined) return HttpServerResponse.empty({ status: 403 });
 
     // A stream URL is stateless. Recheck the selected output against the current source.
-    const choice = yield* choosePlayback(
-      playable.format,
+    const { playable, choice } = yield* choosePlayableSource(
+      request.sourceId,
+      grant.userId,
       new PlaybackCapabilities({ formats: [grant.format] }),
     );
     const contentType = contentTypes[choice.format.container];
@@ -302,12 +334,12 @@ export const streamRoute = HttpRouter.add(
       { contentType },
     );
   }).pipe(
-    orDieOnDatabaseError,
+    orDieOnDatabaseError("stream"),
     Effect.catchTags({
       SchemaError: () => Effect.succeed(HttpServerResponse.empty({ status: 400 })),
       PlaybackUnavailable: (error) =>
         Effect.succeed(HttpServerResponse.empty({ status: unavailableStatus[error.reason] })),
-      ResolveError: (error) =>
+      ProviderError: (error) =>
         Effect.logError("Cannot resolve the source", error.reason).pipe(
           Effect.as(HttpServerResponse.empty({ status: 502 })),
         ),

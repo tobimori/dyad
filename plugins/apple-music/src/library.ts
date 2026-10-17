@@ -1,17 +1,15 @@
 import type { ProviderSource } from "@dyad/plugin";
-import { Data, Effect, Schema } from "effect";
+import { getJson, HttpStatusError } from "@dyad/plugin/http";
+import type { makePacer } from "@dyad/plugin/http";
+import { Data, Effect, Option, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
-import {
-  amp,
-  AppleTrack,
-  authorize,
-  catalogSource,
-  readResponse,
-  requestJson,
-  sendRequest,
-} from "./api.ts";
+import { amp, appleError, AppleTrack, authorize, catalogSource, requestJson } from "./api.ts";
 import type { AppleSession } from "./api.ts";
+
+// Apple throttles fast reads, and a 429 stops the sync. All library reads of the plugin must share
+// one pacer of 1 second.
+type Pace = Effect.Success<ReturnType<typeof makePacer>>;
 
 // Library songs and playlist tracks have the same shape
 const LibrarySongItem = Schema.Struct({
@@ -63,7 +61,7 @@ export class LibrarySong extends Data.Class<{
   readonly durationMs: number | null;
   /**
    * `null` for uploads, iTunes Match songs, purchases and songs that the storefront does not have.
-   * Dyad cannot play them yet.
+   * Dyad cannot play them.
    */
   readonly source: ProviderSource | null;
 }> {}
@@ -101,6 +99,7 @@ const toLibrarySong = (item: typeof LibrarySongItem.Type) => {
 // Apple sometimes answers 404 or an empty page after `next` promised more items. Then the snapshot
 // keeps the items so far, but is incomplete.
 const readPages = <S extends Schema.Top>(
+  pace: Pace,
   request: HttpClientRequest.HttpClientRequest,
   item: S,
   stage: string,
@@ -109,20 +108,23 @@ const readPages = <S extends Schema.Top>(
     const items: Array<S["Type"]> = [];
 
     while (true) {
-      // Apple throttles fast reads, and a 429 stops the sync
-      yield* Effect.sleep("1 second");
-
       const pageRequest = request.pipe(HttpClientRequest.setUrlParam("offset", `${items.length}`));
-      const response = yield* sendRequest(pageRequest, stage);
-      if (response.status === 404) return new LibrarySnapshot({ items, complete: false });
+      const page = yield* pace(getJson(pageRequest, Page(item))).pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error instanceof HttpStatusError && error.status === 404,
+          () => Effect.succeedNone,
+        ),
+        Effect.mapError(appleError(stage, pageRequest)),
+      );
+      if (Option.isNone(page)) return new LibrarySnapshot({ items, complete: false });
 
-      const page = yield* readResponse(response, Page(item), stage);
-      if (page.data.length === 0 && page.next !== undefined) {
+      if (page.value.data.length === 0 && page.value.next !== undefined) {
         return new LibrarySnapshot({ items, complete: false });
       }
 
-      items.push(...page.data);
-      if (page.next === undefined) return new LibrarySnapshot({ items, complete: true });
+      items.push(...page.value.data);
+      if (page.value.next === undefined) return new LibrarySnapshot({ items, complete: true });
     }
   });
 
@@ -132,12 +134,12 @@ const libraryRequest = (session: AppleSession, path: string) =>
     authorize(session),
   );
 
-export const readLibrarySongs = (session: AppleSession) =>
+export const readLibrarySongs = (pace: Pace, session: AppleSession) =>
   Effect.gen(function* () {
     const request = libraryRequest(session, "/v1/me/library/songs").pipe(
       HttpClientRequest.setUrlParam("include", "catalog"),
     );
-    const snapshot = yield* readPages(request, LibrarySongItem, "library songs");
+    const snapshot = yield* readPages(pace, request, LibrarySongItem, "library songs");
 
     return new LibrarySnapshot({
       items: snapshot.items.map(toLibrarySong),
@@ -145,10 +147,10 @@ export const readLibrarySongs = (session: AppleSession) =>
     });
   });
 
-export const readPlaylists = (session: AppleSession) =>
+export const readPlaylists = (pace: Pace, session: AppleSession) =>
   Effect.gen(function* () {
     const request = libraryRequest(session, "/v1/me/library/playlists");
-    const snapshot = yield* readPages(request, LibraryPlaylistItem, "library playlists");
+    const snapshot = yield* readPages(pace, request, LibraryPlaylistItem, "library playlists");
 
     return new LibrarySnapshot({
       items: snapshot.items.map(
@@ -165,13 +167,13 @@ export const readPlaylists = (session: AppleSession) =>
   });
 
 /** The items are in playlist order. A song can be in the playlist more than once. */
-export const readPlaylistTracks = (session: AppleSession, playlistId: string) =>
+export const readPlaylistTracks = (pace: Pace, session: AppleSession, playlistId: string) =>
   Effect.gen(function* () {
     const path = `/v1/me/library/playlists/${encodeURIComponent(playlistId)}/tracks`;
     const request = libraryRequest(session, path).pipe(
       HttpClientRequest.setUrlParam("include", "catalog"),
     );
-    const snapshot = yield* readPages(request, LibrarySongItem, "playlist tracks");
+    const snapshot = yield* readPages(pace, request, LibrarySongItem, "playlist tracks");
 
     return new LibrarySnapshot({
       items: snapshot.items.map(toLibrarySong),
@@ -180,13 +182,13 @@ export const readPlaylistTracks = (session: AppleSession, playlistId: string) =>
   });
 
 /** One request that shows whether a full read of the library songs is necessary */
-export const probeLibrary = (session: AppleSession) =>
+export const probeLibrary = (pace: Pace, session: AppleSession) =>
   Effect.gen(function* () {
     const request = HttpClientRequest.get(`${amp}/v1/me/library/songs`).pipe(
       HttpClientRequest.setUrlParams({ limit: "1", sort: "-dateAdded" }),
       authorize(session),
     );
-    const page = yield* requestJson(request, ProbePage, "library probe");
+    const page = yield* pace(requestJson(request, ProbePage, "library probe"));
 
     return new LibraryProbe({ total: page.meta.total, newestId: page.data[0]?.id ?? null });
   });

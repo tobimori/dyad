@@ -5,7 +5,7 @@ import type { PlayContext } from "@dyad/domain";
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { Crypto, Effect } from "effect";
 
-import { selectPlayableSources, sourceSummary } from "./library.ts";
+import { playableSources, sourceSummary } from "./sources.ts";
 
 const recentPlayLimit = 100;
 
@@ -45,8 +45,7 @@ export const listRecentPlays = Effect.gen(function* () {
     .limit(recentPlayLimit);
 
   const playedIds = plays.map((play) => play.sourceId);
-  const query = yield* selectPlayableSources(principal.userId, inArray(source.id, playedIds));
-  const rows = yield* query;
+  const rows = yield* playableSources(principal.userId, inArray(source.id, playedIds));
   const summaries = new Map(rows.map((row) => [row.source.id, sourceSummary(row)]));
 
   return plays.flatMap((play) => summaries.get(play.sourceId) ?? []);

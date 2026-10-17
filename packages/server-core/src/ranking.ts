@@ -2,10 +2,12 @@ import type { SourceSummary } from "@dyad/domain";
 import type { PopularityHit } from "@dyad/plugin";
 import { Data } from "effect";
 
+import { normalizeArtist, normalizeText, normalizeTitle, simplifyText } from "./normalize.ts";
+
 /** One search result of a provider or of this replica, before grouping */
 export class Candidate extends Data.Class<{
   readonly summary: SourceSummary;
-  /** Normalized, without hyphens */
+  /** Normalized with `normalizeIsrc` */
   readonly isrc: string | null;
   /** Position in the result list of its provider, from 0 */
   readonly position: number;
@@ -17,7 +19,7 @@ export class Candidate extends Data.Class<{
 /** One play of the user who searches */
 export class Play extends Data.Class<{
   readonly sourceId: string;
-  /** Normalized, without hyphens */
+  /** Normalized with `normalizeIsrc` */
   readonly isrc: string | null;
   readonly artist: string | null;
   readonly startedAt: number;
@@ -95,41 +97,11 @@ const versionMarkers = [
   "originally performed",
 ];
 
-// Providers credit guests in the title or in the artist, for example `Song (feat. Guest)` or
-// `Song feat. Guest - Remix`
-const bracketedFeaturing = /[([]\s*(?:feat|ft|featuring)\b[^)\]]*[)\]]/g;
-const trailingFeaturing = /\s(?:feat|ft|featuring)\b.*?(?=\s-\s|[([]|$)/g;
-
-// The first of several credited artists, for example `Daft Punk` of `Daft Punk & Pharrell Williams`
-const artistSeparator = /\s*(?:,|&|\bx\b|\bwith\b|\bfeat\b|\bft\b|\bfeaturing\b)\s*/;
-
-// Lowercase words without diacritics and punctuation
-const simplify = (text: string) =>
-  text
-    .normalize("NFKD")
-    .replaceAll(/\p{M}/gu, "")
-    .toLowerCase()
-    .replaceAll("&", " and ")
-    .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-
-const normalize = (text: string) =>
-  simplify(
-    text.toLowerCase().replaceAll(bracketedFeaturing, " ").replaceAll(trailingFeaturing, ""),
-  );
-
-// Without version parts such as `(Remastered 2011)` or `- Single Version`
-const baseTitle = (title: string) =>
-  normalize(title.replaceAll(/[([][^)\]]*[)\]]/g, " ").replace(/\s-\s.*$/, ""));
-
-const artistKey = (artist: string | null) =>
-  normalize((artist ?? "").toLowerCase().split(artistSeparator)[0] ?? "");
-
 // `null` when the title is unknown, because then title and artist cannot identify a recording
 const recordingKey = (title: string | null, artist: string | null) => {
-  const normalizedTitle = normalize(title ?? "");
+  const normalizedTitle = normalizeText(title ?? "");
   if (normalizedTitle === "") return null;
-  return `${normalizedTitle}\n${artistKey(artist)}`;
+  return `${normalizedTitle}\n${normalizeArtist(artist ?? "")}`;
 };
 
 const containsPhrase = (text: string, phrase: string) => ` ${text} `.includes(` ${phrase} `);
@@ -146,9 +118,9 @@ const playValue = (play: Play, now: number) => {
 };
 
 const matchQuality = (query: string, summary: SourceSummary) => {
-  const title = baseTitle(summary.title ?? "");
-  const artist = normalize(summary.artist ?? "");
-  const exactMatches = [artist, artistKey(summary.artist)].flatMap((name) => [
+  const title = normalizeTitle(summary.title ?? "");
+  const artist = normalizeText(summary.artist ?? "");
+  const exactMatches = [artist, normalizeArtist(summary.artist ?? "")].flatMap((name) => [
     name,
     `${name} ${title}`,
     `${title} ${name}`,
@@ -156,14 +128,14 @@ const matchQuality = (query: string, summary: SourceSummary) => {
   if (title === query || exactMatches.includes(query)) return 1;
 
   // With guests, so that `daft punk` finds `Starboy (feat. Daft Punk)`
-  const words = new Set(simplify(`${summary.title ?? ""} ${summary.artist ?? ""}`).split(" "));
+  const words = new Set(simplifyText(`${summary.title ?? ""} ${summary.artist ?? ""}`).split(" "));
   const queryWords = query.split(" ");
   const found = queryWords.filter((word) => words.has(word)).length;
   return (partialMatch * found) / queryWords.length;
 };
 
 const isOtherVersion = (query: string, summary: SourceSummary) => {
-  const text = simplify([summary.title, summary.artist, summary.album].join(" "));
+  const text = simplifyText([summary.title, summary.artist, summary.album].join(" "));
   return versionMarkers.some(
     (marker) => containsPhrase(text, marker) && !containsPhrase(query, marker),
   );
@@ -178,7 +150,7 @@ const scoreCandidate = (
 ) => {
   const summary = candidate.summary;
   const key = recordingKey(summary.title, summary.artist);
-  const artist = artistKey(summary.artist);
+  const artist = normalizeArtist(summary.artist ?? "");
 
   const matchingHits = hits.filter(
     (hit) =>
@@ -192,7 +164,9 @@ const scoreCandidate = (
   const recordingPlays = plays.filter(
     (play) => play.sourceId === summary.id || (play.isrc !== null && play.isrc === candidate.isrc),
   );
-  const artistPlays = plays.filter((play) => artist !== "" && artistKey(play.artist) === artist);
+  const artistPlays = plays.filter(
+    (play) => artist !== "" && normalizeArtist(play.artist ?? "") === artist,
+  );
 
   const parts = {
     match: matchQuality(query, summary),
@@ -236,7 +210,7 @@ export const rank = (
   plays: ReadonlyArray<Play>,
   now: number,
 ) => {
-  const normalizedQuery = normalize(query);
+  const normalizedQuery = normalizeText(query);
   const playedSourceIds = new Set(plays.map((play) => play.sourceId));
 
   // A candidate joins the first group whose members are all the same recording
