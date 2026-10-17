@@ -52,12 +52,19 @@ Before you call a change done, check which of these apply and say so:
 
 ## Code
 
-- `pnpm check` is the full check: format, lint, type check and builds. Run it before you commit.
+- Use `vp` commands, not `pnpm`: `vp i`, `vp add`, `vp run <script>`. `pnpm` is only the package manager under Vite+.
+- `vp run check` is the full check: format, lint, type check and builds. Run it before you commit.
 - `packages/oxlint` has the project lint rules. Fix findings; do not suppress them. A suppression must say why (`-- reason`).
 - `apps/cli` needs Node 26.4 or later. Other packages must stay compatible with Node 24 and Electron.
 - Plugins import `@dyad/plugin` and shared libraries, never `server-core` or `db`.
-- Migrations: `pnpm db:generate <descriptive_name>`, for example `add_source_segment`. Do not edit or rename a migration after it is committed, unless all databases are reset.
+- Migrations: `vp run db:generate <descriptive_name>`, for example `add_source_segment`. Do not edit or rename a migration after it is committed, unless all databases are reset.
 - Do not create or change tests unless asked.
+
+## Worktrees
+
+- `t3.json` runs `scripts/setup-worktree.ts` when T3 Code creates a worktree. It installs the locked dependencies and links `.docs/` from the main checkout.
+- Each worktree has its own database in `.data/` and its own dev URLs: portless puts the branch name in front of `dyad` and `api.dyad`.
+- `.env.local` files are not linked. They hold settings for the main checkout, such as its fixed server URL.
 
 ## Docs
 
