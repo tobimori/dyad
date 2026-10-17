@@ -16,15 +16,24 @@ export class ReplicaDatabase extends Context.Service<ReplicaDatabase, Identity>(
   "@dyad/db/ReplicaDatabase",
 ) {}
 
+const makeDatabase = Effect.gen(function* () {
+  const db = yield* Drizzle.makeWithDefaults({ relations });
+  const path = yield* Path.Path;
+  const migrationsFolder = yield* path.fromFileUrl(new URL("../migrations/", import.meta.url));
+  yield* migrate(db, { migrationsFolder });
+  return db;
+});
+
+export class Database extends Context.Service<Database, Effect.Success<typeof makeDatabase>>()(
+  "@dyad/db/Database",
+) {}
+
 export const nodeDatabaseLayer = (filename: string) =>
   Layer.effect(
     ReplicaDatabase,
     Effect.gen(function* () {
-      const db = yield* Drizzle.makeWithDefaults({ relations });
+      const db = yield* Database;
       const crypto = yield* Crypto.Crypto;
-      const path = yield* Path.Path;
-      const migrationsFolder = yield* path.fromFileUrl(new URL("../migrations/", import.meta.url));
-      yield* migrate(db, { migrationsFolder });
 
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
@@ -44,4 +53,7 @@ export const nodeDatabaseLayer = (filename: string) =>
         }),
       );
     }),
-  ).pipe(Layer.provide(SqliteClient.layer({ filename })));
+  ).pipe(
+    Layer.provideMerge(Layer.effect(Database, makeDatabase)),
+    Layer.provide(SqliteClient.layer({ filename })),
+  );

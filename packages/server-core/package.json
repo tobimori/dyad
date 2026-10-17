@@ -13,7 +13,9 @@
   "dependencies": {
     "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
+    "@dyad/media": "workspace:*",
     "@dyad/plugin": "workspace:*",
+    "drizzle-orm": "catalog:",
     "effect": "catalog:"
   }
 }

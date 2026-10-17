@@ -31,6 +31,7 @@ catalog:
   unplugin: 2.3.11
   portless: 0.15.8
   env-paths: 4.0.0
+  node-av: 6.1.1
 
 overrides:
   "vite@*": npm:@voidzero-dev/vite-plus-core@1.3.0
@@ -48,6 +49,8 @@ peerDependencyRules:
 
 allowBuilds:
   better-sqlite3: true
+  # The prebuilt binary is an optional dependency. The scripts only download an unused `ffmpeg` binary.
+  node-av: false
   esbuild: true
   protobufjs: true
 

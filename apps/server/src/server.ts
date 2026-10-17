@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
 import { ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
+import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { ServerIdentity, pluginLayer, serverRoutes } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
@@ -12,7 +13,7 @@ import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } fro
 import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";
 
-const builtinPlugins: ReadonlyArray<Plugin> = [];
+const builtinPlugins: ReadonlyArray<Plugin> = [localFilesPlugin];
 
 export const serverLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -31,7 +32,7 @@ export const serverLayer = Layer.unwrap(
           capabilities: { replication: false, playback: false, providerSync: false },
         }),
       ),
-    ).pipe(Layer.provide(database));
+    );
 
     const isAllowedOrigin = (origin: string) => allowedOrigins.includes(origin);
     const cors = HttpMiddleware.cors({
@@ -59,6 +60,6 @@ export const serverLayer = Layer.unwrap(
       HttpRouter.serve(routes).pipe(
         Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
       ),
-    );
+    ).pipe(Layer.provide(database));
   }),
 );

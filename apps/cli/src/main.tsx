@@ -1,11 +1,11 @@
 import { RegistryProvider } from "@effect/atom-react";
 import { NodeRuntime } from "@effect/platform-node";
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, setupAudio } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { Config, Data, Effect } from "effect";
 
 import { App } from "./app.tsx";
-import { serverDescriptor } from "./state.ts";
+import { serverAtoms } from "./state.ts";
 
 class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: unknown }> {}
 
@@ -13,7 +13,11 @@ const program = Effect.gen(function* () {
   const serverUrl = yield* Config.String("DYAD_SERVER_URL").pipe(
     Config.withDefault("http://127.0.0.1:4310"),
   );
-  const server = serverDescriptor(serverUrl);
+  const atoms = serverAtoms(serverUrl);
+  const audio = yield* Effect.acquireRelease(
+    Effect.sync(() => setupAudio()),
+    (audio) => Effect.sync(() => audio.dispose()),
+  );
 
   // The Effect runtime owns process signals; the renderer still handles Ctrl+C as a key
   const renderer = yield* Effect.acquireRelease(
@@ -32,7 +36,7 @@ const program = Effect.gen(function* () {
     renderer.once("destroy", () => resume(Effect.void));
     createRoot(renderer).render(
       <RegistryProvider>
-        <App serverUrl={serverUrl} server={server} />
+        <App serverUrl={serverUrl} atoms={atoms} audio={audio} />
       </RegistryProvider>,
     );
   });

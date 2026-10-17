@@ -29,7 +29,19 @@ export class ServerDescriptor extends Schema.Class<ServerDescriptor>("ServerDesc
   }),
 }) {}
 
-export class ServerRpc extends RpcGroup.make(Rpc.make("describe", { success: ServerDescriptor })) {}
+export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")({
+  id: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  artist: Schema.NullOr(Schema.String),
+  album: Schema.NullOr(Schema.String),
+  durationMs: Schema.NullOr(Schema.Number),
+  codec: Schema.String,
+}) {}
+
+export class ServerRpc extends RpcGroup.make(
+  Rpc.make("describe", { success: ServerDescriptor }),
+  Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
+) {}
 
 export class WorkerDescriptor extends Schema.Class<WorkerDescriptor>("WorkerDescriptor")({
   execution: Schema.Literal("worker"),
