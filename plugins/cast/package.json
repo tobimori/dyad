@@ -1,0 +1,23 @@
+{
+  "name": "@dyad/plugin-cast",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "dns-packet": "catalog:",
+    "effect": "catalog:",
+    "fast-xml-parser": "catalog:"
+  },
+  "devDependencies": {
+    "@types/dns-packet": "catalog:",
+    "@types/node": "catalog:"
+  }
+}
