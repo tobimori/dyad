@@ -21,6 +21,9 @@ catalogs:
     '@effect/tsgo':
       specifier: 0.53.3
       version: 0.53.3
+    '@li0ard/widevine':
+      specifier: 0.1.6
+      version: 0.1.6
     '@opentui/core':
       specifier: 0.6.6
       version: 0.6.6
@@ -90,6 +93,7 @@ catalogs:
 
 overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@1.3.0
+  '@li0ard/widevine@0.1.6>@noble/ciphers': 2.1.1
 
 patchedDependencies:
   drizzle-orm@1.0.0-rc.5-5935859: bfff9df9913bbbf1647bc8a85e43bf69b2316c928c5eaa85c242656e9f6a5a56
@@ -104,9 +108,15 @@ importers:
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.53.3
+      '@li0ard/widevine':
+        specifier: 'catalog:'
+        version: 0.1.6(typescript@7.0.2)
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
       portless:
         specifier: 'catalog:'
         version: 0.15.8
@@ -140,6 +150,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+      env-paths:
+        specifier: 'catalog:'
+        version: 4.0.0
       react:
         specifier: 'catalog:'
         version: 19.3.1
@@ -162,6 +175,9 @@ importers:
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
+      '@dyad/plugin-apple-music':
+        specifier: workspace:*
+        version: link:../../plugins/apple-music
       '@dyad/plugin-local-files':
         specifier: workspace:*
         version: link:../../plugins/local-files
@@ -295,6 +311,9 @@ importers:
 
   packages/plugin:
     dependencies:
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:../domain
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -325,6 +344,21 @@ importers:
       '@dyad/domain':
         specifier: workspace:*
         version: link:../domain
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  plugins/apple-music:
+    dependencies:
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
+      '@li0ard/widevine':
+        specifier: 'catalog:'
+        version: 0.1.6(typescript@7.0.2)
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -698,8 +732,31 @@ packages:
   '@leichtgewicht/ip-codec@2.0.5':
     resolution: {integrity: sha512-Vo+PSpZG2/fmgmiNzYK9qWRh8h/CHrwD0mo1h1DzL4yzHNSfWYujGTYsWGreD000gcgmZ7K4Ys6Tx9TxtsKdDw==}
 
+  '@li0ard/pssh@0.1.1':
+    resolution: {integrity: sha512-zneNGYSVuDPXkOaTw7/6GpcbT21aNHft63W3A6C0F3OEEcZeZRQpF2kqTKuzxI4t+Kjnj8iHcMDZRwFBtRoZtg==}
+    peerDependencies:
+      typescript: ^5.0.0
+
+  '@li0ard/widevine@0.1.6':
+    resolution: {integrity: sha512-O7zQURR5N5HeVvGZRmflGJqpItucNIAcoAJcs8lmARK7AyhJIaFIuy6QHiKkE/SWlBUjJkqd6ByH8th6zmNgGw==}
+    peerDependencies:
+      typescript: ^5.0.0
+
+  '@li0ard/widevineproto@0.1.0':
+    resolution: {integrity: sha512-J4p09tKYu53KnWq2udklAyjo/v+0n1lpymRtwjA80ZIYW5NmaGMXVmsRdMmZfFkHOI5cwHBDOCjXp902GT5fAQ==}
+    peerDependencies:
+      typescript: ^5
+
   '@minhducsun2002/leb128@1.0.0':
     resolution: {integrity: sha512-eFrYUPDVHeuwWHluTG1kwNQUEUcFjVKYwPkU8z9DR1JH3AW7JtJsG9cRVGmwz809kKtGfwGJj58juCZxEvnI/g==}
+
+  '@noble/ciphers@2.1.1':
+    resolution: {integrity: sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw==}
+    engines: {node: '>= 20.19.0'}
+
+  '@noble/ciphers@2.4.0':
+    resolution: {integrity: sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==}
+    engines: {node: '>= 20.19.0'}
 
   '@noble/curves@1.9.7':
     resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
@@ -708,6 +765,10 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@noble/hashes@2.4.0':
+    resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
+    engines: {node: '>= 20.19.0'}
 
   '@oozcitak/dom@2.0.2':
     resolution: {integrity: sha512-GjpKhkSYC3Mj4+lfwEyI1dqnsKTgwGy48ytZEhm4A/xnH/8z9M3ZVXKr/YGQi3uCLs1AEBS+x5T2JPiueEDW8w==}
@@ -2132,6 +2193,9 @@ packages:
   get-tsconfig@4.14.3:
     resolution: {integrity: sha512-++QEw4DIY7WGoukz+/+A/8dGYPT9l9yIadnmSgZ8Rjr3YVSVDipQSO9CdnJo9ePqFqUUqh+wk9uIaoiAwsiPkA==}
 
+  google-protobuf@4.0.3:
+    resolution: {integrity: sha512-DI6iiRmF8fE/EzvGK5F9b8RxZeumHC2AAhi3xwOEh+GT5eRhJeW1aOtkDxn0W7cVCFQAtwK+ZDwIO1BYz+9WMA==}
+
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
@@ -2297,6 +2361,9 @@ packages:
 
   mediabunny@1.61.5:
     resolution: {integrity: sha512-IYrDTozxGVRTWQ1YdIcF+P7S7qHvvkiQYsX3WUbAHkxgAcCfEn7a/RbM9i/WiJHJ1MSYZqSxZkna1UUn4FGGBQ==}
+
+  micro-rsa-dsa-dh@0.2.3:
+    resolution: {integrity: sha512-Mf1lBm4Ho2F3lthxltQQC9ZowpRsU1FSnSLWJC6WbPKZNKw3d7x3FKyxHK9jDaIJCoLL/z9US7m/OPLZM6DBCg==}
 
   mp4box@0.5.4:
     resolution: {integrity: sha512-GcCH0fySxBurJtvr0dfhz0IxHZjc1RP+F+I8xw+LIwkU1a+7HJx8NCDiww1I5u4Hz6g4eR1JlGADEGJ9r4lSfA==}
@@ -3078,8 +3145,34 @@ snapshots:
   '@leichtgewicht/ip-codec@2.0.5':
     optional: true
 
+  '@li0ard/pssh@0.1.1(typescript@7.0.2)':
+    dependencies:
+      '@noble/ciphers': 2.4.0
+      google-protobuf: 4.0.3
+      typescript: 7.0.2
+
+  '@li0ard/widevine@0.1.6(typescript@7.0.2)':
+    dependencies:
+      '@li0ard/pssh': 0.1.1(typescript@7.0.2)
+      '@li0ard/widevineproto': 0.1.0(typescript@7.0.2)
+      '@noble/ciphers': 2.1.1
+      '@noble/hashes': 2.4.0
+      '@peculiar/asn1-rsa': 2.11.0
+      '@peculiar/asn1-schema': 2.11.0
+      micro-rsa-dsa-dh: 0.2.3
+      typescript: 7.0.2
+
+  '@li0ard/widevineproto@0.1.0(typescript@7.0.2)':
+    dependencies:
+      google-protobuf: 4.0.3
+      typescript: 7.0.2
+
   '@minhducsun2002/leb128@1.0.0':
     optional: true
+
+  '@noble/ciphers@2.1.1': {}
+
+  '@noble/ciphers@2.4.0': {}
 
   '@noble/curves@1.9.7':
     dependencies:
@@ -3088,6 +3181,8 @@ snapshots:
 
   '@noble/hashes@1.8.0':
     optional: true
+
+  '@noble/hashes@2.4.0': {}
 
   '@oozcitak/dom@2.0.2':
     dependencies:
@@ -3359,14 +3454,12 @@ snapshots:
       '@peculiar/asn1-x509': 2.11.0
       asn1js: 3.0.10
       tslib: 2.8.1
-    optional: true
 
   '@peculiar/asn1-schema@2.11.0':
     dependencies:
       '@peculiar/utils': 2.0.3
       asn1js: 3.0.10
       tslib: 2.8.1
-    optional: true
 
   '@peculiar/asn1-x509-attr@2.11.0':
     dependencies:
@@ -3382,12 +3475,10 @@ snapshots:
       '@peculiar/utils': 2.0.3
       asn1js: 3.0.10
       tslib: 2.8.1
-    optional: true
 
   '@peculiar/utils@2.0.3':
     dependencies:
       tslib: 2.8.1
-    optional: true
 
   '@peculiar/x509@1.14.3':
     dependencies:
@@ -3998,7 +4089,6 @@ snapshots:
       pvtsutils: 1.3.6
       pvutils: 1.2.0
       tslib: 2.8.1
-    optional: true
 
   assertion-error@2.0.1: {}
 
@@ -4182,6 +4272,8 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
+  google-protobuf@4.0.3: {}
+
   graceful-fs@4.2.11: {}
 
   ieee754@1.2.1:
@@ -4311,6 +4403,10 @@ snapshots:
       '@types/dom-webcodecs': 0.1.13
     optional: true
 
+  micro-rsa-dsa-dh@0.2.3:
+    dependencies:
+      '@noble/hashes': 2.4.0
+
   mp4box@0.5.4:
     optional: true
 
@@ -4437,10 +4533,8 @@ snapshots:
   pvtsutils@1.3.6:
     dependencies:
       tslib: 2.8.1
-    optional: true
 
-  pvutils@1.2.0:
-    optional: true
+  pvutils@1.2.0: {}
 
   react-devtools-core@7.0.1:
     dependencies:
@@ -4559,8 +4653,7 @@ snapshots:
   tslib@1.14.1:
     optional: true
 
-  tslib@2.8.1:
-    optional: true
+  tslib@2.8.1: {}
 
   tsyringe@4.10.0:
     dependencies:

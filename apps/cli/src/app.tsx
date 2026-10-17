@@ -1,3 +1,4 @@
+import { ServerConnection } from "@dyad/client-runtime";
 import type { SourceSummary } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import type { Audio } from "@opentui/core";
@@ -28,6 +29,7 @@ export function App(props: {
 }) {
   const renderer = useRenderer();
   const server = useAtomValue(props.atoms.server);
+  const connection = useAtomValue(props.atoms.connection);
   const sourcesResult = useAtomValue(props.atoms.sources);
   const retryServer = useAtomRefresh(props.atoms.server);
   const retrySources = useAtomRefresh(props.atoms.sources);
@@ -43,6 +45,7 @@ export function App(props: {
   };
 
   const play = (index: number) => {
+    if (!AsyncResult.isSuccess(connection)) return;
     stop();
     const source = sources[index];
     if (source === undefined) {
@@ -55,6 +58,7 @@ export function App(props: {
     setError(null);
     playback.current = Effect.runFork(
       playSource(props.audio, props.serverUrl, source.id).pipe(
+        Effect.provideService(ServerConnection, connection.value),
         Effect.provide(FetchHttpClient.layer),
         Effect.matchEffect({
           onSuccess: () => Effect.sync(() => play(index + 1)),

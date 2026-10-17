@@ -1,19 +1,26 @@
 import { RegistryProvider } from "@effect/atom-react";
-import { NodeRuntime } from "@effect/platform-node";
+import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { createCliRenderer, setupAudio } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { Config, Data, Effect } from "effect";
+import { Console, Data, Effect, Option } from "effect";
+import { Command } from "effect/cli";
 
+import { accountCommands } from "./accounts.ts";
 import { App } from "./app.tsx";
+import { authCommands, notSignedIn, serverUrl as serverUrlConfig } from "./auth.ts";
+import { loadDeviceToken } from "./devices.ts";
 import { serverAtoms } from "./state.ts";
 
 class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: unknown }> {}
 
-const program = Effect.gen(function* () {
-  const serverUrl = yield* Config.String("DYAD_SERVER_URL").pipe(
-    Config.withDefault("http://127.0.0.1:4310"),
-  );
-  const atoms = serverAtoms(serverUrl);
+const player = Effect.gen(function* () {
+  const serverUrl = yield* serverUrlConfig;
+  const deviceToken = yield* loadDeviceToken(serverUrl);
+  if (Option.isNone(deviceToken)) {
+    return yield* Console.error(notSignedIn);
+  }
+
+  const atoms = serverAtoms(serverUrl, deviceToken);
   const audio = yield* Effect.acquireRelease(
     Effect.sync(() => setupAudio()),
     (audio) => Effect.sync(() => audio.dispose()),
@@ -42,4 +49,12 @@ const program = Effect.gen(function* () {
   });
 });
 
-program.pipe(Effect.scoped, NodeRuntime.runMain);
+const dyad = Command.make("dyad", {}, () => Effect.scoped(player)).pipe(
+  Command.withDescription("Play the library of a Dyad server"),
+  Command.withSubcommands([...authCommands, ...accountCommands]),
+);
+
+Command.run(dyad, { version: "0.0.0" }).pipe(
+  Effect.provide(NodeServices.layer),
+  NodeRuntime.runMain,
+);

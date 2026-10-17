@@ -1,0 +1,19 @@
+{
+  "name": "@dyad/plugin-apple-music",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dyad/domain": "workspace:*",
+    "@dyad/plugin": "workspace:*",
+    "@li0ard/widevine": "catalog:",
+    "effect": "catalog:"
+  }
+}

@@ -1,7 +1,7 @@
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
 import { CoreWorkerRpc, WorkerDescriptor } from "@dyad/domain";
 import { BrowserWorkerRunner } from "@effect/platform-browser";
-import { Effect, Layer, Predicate } from "effect";
+import { Effect, Layer, Option, Predicate } from "effect";
 import { RpcServer } from "effect/rpc";
 
 const handlers = CoreWorkerRpc.toLayer({
@@ -24,7 +24,10 @@ const handlers = CoreWorkerRpc.toLayer({
 const worker = RpcServer.layer(CoreWorkerRpc).pipe(
   Layer.provide(handlers),
   Layer.provide(
-    serverConnectionLayer(import.meta.env.VITE_DYAD_SERVER_URL || globalThis.location.origin),
+    serverConnectionLayer(
+      import.meta.env.VITE_DYAD_SERVER_URL || globalThis.location.origin,
+      Option.none(),
+    ),
   ),
   Layer.provide(RpcServer.layerProtocolWorkerRunner),
   Layer.provide(BrowserWorkerRunner.layer),

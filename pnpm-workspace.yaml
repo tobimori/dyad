@@ -32,9 +32,12 @@ catalog:
   portless: 0.15.8
   env-paths: 4.0.0
   node-av: 6.1.1
+  "@li0ard/widevine": 0.1.6
 
 overrides:
   "vite@*": npm:@voidzero-dev/vite-plus-core@1.3.0
+  # Widevine 0.1.6 calls `cmac(key, message)`; noble-ciphers 2.4.0 reverses these arguments
+  "@li0ard/widevine@0.1.6>@noble/ciphers": 2.1.1
 
 # Vite+ core reports the toolchain version while implementing Vite 8.
 peerDependencyRules:

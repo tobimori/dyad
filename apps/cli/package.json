@@ -18,6 +18,7 @@
     "@opentui/core": "catalog:",
     "@opentui/react": "catalog:",
     "effect": "catalog:",
+    "env-paths": "catalog:",
     "react": "catalog:"
   },
   "devDependencies": {

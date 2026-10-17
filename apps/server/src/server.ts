@@ -4,8 +4,9 @@ import { createServer } from "node:http";
 import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
 import { ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
+import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
-import { ServerIdentity, pluginLayer, serverRoutes } from "@dyad/server-core";
+import { ServerIdentity, coreServicesLayer, pluginLayer, serverRoutes } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -13,7 +14,7 @@ import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } fro
 import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";
 
-const builtinPlugins: ReadonlyArray<Plugin> = [localFilesPlugin];
+const builtinPlugins: ReadonlyArray<Plugin> = [localFilesPlugin, appleMusicPlugin];
 
 export const serverLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -60,6 +61,6 @@ export const serverLayer = Layer.unwrap(
       HttpRouter.serve(routes).pipe(
         Layer.provide(NodeHttpServer.layer(() => createServer(), { host: "127.0.0.1", port })),
       ),
-    ).pipe(Layer.provide(database));
+    ).pipe(Layer.provide(coreServicesLayer.pipe(Layer.provideMerge(database))));
   }),
 );

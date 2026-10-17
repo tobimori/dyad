@@ -21,7 +21,9 @@
   "devDependencies": {
     "@dyad/oxlint": "workspace:*",
     "@effect/tsgo": "catalog:",
+    "@li0ard/widevine": "catalog:",
     "@types/node": "catalog:",
+    "effect": "catalog:",
     "portless": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

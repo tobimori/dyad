@@ -1,11 +1,13 @@
-import { libraryRoot, localFile, source, sourceVariant } from "@dyad/db";
+import { libraryRoot, localFile, providerAccount, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { SourceSummary } from "@dyad/domain";
-import { encodeFlac, readAudioFile } from "@dyad/media/node";
+import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
+import { readAudioFile } from "@dyad/media/node";
 import type { AudioFile } from "@dyad/media/node";
-import { eq } from "drizzle-orm";
+import type { ProviderSource } from "@dyad/plugin";
+import { eq, inArray, isNotNull, or } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path, Schema } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/http";
+
+import { SourceResolvers } from "./playback.ts";
 
 // Every catalog ID depends on this namespace; it must never change
 const namespaceHex = "5162e6fc8cee458490d95da3fb86a603";
@@ -157,20 +159,67 @@ export const syncLibraryRoot = (rootPath: string, paths: ReadonlyArray<string>) 
     );
   });
 
+export const addProviderSource = (providerSource: ProviderSource) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const sourceId = yield* uuidV5(`${providerSource.provider}:${providerSource.externalId}`);
+    const variantId = yield* uuidV5(`${sourceId}:variant`);
+    const sourceRow = {
+      provider: providerSource.provider,
+      externalId: providerSource.externalId,
+      kind: "stream" as const,
+      rawTitle: providerSource.title,
+      rawArtist: providerSource.artist,
+      rawAlbum: providerSource.album,
+      rawDurationMs: providerSource.durationMs,
+      ...projection,
+    };
+    const variantRow = {
+      sourceId,
+      codec: providerSource.codec,
+      container: providerSource.container,
+      lossless: providerSource.lossless,
+      encrypted: providerSource.encrypted,
+    };
+
+    yield* db.transaction((tx) =>
+      Effect.gen(function* () {
+        yield* tx
+          .insert(source)
+          .values({ id: sourceId, ...sourceRow })
+          .onConflictDoUpdate({ target: source.id, set: sourceRow });
+        yield* tx
+          .insert(sourceVariant)
+          .values({ id: variantId, ...variantRow })
+          .onConflictDoUpdate({ target: sourceVariant.id, set: variantRow });
+      }),
+    );
+  });
+
 const Tags = Schema.Record(Schema.String, Schema.String);
 
 // Tags such as `3/12` give the position and the total
 const position = (tags: typeof Tags.Type, key: string, fallback: number) =>
   Number.parseInt(tags[key] ?? "", 10) || fallback;
 
-/** Sources with a file on this replica, in album order */
+/** Sources with a file on this replica, or with a resolver and an account of the user, in album order */
 export const listSources = Effect.gen(function* () {
   const db = yield* Database;
+  const principal = yield* CurrentPrincipal;
+  const resolvers = yield* SourceResolvers;
+  const accounts = yield* db
+    .select({ provider: providerAccount.provider })
+    .from(providerAccount)
+    .where(eq(providerAccount.userId, principal.userId));
+  const playableProviders = accounts
+    .map((account) => account.provider)
+    .filter((provider) => resolvers.has(provider));
   const rows = yield* db
     .select({ source, variant: sourceVariant, tags: localFile.tags })
-    .from(localFile)
-    .innerJoin(source, eq(source.id, localFile.sourceId))
-    .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id));
+    .from(source)
+    .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
+    .leftJoin(localFile, eq(localFile.sourceId, source.id))
+    .where(or(isNotNull(localFile.id), inArray(source.provider, playableProviders)));
   const unique = [...new Map(rows.map((row) => [row.source.id, row] as const)).values()];
 
   return unique
@@ -199,34 +248,3 @@ export const listSources = Effect.gen(function* () {
     )
     .map((entry) => entry.summary);
 });
-
-// The CLI player decodes only these codecs. Other files are converted to FLAC, which is lossless.
-const directTypes = new Map([
-  ["flac", "audio/flac"],
-  ["mp3", "audio/mpeg"],
-]);
-
-export const streamRoute = HttpRouter.add(
-  "GET",
-  "/stream/:sourceId",
-  Effect.gen(function* () {
-    const { sourceId } = yield* HttpRouter.schemaPathParams(
-      Schema.Struct({ sourceId: Schema.String }),
-    );
-    const db = yield* Database;
-    const path = yield* Path.Path;
-    const [row] = yield* db
-      .select({ root: libraryRoot.path, file: localFile.path, codec: sourceVariant.codec })
-      .from(localFile)
-      .innerJoin(libraryRoot, eq(libraryRoot.id, localFile.libraryRootId))
-      .innerJoin(sourceVariant, eq(sourceVariant.sourceId, localFile.sourceId))
-      .where(eq(localFile.sourceId, sourceId))
-      .limit(1);
-    if (row === undefined) return HttpServerResponse.empty({ status: 404 });
-
-    const filePath = path.join(row.root, row.file);
-    const contentType = directTypes.get(row.codec);
-    if (contentType !== undefined) return yield* HttpServerResponse.file(filePath, { contentType });
-    return HttpServerResponse.stream(encodeFlac(filePath), { contentType: "audio/flac" });
-  }).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.empty({ status: 500 })))),
-);

@@ -1,13 +1,29 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- WebCrypto cannot hash a stream incrementally
 import { createHash } from "node:crypto";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- `node-av` writes muxer output to a Node `Writable`
+import { once } from "node:events";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- `node-av` muxer output buffers in a Node stream
 import { PassThrough, Readable } from "node:stream";
 
 import { Data, Effect, Schema, Stream } from "effect";
 import { Log, avGetCodecName } from "node-av";
 import type { CodecParameters } from "node-av";
-import { Decoder, Demuxer, Encoder, FilterAPI, Muxer, pipeline } from "node-av/api";
-import { AV_CODEC_PROP_LOSSLESS, AV_LOG_ERROR, FF_ENCODER_FLAC } from "node-av/constants";
+import {
+  BitStreamFilterAPI,
+  Decoder,
+  Demuxer,
+  Encoder,
+  FilterAPI,
+  Muxer,
+  pipeline,
+} from "node-av/api";
+import type { PipelineControl } from "node-av/api";
+import {
+  AVERROR_EPIPE,
+  AV_CODEC_ID_AAC,
+  AV_CODEC_PROP_LOSSLESS,
+  AV_LOG_ERROR,
+  FF_ENCODER_FLAC,
+} from "node-av/constants";
 
 // FFmpeg writes its log to stderr directly. Its warnings, such as the FLAC header that cannot be
 // rewritten in a stream, are expected.
@@ -43,20 +59,35 @@ const bitDepthOf = (parameters: CodecParameters) => {
   return null;
 };
 
-const openAudio = (path: string) =>
+/** A byte stream for FFmpeg. The caller owns `bytes` and closes it after the media stream ends. */
+export class MediaStream extends Data.Class<{
+  /** Names the input in errors. A provider stream can come from a signed URL, so use an ID. */
+  readonly name: string;
+  readonly bytes: Readable;
+  /** FFmpeg demuxer name, for example `mov` */
+  readonly format: string;
+  /** Demuxer options, for example a CENC `decryption_key` */
+  readonly options: Readonly<Record<string, string>>;
+}> {}
+
+const openAudio = (media: string | MediaStream) =>
   Effect.gen(function* () {
+    const name = media instanceof MediaStream ? media.name : media;
     const input = yield* Effect.acquireRelease(
       Effect.tryPromise({
-        try: () => Demuxer.open(path),
-        catch: (cause) => new MediaError({ path, reason: String(cause) }),
+        try: () =>
+          media instanceof MediaStream
+            ? Demuxer.open(media.bytes, { format: media.format, options: { ...media.options } })
+            : Demuxer.open(media),
+        catch: (cause) => new MediaError({ path: name, reason: String(cause) }),
       }),
       (input) => Effect.promise(() => input.close()),
     );
     const stream = input.audio();
     if (stream === undefined) {
-      return yield* new MediaError({ path, reason: "No audio stream" });
+      return yield* new MediaError({ path: name, reason: "No audio stream" });
     }
-    return { input, stream };
+    return { input, stream, name };
   });
 
 export const readAudioFile = (path: string) =>
@@ -101,12 +132,93 @@ export const readAudioFile = (path: string) =>
     }),
   );
 
-/** Decodes any audio file and encodes it as a FLAC stream */
-export const encodeFlac = (path: string) =>
+// Finalizers run in reverse order: the producer stops, then the muxer closes, then the caller's
+// decoder and input close. `node-av` 6.1.1 closes the muxer only after a successful pipeline.
+const muxStream = (
+  path: string,
+  muxer: { readonly format: string; readonly options?: Record<string, string> },
+  run: (output: Muxer) => PipelineControl,
+) =>
+  Effect.gen(function* () {
+    const body = new PassThrough();
+    const write = (buffer: Buffer) => {
+      // `node-av` 6.1.1 waits for `drain` forever on a destroyed `Writable`, so the trailer that
+      // `Muxer.close` writes after a failure or disconnect would block the close
+      if (body.destroyed) return AVERROR_EPIPE;
+      // FFmpeg reuses the buffer after the callback returns
+      if (body.write(Buffer.from(buffer))) return buffer.length;
+      return once(body, "drain").then(() => buffer.length);
+    };
+    const output = yield* Effect.acquireRelease(
+      Effect.tryPromise({
+        // One stream needs no interleaving. The sync queue that `node-av` 6.1.1 uses for stream
+        // copy leaks the native `AVPacket` that `SyncQueue.send` clones for each packet.
+        try: () => Muxer.open({ write }, { ...muxer, useSyncQueue: false }),
+        catch: (cause) => new MediaError({ path, reason: String(cause) }),
+      }),
+      (output) => Effect.promise(() => output.close()),
+    );
+    const control = run(output);
+    control.completion.then(
+      () => body.end(),
+      (cause: unknown) => body.destroy(cause instanceof Error ? cause : new Error(String(cause))),
+    );
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(() => {
+        control.stop();
+        // Only an `error` event releases a write that waits for `drain`
+        if (!body.destroyed) body.destroy(new Error("Playback closed"));
+        return control.completion.catch(() => undefined);
+      }),
+    );
+    return Stream.fromReadableStream({
+      // SAFETY: a `PassThrough` without an encoding gives `Buffer` chunks, which are `Uint8Array`
+      evaluate: () => Readable.toWeb(body) as ReadableStream<Uint8Array>,
+      onError: (cause) => new MediaError({ path, reason: String(cause) }),
+      // The pipeline finalizer closes the producer before awaiting its completion
+      releaseLockOnEnd: true,
+    });
+  });
+
+/** Copies encoded audio into a streamable container without decoding or re-encoding */
+export const remuxAudio = (media: string | MediaStream, container: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const { input, stream } = yield* openAudio(path);
-      const fail = (cause: unknown) => new MediaError({ path, reason: String(cause) });
+      const { input, stream, name } = yield* openAudio(media);
+      // Fragmented MP4 needs no seek back to the header. `delay_moov` writes the header after the
+      // first packets, when the AAC configuration from the filter below is known.
+      const muxer =
+        container === "mp4"
+          ? {
+              format: container,
+              options: { movflags: "delay_moov+default_base_moof", frag_duration: "1000000" },
+            }
+          : { format: container };
+      // MP4 stores the AAC configuration in its header, ADTS in each frame. `node-av` 6.1.1 does
+      // not add this filter automatically. It passes MP4 input through unchanged.
+      const audio =
+        container === "mp4" && stream.codecpar.codecId === AV_CODEC_ID_AAC
+          ? [
+              yield* Effect.acquireRelease(
+                Effect.try({
+                  try: () => BitStreamFilterAPI.create("aac_adtstoasc", stream),
+                  catch: (cause) => new MediaError({ path: name, reason: String(cause) }),
+                }),
+                (filter) => Effect.sync(() => filter.close()),
+              ),
+            ]
+          : "passthrough";
+      // Only the audio stream: cover art is a video stream that most audio containers reject
+      return yield* muxStream(name, muxer, (output) => pipeline(input, { audio }, output));
+    }),
+  );
+
+/** Decodes any audio file and encodes it as a FLAC stream */
+export const encodeFlac = (media: string | MediaStream) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const { input, stream, name } = yield* openAudio(media);
+      const fail = (cause: unknown) => new MediaError({ path: name, reason: String(cause) });
       // Lossy decoders give float samples; 16 bits keep their quality at a smaller size
       const sampleFormat = (bitDepthOf(stream.codecpar) ?? 16) > 16 ? "s32" : "s16";
       const decoder = yield* Effect.acquireRelease(
@@ -124,28 +236,8 @@ export const encodeFlac = (path: string) =>
         }),
         (encoder) => Effect.sync(() => encoder.close()),
       );
-      const body = new PassThrough();
-      const output = yield* Effect.tryPromise({
-        try: () => Muxer.open(body, { format: "flac" }),
-        catch: fail,
-      });
-      const control = pipeline(input, decoder, filter, encoder, output);
-      control.completion.then(
-        () => body.end(),
-        (cause: unknown) => body.destroy(cause instanceof Error ? cause : new Error(String(cause))),
+      return yield* muxStream(name, { format: "flac" }, (output) =>
+        pipeline(input, decoder, filter, encoder, output),
       );
-      // Runs when the client disconnects before the end
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(() => {
-          control.stop();
-          return control.completion.catch(() => undefined);
-        }),
-      );
-
-      return Stream.fromReadableStream({
-        // SAFETY: a `PassThrough` without an encoding gives `Buffer` chunks, which are `Uint8Array`
-        evaluate: () => Readable.toWeb(body) as ReadableStream<Uint8Array>,
-        onError: fail,
-      });
     }),
   );

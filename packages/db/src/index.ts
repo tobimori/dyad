@@ -1,4 +1,6 @@
+export * from "./schema/account.ts";
 export * from "./schema/assertion.ts";
+export * from "./schema/auth.ts";
 export * from "./schema/catalog.ts";
 export * from "./schema/local.ts";
 export * from "./schema/replica.ts";
