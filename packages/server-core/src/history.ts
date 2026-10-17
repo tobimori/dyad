@@ -1,7 +1,7 @@
 import { playEvent, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal } from "@dyad/domain";
-import type { PlayContext } from "@dyad/domain";
+import type { DeviceId, PlayContext, UserId } from "@dyad/domain";
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { Crypto, Effect } from "effect";
 
@@ -9,7 +9,9 @@ import { playableSources, sourceSummary } from "./sources.ts";
 
 const recentPlayLimit = 100;
 
-export const recordPlay = (play: {
+export const insertPlay = (play: {
+  readonly userId: UserId;
+  readonly deviceId: DeviceId;
   readonly sourceId: string;
   readonly startedAt: number;
   readonly playedMs: number;
@@ -19,15 +21,20 @@ export const recordPlay = (play: {
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
-    const principal = yield* CurrentPrincipal;
     const id = yield* crypto.randomUUIDv7().pipe(Effect.orDie);
+    yield* db.insert(playEvent).values({ id, ...play });
+  });
 
-    yield* db.insert(playEvent).values({
-      id,
-      userId: principal.userId,
-      deviceId: principal.deviceId,
-      ...play,
-    });
+export const recordPlay = (play: {
+  readonly sourceId: string;
+  readonly startedAt: number;
+  readonly playedMs: number;
+  readonly completed: boolean;
+  readonly context: typeof PlayContext.Type;
+}) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentPrincipal;
+    yield* insertPlay({ userId: principal.userId, deviceId: principal.deviceId, ...play });
   });
 
 /** The playable sources of the user's last plays, newest play first, one entry per source */

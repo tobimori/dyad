@@ -26,6 +26,7 @@ import {
   Cause,
   Clock,
   Context,
+  Crypto,
   Data,
   Effect,
   Exit,
@@ -40,6 +41,7 @@ import {
   Stream,
 } from "effect";
 
+import { insertPlay } from "./history.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSessions, saveSession } from "./session-store.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
@@ -103,8 +105,19 @@ const removalSplices = (indexes: ReadonlyArray<number>) =>
     .toReversed()
     .map((run) => new QueueSplice({ ...run, insert: [] }));
 
-const makeSession = (initial: SessionState) =>
+// The play of the current entry since the output started it
+class OpenPlay extends Data.Class<{
+  readonly entry: QueueEntry;
+  readonly deviceId: DeviceId;
+  readonly startedAt: number;
+  readonly playedMs: number;
+  // `null` while the clock stands
+  readonly resumedAt: number | null;
+}> {}
+
+const makeSession = (userId: UserId, initial: SessionState) =>
   Effect.gen(function* () {
+    const services = yield* Effect.context<Database | Crypto.Crypto>();
     const lock = yield* Semaphore.make(1);
     // Changed only under `lock`
     const state = {
@@ -121,6 +134,9 @@ const makeSession = (initial: SessionState) =>
       requests: new Map<string, RememberedResult>(),
       // Changed since the last save
       dirty: false,
+      play: Option.none<OpenPlay>(),
+      // The entry that ended by itself in this change. Its play is complete.
+      ended: Option.none<EntryId>(),
     };
 
     const broadcast = (event: Event) => {
@@ -200,6 +216,64 @@ const makeSession = (initial: SessionState) =>
       return state.players.has(own) ? own : current;
     };
 
+    const playedUntil = (play: OpenPlay, now: number) =>
+      play.resumedAt === null ? play.playedMs : play.playedMs + now - play.resumedAt;
+
+    const endPlay = (play: OpenPlay, now: number, completed: boolean) => {
+      state.play = Option.none();
+      return insertPlay({
+        userId,
+        deviceId: play.deviceId,
+        sourceId: play.entry.source.id,
+        startedAt: play.startedAt,
+        playedMs: playedUntil(play, now),
+        completed,
+        context: play.entry.context,
+      }).pipe(
+        orDieOnDatabaseError("insertPlay"),
+        Effect.catchCause((cause) => Effect.logError("Cannot record a play", cause)),
+        Effect.provide(services),
+      );
+    };
+
+    // A play ends when its entry stops being current or ends by itself. Its time counts while the
+    // clock of the session runs.
+    const trackPlay = (now: number) =>
+      Effect.gen(function* () {
+        const playback = state.playback;
+        const ended = state.ended;
+        state.ended = Option.none();
+
+        if (Option.isSome(state.play)) {
+          const play = state.play.value;
+          const playedMs = playedUntil(play, now);
+          const completed = Option.contains(ended, play.entry.id);
+
+          if (completed || playback.entryId !== play.entry.id || playback.state === "stopped") {
+            yield* endPlay(play, now, completed);
+          } else if (playback.rate === 0 && play.resumedAt !== null) {
+            state.play = Option.some(new OpenPlay({ ...play, playedMs, resumedAt: null }));
+          } else if (playback.rate === 1 && play.resumedAt === null) {
+            state.play = Option.some(new OpenPlay({ ...play, resumedAt: now }));
+          }
+        }
+
+        const entry = currentEntry();
+        const output =
+          playback.outputId === null ? undefined : state.players.get(playback.outputId);
+        if (Option.isNone(state.play) && playback.rate === 1 && entry && output) {
+          state.play = Option.some(
+            new OpenPlay({
+              entry,
+              deviceId: output.connection.deviceId,
+              startedAt: now,
+              playedMs: 0,
+              resumedAt: now,
+            }),
+          );
+        }
+      });
+
     // Runs `change` under the lock and publishes the new playback once
     const modify = <A, E>(change: (now: number) => Effect.Effect<A, E>) =>
       lock.withPermits(1)(
@@ -209,6 +283,7 @@ const makeSession = (initial: SessionState) =>
           const queueVersion = state.queueVersion;
           const exit = yield* Effect.exit(change(now));
           if (state.playback !== before || state.queueVersion !== queueVersion) state.dirty = true;
+          yield* trackPlay(now);
 
           if (state.playback !== before) {
             // The output gets `lostAfterMs` to report after each new transport
@@ -627,6 +702,17 @@ const makeSession = (initial: SessionState) =>
               const moving = playback.state === "playing" && playback.rate === 1;
               if (received.entryId === current && moving && drift < 1000) return;
 
+              // Under repeat, the output can also start the same entry again by itself
+              const durationMs = currentEntry()?.source.durationMs ?? null;
+              const loops =
+                next?.id === current &&
+                moving &&
+                durationMs !== null &&
+                expected > durationMs - 5000 &&
+                received.positionMs < 5000;
+              if (received.entryId !== current || loops) {
+                state.ended = Option.fromNullishOr(current);
+              }
               setPlayback({ state: "playing", entryId: received.entryId, rate: 1, ...anchor });
             }),
             Match.whenOr("paused", "buffering", (reported) => {
@@ -639,6 +725,7 @@ const makeSession = (initial: SessionState) =>
             }),
             Match.when("ended", () => {
               if (received.entryId !== current) return;
+              state.ended = Option.some(current);
               if (next === undefined) stop(null, now);
               else setPlayback({ entryId: next.id, positionMs: 0, at: now, rate: 0 });
             }),
@@ -798,6 +885,14 @@ const makeSession = (initial: SessionState) =>
       }),
     );
 
+    /** Records the open play, at shutdown */
+    const endOpenPlay = lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (Option.isNone(state.play)) return;
+        yield* endPlay(state.play.value, yield* Clock.currentTimeMillis, false);
+      }),
+    );
+
     /** The state to save when it changed since the last call. With `all`, a moving position counts. */
     const changes = (all: boolean) =>
       lock.withPermits(1)(
@@ -823,18 +918,22 @@ const makeSession = (initial: SessionState) =>
         }),
       );
 
-    return { connect, control, report, removeDevice, tick, changes };
+    return { connect, control, report, removeDevice, tick, endOpenPlay, changes };
   });
 
 type Session = Effect.Success<ReturnType<typeof makeSession>>;
 
 const makeSessions = Effect.gen(function* () {
   const db = yield* Database;
+  const services = yield* Effect.context<Effect.Services<ReturnType<typeof makeSession>>>();
   const sessions = new Map<UserId, Session>();
   const creating = yield* Semaphore.make(1);
 
+  const create = (userId: UserId, state: SessionState) =>
+    makeSession(userId, state).pipe(Effect.provide(services));
+
   for (const [userId, state] of yield* loadSessions)
-    sessions.set(userId, yield* makeSession(state));
+    sessions.set(userId, yield* create(userId, state));
 
   const save = (userId: UserId, session: Session, all: boolean) =>
     session.changes(all).pipe(
@@ -856,7 +955,7 @@ const makeSessions = Effect.gen(function* () {
 
       return creating.withPermits(1)(
         Effect.gen(function* () {
-          const created = sessions.get(userId) ?? (yield* makeSession(emptyState));
+          const created = sessions.get(userId) ?? (yield* create(userId, emptyState));
           sessions.set(userId, created);
           return created;
         }),
@@ -865,7 +964,9 @@ const makeSessions = Effect.gen(function* () {
 
   // Registered before the ticker, so that it runs after the ticker stopped
   yield* Effect.addFinalizer(() =>
-    Effect.forEach(sessions, ([userId, session]) => save(userId, session, true)),
+    Effect.forEach(sessions, ([userId, session]) =>
+      session.endOpenPlay.pipe(Effect.andThen(save(userId, session, true))),
+    ),
   );
 
   // Saves happen at most once a second
