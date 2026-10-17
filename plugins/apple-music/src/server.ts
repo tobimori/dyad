@@ -142,6 +142,22 @@ export const appleMusicPlugin = new Plugin({
           return new ProviderAudio({ bytes, decryptionKeys });
         }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
 
+      // Keys that are not in memory, for example after a restart, need the asset again for the
+      // license exchange
+      const keys = (songId: string, credentials: Credentials) =>
+        Effect.gen(function* () {
+          const token = yield* mediaUserToken(credentials);
+          const cached = yield* Cache.getOption(songKeys, songId);
+          if (Option.isSome(cached)) return cached.value;
+
+          return yield* withSession(token, (session) =>
+            Effect.gen(function* () {
+              const playlistUrl = yield* resolveAacAsset(session, songId);
+              return yield* contentKeys(session, songId, playlistUrl);
+            }),
+          );
+        }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
+
       // The catalog needs only the web client token, but the storefront comes from the account
       const search = (query: string, credentials: Credentials) =>
         Effect.gen(function* () {
@@ -190,6 +206,7 @@ export const appleMusicPlugin = new Plugin({
         new Provider({
           name: "Apple Music",
           resolve,
+          keys,
           search,
           account: { login, link },
           library,

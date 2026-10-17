@@ -10,6 +10,7 @@ import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
 import {
+  MediaCacheConfig,
   ServerIdentity,
   coreServicesLayer,
   librarySyncLayer,
@@ -35,12 +36,16 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
 
 export const serverLayer = Layer.unwrap(
   Effect.gen(function* () {
-    const { dataDirectory, port, allowedOrigins } = yield* ServerConfig;
+    const { dataDirectory, port, allowedOrigins, mediaCacheBytes } = yield* ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
     yield* fs.makeDirectory(dataDirectory, { recursive: true });
     const database = nodeDatabaseLayer(path.join(dataDirectory, "replica.sqlite"));
+    const mediaCacheConfig = Layer.succeed(MediaCacheConfig, {
+      directory: path.join(dataDirectory, "media"),
+      maxBytes: mediaCacheBytes,
+    });
     const identity = Layer.effect(
       ServerIdentity,
       ReplicaDatabase.use((value) =>
@@ -87,7 +92,11 @@ export const serverLayer = Layer.unwrap(
       ),
     ).pipe(
       Layer.provide(
-        coreServicesLayer.pipe(Layer.provideMerge(hlcClock), Layer.provideMerge(database)),
+        coreServicesLayer.pipe(
+          Layer.provide(mediaCacheConfig),
+          Layer.provideMerge(hlcClock),
+          Layer.provideMerge(database),
+        ),
       ),
     );
   }),

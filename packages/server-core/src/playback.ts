@@ -25,13 +25,15 @@ import {
   Layer,
   Option,
   Path,
+  PlatformError,
   Redacted,
   Schema,
   Stream,
 } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
-import { fromHex, hex } from "./ids.ts";
+import { fromHex, hex, variantId } from "./ids.ts";
+import { MediaCache, PrefetchItem } from "./media-cache.ts";
 import { SourceFormat, audioContainer, choosePlayback, contentTypes } from "./playback-formats.ts";
 import { cachedProviderSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
@@ -106,7 +108,13 @@ class ProviderPlayback extends Data.Class<{
   readonly format: SourceFormat;
   /** FFmpeg demuxer for the resolved bytes */
   readonly demuxer: string;
+  readonly provider: string;
+  /** The variant that the media cache keeps the audio as, or `null` when it must not keep it */
+  readonly cacheId: string | null;
   readonly resolve: Effect.Effect<ProviderAudio, ProviderError>;
+  readonly keys:
+    | Effect.Effect<Redacted.Redacted<ReadonlyMap<string, string>>, ProviderError>
+    | undefined;
 }> {}
 
 const selectSource = (sourceId: string) =>
@@ -127,8 +135,11 @@ const providerPlayback = (
   item: {
     readonly provider: string;
     readonly externalId: string;
+    readonly kind: string;
+    readonly variantId: string;
     readonly container: string;
     readonly codec: string;
+    readonly encrypted: boolean;
   },
   userId: UserId,
 ) =>
@@ -143,22 +154,22 @@ const providerPlayback = (
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
 
+    const keys = usable.provider.keys;
+    // A live source does not end. Encrypted audio on disk needs a way to get its keys again.
+    const cacheable = item.kind === "stream" && (!item.encrypted || keys !== undefined);
     return new ProviderPlayback({
       format: new SourceFormat({ container: audioContainer(item.container), codec: item.codec }),
       demuxer: item.container,
+      provider: item.provider,
+      cacheId: cacheable ? item.variantId : null,
       resolve: usable.provider.resolve(item.externalId, usable.credentials),
+      keys: keys?.(item.externalId, usable.credentials),
     });
   });
 
-/**
- * How the user can play the source in one of the `capabilities` formats. A search result enters
- * the shared catalog here, but only when the user can play it.
- */
-const choosePlayableSource = (
-  sourceId: string,
-  userId: UserId,
-  capabilities: PlaybackCapabilities,
-) =>
+// How the user can play the source. A search result is not in the catalog yet, so it comes with
+// its cached search result.
+const findPlayableSource = (sourceId: string, userId: UserId) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
 
@@ -171,15 +182,15 @@ const choosePlayableSource = (
         {
           provider: cached.value.provider,
           externalId: cached.value.source.externalId,
+          kind: "stream",
+          variantId: yield* variantId(sourceId),
           container: cached.value.source.container,
           codec: cached.value.source.codec,
+          encrypted: cached.value.source.encrypted,
         },
         userId,
       );
-      const choice = yield* choosePlayback(playable.format, capabilities);
-
-      yield* addProviderSource(cached.value);
-      return { playable, choice };
+      return { playable, searchResult: cached };
     }
 
     const playable =
@@ -195,13 +206,31 @@ const choosePlayableSource = (
             {
               provider: row.source.provider,
               externalId: row.source.externalId,
+              kind: row.source.kind,
+              variantId: row.variant.id,
               container: row.variant.container,
               codec: row.variant.codec,
+              encrypted: row.variant.encrypted,
             },
             userId,
           );
+    return { playable, searchResult: Option.none() };
+  });
+
+/**
+ * How the user can play the source in one of the `capabilities` formats. A search result enters
+ * the shared catalog here, but only when the user can play it.
+ */
+const choosePlayableSource = (
+  sourceId: string,
+  userId: UserId,
+  capabilities: PlaybackCapabilities,
+) =>
+  Effect.gen(function* () {
+    const { playable, searchResult } = yield* findPlayableSource(sourceId, userId);
     const choice = yield* choosePlayback(playable.format, capabilities);
 
+    if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
     return { playable, choice };
   });
 
@@ -228,6 +257,33 @@ export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabili
     return new PlaybackPlan({ format: choice.format, path: `/stream/${sourceId}?${search}` });
   });
 
+class SourceAudio extends Data.Class<{
+  readonly bytes: Stream.Stream<Uint8Array, ProviderError | PlatformError.PlatformError>;
+  readonly decryptionKeys: Redacted.Redacted<ReadonlyMap<string, string>> | undefined;
+}> {}
+
+// Cached audio plays only with the keys of the asset in the file. Keys of another asset, for
+// example after the provider replaced the song's file, make it a cache miss.
+const cachedAudio = (playable: ProviderPlayback) =>
+  Effect.gen(function* () {
+    const cache = yield* MediaCache;
+    if (playable.cacheId === null) return Option.none();
+
+    const file = yield* cache.find(playable.cacheId);
+    if (Option.isNone(file)) return Option.none();
+
+    const bytes = cache.read(file.value);
+    if (file.value.keyIds.length === 0) {
+      return Option.some(new SourceAudio({ bytes, decryptionKeys: undefined }));
+    }
+    if (playable.keys === undefined) return Option.none();
+
+    const decryptionKeys = yield* playable.keys;
+    const keys = Redacted.value(decryptionKeys);
+    if (!file.value.keyIds.every((keyId) => keys.has(keyId))) return Option.none();
+    return Option.some(new SourceAudio({ bytes, decryptionKeys }));
+  });
+
 // The provider resolves before the response starts, so that a failure gives an error status
 const providerStream = <E>(
   playable: ProviderPlayback,
@@ -235,7 +291,18 @@ const providerStream = <E>(
   convert: (media: MediaStream) => Stream.Stream<Uint8Array, E>,
 ) =>
   Effect.gen(function* () {
-    const audio = yield* playable.resolve;
+    const cache = yield* MediaCache;
+    const cached = yield* cachedAudio(playable);
+    const audio = Option.isSome(cached)
+      ? cached.value
+      : yield* Effect.map(
+          playable.resolve,
+          (resolved) =>
+            new SourceAudio({
+              bytes: cache.download(playable.provider, playable.cacheId, resolved),
+              decryptionKeys: resolved.decryptionKeys,
+            }),
+        );
     // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
     const keys =
       audio.decryptionKeys === undefined ? [] : [...Redacted.value(audio.decryptionKeys)];
@@ -260,6 +327,34 @@ const providerStream = <E>(
     );
   });
 
+/**
+ * Replaces the device's hint of the sources that it plays next. The media cache downloads them.
+ * It skips sources that the user cannot play and sources that it does not keep.
+ */
+export const prefetch = (sourceIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentPrincipal;
+    const cache = yield* MediaCache;
+
+    const items = yield* Effect.forEach(sourceIds, (sourceId) =>
+      findPlayableSource(sourceId, principal.userId).pipe(
+        Effect.map(({ playable }) =>
+          playable instanceof ProviderPlayback && playable.cacheId !== null
+            ? [
+                new PrefetchItem({
+                  variantId: playable.cacheId,
+                  provider: playable.provider,
+                  resolve: playable.resolve,
+                }),
+              ]
+            : [],
+        ),
+        Effect.catchTag("PlaybackUnavailable", () => Effect.succeed([])),
+      ),
+    );
+    yield* cache.hint(principal.deviceId, items.flat());
+  });
+
 const unavailableStatus = { not_found: 404, unsupported_format: 406, account_required: 403 };
 
 const StreamRequest = Schema.Struct({
@@ -270,6 +365,10 @@ const StreamRequest = Schema.Struct({
   device: DeviceId,
   expires: Schema.FiniteFromString,
   signature: Schema.String,
+  // Not in the signature: any start of a granted stream is allowed
+  start: Schema.optionalKey(
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
 });
 
 export const streamRoute = HttpRouter.add(
@@ -303,15 +402,18 @@ export const streamRoute = HttpRouter.add(
       new PlaybackCapabilities({ formats: [grant.format] }),
     );
     const contentType = contentTypes[choice.format.container];
+    const startMs = request.start ?? 0;
 
-    if (playable instanceof FilePlayback && choice.operation === "direct") {
+    if (playable instanceof FilePlayback && choice.operation === "direct" && startMs === 0) {
       return yield* HttpServerResponse.file(playable.path, { contentType });
     }
 
+    // An MP3 or ADTS remux cannot cut inside a frame. FLAC encodes without loss, so FLAC output
+    // with a start always encodes and starts at the exact sample.
     const convert = (media: string | MediaStream) =>
-      choice.operation === "transcode"
-        ? encodeFlac(media)
-        : remuxAudio(media, choice.format.container);
+      choice.operation === "transcode" || (startMs > 0 && choice.format.container === "flac")
+        ? encodeFlac(media, startMs)
+        : remuxAudio(media, choice.format.container, startMs);
 
     const body =
       playable instanceof FilePlayback

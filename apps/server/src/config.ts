@@ -21,6 +21,7 @@ const configuration = Effect.gen(function* () {
     dataDirectory: Config.NonEmptyString("DYAD_DATA_DIR").pipe(
       Config.withDefault(envPaths("dyad", { suffix: "" }).data),
     ),
+    mediaCacheMegabytes: Config.Int("DYAD_MEDIA_CACHE_MB").pipe(Config.withDefault(10 * 1024)),
   });
   const allowedOrigins = [...values.allowedOrigins];
   if (Option.isSome(values.publicUrl)) {
@@ -34,6 +35,7 @@ const configuration = Effect.gen(function* () {
     port,
     allowedOrigins: [...new Set(allowedOrigins)],
     dataDirectory: path.resolve(values.dataDirectory),
+    mediaCacheBytes: values.mediaCacheMegabytes * 1024 * 1024,
   };
 });
 

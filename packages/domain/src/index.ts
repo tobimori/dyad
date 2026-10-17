@@ -257,7 +257,10 @@ export class PlaybackCapabilities extends Schema.Class<PlaybackCapabilities>(
 
 export class PlaybackPlan extends Schema.Class<PlaybackPlan>("PlaybackPlan")({
   format: AudioFormat,
-  /** Relative URL for the negotiated stream */
+  /**
+   * Relative URL for the negotiated stream. The query parameter `start=<ms>` starts it at that
+   * position; MP3 and ADTS output can start some frames early.
+   */
   path: Schema.String,
 }) {}
 
@@ -440,6 +443,13 @@ const UserRpc = RpcGroup.make(
     },
     success: PlaybackPlan,
     error: PlaybackUnavailable,
+  }),
+  // The sources that the device plays next, in play order. The server downloads them into its media
+  // cache. Each call replaces the device's earlier list; an empty list cancels it.
+  Rpc.make("prefetch", {
+    payload: {
+      sourceIds: Schema.Array(Schema.String.check(Schema.isUUID())).check(Schema.isMaxLength(3)),
+    },
   }),
   // Records one play when the source ends, or when the user skips it, plays another or quits
   Rpc.make("recordPlay", {

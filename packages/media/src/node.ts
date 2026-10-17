@@ -5,23 +5,17 @@ import { once } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 
 import { Data, Effect, Redacted, Schema, Stream } from "effect";
-import { Log, avGetCodecName } from "node-av";
-import type { CodecParameters } from "node-av";
-import {
-  BitStreamFilterAPI,
-  Decoder,
-  Demuxer,
-  Encoder,
-  FilterAPI,
-  Muxer,
-  pipeline,
-} from "node-av/api";
+import { Log, avGetCodecName, avRescaleQ } from "node-av";
+import type { CodecParameters, Packet, Stream as AvStream } from "node-av";
+import { BitStreamFilterAPI, Decoder, Demuxer, Encoder, FilterAPI, Muxer } from "node-av/api";
 import type { PipelineControl } from "node-av/api";
 import {
   AVERROR_EPIPE,
   AV_CODEC_ID_AAC,
+  AV_CODEC_ID_OPUS,
   AV_CODEC_PROP_LOSSLESS,
   AV_LOG_ERROR,
+  AV_NOPTS_VALUE,
   FF_ENCODER_FLAC,
 } from "node-av/constants";
 
@@ -140,12 +134,33 @@ export const readAudioFile = (path: string) =>
     }),
   );
 
+// Writes the packets of one output stream and closes the muxer at the end of the input
+const writePackets = (output: Muxer, index: number, packets: AsyncIterable<Packet | null>) => {
+  const stopped = new AbortController();
+  // @effect-diagnostics-next-line asyncFunction:off -- `muxStream` closes the muxer only after the last native write returns, and an interrupted fiber does not wait for its promise
+  const write = async () => {
+    for await (const packet of packets) {
+      if (stopped.signal.aborted) {
+        packet?.free();
+        break;
+      }
+      try {
+        await output.writePacket(packet, index);
+      } finally {
+        packet?.free();
+      }
+    }
+    await output.close();
+  };
+  return { stop: () => stopped.abort(), completion: write() };
+};
+
 // Finalizers run in reverse order: the producer stops, then the muxer closes, then the caller's
-// decoder and input close. `node-av` 6.1.1 closes the muxer only after a successful pipeline.
+// decoder and input close. `writePackets` does not close the muxer when a write fails.
 const muxStream = (
   name: string,
   muxer: { readonly format: string; readonly options?: Record<string, string> },
-  run: (output: Muxer) => PipelineControl,
+  run: (output: Muxer) => Pick<PipelineControl, "stop" | "completion">,
 ) =>
   Effect.gen(function* () {
     const body = new PassThrough();
@@ -189,14 +204,77 @@ const muxStream = (
     });
   });
 
-/** Copies encoded audio into a streamable container without decoding or re-encoding */
-export const remuxAudio = (media: string | MediaStream, container: string) =>
+// Positions count from the first sample that a full decode gives. FFmpeg puts the start time of
+// the stream after the encoder priming, for example the MP3 LAME delay or the MP4 edit list.
+const startTimestamp = (stream: AvStream, startMs: number) =>
+  (stream.startTime === AV_NOPTS_VALUE ? 0n : stream.startTime) +
+  avRescaleQ(startMs, { num: 1, den: 1000 }, stream.timeBase);
+
+// Lossy frames overlap the frame before them, and an MP3 frame can use 511 bytes of earlier frames.
+// 1024 bytes of packets with their headers cover that; Opus needs 80 ms (RFC 7845, section 4.6).
+const isEnoughPreroll = (stream: AvStream, packets: ReadonlyArray<Packet>) => {
+  if (stream.codecpar.hasProperties(AV_CODEC_PROP_LOSSLESS)) return true;
+  if (packets.length === 0) return false;
+
+  const reservoirBytes = packets.slice(0, -1).reduce((sum, packet) => sum + packet.size, 0);
+  const duration = packets.reduce((sum, packet) => sum + packet.duration, 0n);
+  const opusPreroll = stream.codecpar.codecId === AV_CODEC_ID_OPUS ? 80 : 0;
+  return (
+    reservoirBytes >= 1024 &&
+    duration >= avRescaleQ(opusPreroll, { num: 1, den: 1000 }, stream.timeBase)
+  );
+};
+
+// The packet that contains `start`, the packets after it, and the packets before it that the
+// decoder needs to decode it correctly
+const packetsFrom = (name: string, input: Demuxer, stream: AvStream, start: bigint) =>
+  Stream.fromAsyncIterable(
+    input.packets(stream.index),
+    (cause) => new MediaError({ input: name, reason: String(cause) }),
+  ).pipe(
+    Stream.mapAccum(
+      () => Array.of<Packet>(),
+      (preroll, packet) => {
+        // The demuxer ends with `null`, so the preroll is always given to the consumer, which
+        // frees it
+        if (packet === null || packet.pts + packet.duration > start) {
+          return [Array.of<Packet>(), [...preroll, packet]] as const;
+        }
+
+        const window = [...preroll, packet];
+        while (window.length > 0 && isEnoughPreroll(stream, window.slice(1))) {
+          window.shift()?.free();
+        }
+        return [window, Array.of<Packet | null>()] as const;
+      },
+    ),
+  );
+
+/**
+ * Copies encoded audio into a streamable container without decoding or re-encoding. The output
+ * starts `startMs` into the audio.
+ */
+export const remuxAudio = (media: string | MediaStream, container: string, startMs = 0) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const { input, stream, name } = yield* openAudio(media);
+      const start = startTimestamp(stream, startMs);
+      // The preroll gets negative timestamps, which the MP4 edit list hides. MP3 and ADTS have no
+      // edit list, so their output starts with the preroll.
+      const packets = Stream.toAsyncIterable(
+        packetsFrom(name, input, stream, start).pipe(
+          Stream.tap((packet) =>
+            Effect.sync(() => {
+              if (packet === null) return;
+              packet.pts -= start;
+              packet.dts -= start;
+            }),
+          ),
+        ),
+      );
       // Fragmented MP4 needs no seek back to the header. `delay_moov` writes the header after the
-      // first packets, when the AAC configuration from the filter below is known. `frag_duration`
-      // is in microseconds, so each fragment has 1 second of audio.
+      // first packets, when the AAC configuration from the filter below and the edit list are
+      // known. `frag_duration` is in microseconds, so each fragment has 1 second of audio.
       const muxer =
         container === "mp4"
           ? {
@@ -216,22 +294,32 @@ export const remuxAudio = (media: string | MediaStream, container: string) =>
           (filter) => Effect.sync(() => filter.close()),
         );
         return yield* muxStream(name, muxer, (output) =>
-          pipeline(input, { audio: [filter] }, output),
+          writePackets(output, output.addStream(stream, { bsf: filter }), filter.packets(packets)),
         );
       }
 
       return yield* muxStream(name, muxer, (output) =>
-        pipeline(input, { audio: "passthrough" }, output),
+        writePackets(output, output.addStream(stream), packets),
       );
     }),
   );
 
-/** Decodes any audio file and encodes it as a FLAC stream */
-export const encodeFlac = (media: string | MediaStream) =>
+/**
+ * Decodes any audio file and encodes it as a FLAC stream. The output starts exactly `startMs`
+ * into the audio.
+ */
+export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const { input, stream, name } = yield* openAudio(media);
       const fail = (cause: unknown) => new MediaError({ input: name, reason: String(cause) });
+      const start = startTimestamp(stream, startMs);
+      // Decoding starts at the preroll before `start`, and `atrim` drops the decoded samples
+      // before it. Audio filters count time in samples.
+      const startSample = avRescaleQ(start, stream.timeBase, {
+        num: 1,
+        den: stream.codecpar.sampleRate,
+      });
       // Lossy decoders give float samples; 16 bits keep their quality at a smaller size
       const sampleFormat = (bitDepthOf(stream.codecpar) ?? 16) > 16 ? "s32" : "s16";
       const decoder = yield* Effect.acquireRelease(
@@ -239,7 +327,9 @@ export const encodeFlac = (media: string | MediaStream) =>
         (decoder) => Effect.sync(() => decoder.close()),
       );
       const filter = yield* Effect.acquireRelease(
-        Effect.sync(() => FilterAPI.create(`aformat=sample_fmts=${sampleFormat}`)),
+        Effect.sync(() =>
+          FilterAPI.create(`atrim=start_pts=${startSample},aformat=sample_fmts=${sampleFormat}`),
+        ),
         (filter) => Effect.sync(() => filter.close()),
       );
       const encoder = yield* Effect.acquireRelease(
@@ -249,8 +339,13 @@ export const encodeFlac = (media: string | MediaStream) =>
         }),
         (encoder) => Effect.sync(() => encoder.close()),
       );
+      const packets = encoder.packets(
+        filter.frames(
+          decoder.frames(Stream.toAsyncIterable(packetsFrom(name, input, stream, start))),
+        ),
+      );
       return yield* muxStream(name, { format: "flac" }, (output) =>
-        pipeline(input, decoder, filter, encoder, output),
+        writePackets(output, output.addStream(stream, { encoder }), packets),
       );
     }),
   );

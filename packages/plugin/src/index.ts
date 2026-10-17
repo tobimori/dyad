@@ -126,6 +126,14 @@ export class Provider extends Data.Class<{
     credentials: Credentials,
   ) => Effect.Effect<ProviderAudio, ProviderError>;
   /**
+   * Gives the `decryptionKeys` of `resolve` without the audio, for encrypted audio that the core
+   * cached. The core caches encrypted audio only from providers that have it.
+   */
+  readonly keys?: (
+    externalId: string,
+    credentials: Credentials,
+  ) => Effect.Effect<Redacted.Redacted<ReadonlyMap<string, string>>, ProviderError>;
+  /**
    * Searches the provider's catalog. The results are in the provider's order of relevance; the
    * core uses that order when it has no popularity. The core stops waiting after 8 seconds, token
    * refreshes and retries included.

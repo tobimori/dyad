@@ -19,7 +19,8 @@ import { listRecentPlays, recordPlay } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
-import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
+import { mediaCacheLayer } from "./media-cache.ts";
+import { prefetch, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { search } from "./search.ts";
@@ -27,6 +28,7 @@ import { listSources } from "./sources.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
 export { librarySyncLayer } from "./library-sync.ts";
+export { MediaCacheConfig } from "./media-cache.ts";
 export { pluginLayer } from "./plugin.ts";
 
 export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescriptor>()(
@@ -40,6 +42,7 @@ export const coreServicesLayer = Layer.mergeAll(
   streamKeyLayer,
   authCodesLayer,
   providerCacheSweepLayer,
+  mediaCacheLayer,
 ).pipe(Layer.provideMerge(jobsLayer));
 
 export const serverRoutes = Layer.unwrap(
@@ -71,6 +74,7 @@ export const serverRoutes = Layer.unwrap(
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
+      prefetch: ({ sourceIds }) => prefetch(sourceIds).pipe(orDieOnDatabaseError("prefetch")),
       recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError("recordPlay")),
       createPairingCode: () => createPairingCode,
       listDevices: () => listDevices.pipe(orDieOnDatabaseError("listDevices")),
