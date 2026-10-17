@@ -41,6 +41,7 @@ export const relations = defineRelations(schema, (r) => ({
     }),
     tracks: r.many.track(),
     sources: r.many.source(),
+    segments: r.many.sourceSegment(),
     identifiers: r.many.identifier({
       from: r.recording.id,
       to: r.identifier.entityId,
@@ -96,7 +97,6 @@ export const relations = defineRelations(schema, (r) => ({
       to: r.artistCredit.id,
     }),
     sources: r.many.source(),
-    segments: r.many.sourceSegment(),
     identifiers: r.many.identifier({
       from: r.track.id,
       to: r.identifier.entityId,
@@ -130,10 +130,9 @@ export const relations = defineRelations(schema, (r) => ({
       to: r.source.id,
       optional: false,
     }),
-    track: r.one.track({
-      from: r.sourceSegment.trackId,
-      to: r.track.id,
-      optional: false,
+    recording: r.one.recording({
+      from: r.sourceSegment.recordingId,
+      to: r.recording.id,
     }),
   },
   sourceMatch: {

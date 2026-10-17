@@ -61,7 +61,8 @@ export const sourceVariant = sqliteTable(
 );
 
 /**
- * Time range of one track in a DJ set source. Derived from the selected `source.tracklist`
+ * One tracklist entry of a DJ set source. The set itself is the recording of the source; a
+ * segment points to the recording that the DJ plays. Derived from the selected `source.tracklist`
  * assertion. Offsets belong to the source: another upload of the same set has other offsets.
  */
 export const sourceSegment = sqliteTable(
@@ -69,13 +70,17 @@ export const sourceSegment = sqliteTable(
   {
     sourceId: text("source_id").notNull(),
     position: integer("position").notNull(),
-    trackId: text("track_id").notNull(),
-    startMs: integer("start_ms").notNull(),
-    endMs: integer("end_ms").notNull(),
+    // Null until matched, and for unknown tracks such as `ID - ID`
+    recordingId: text("recording_id"),
+    rawArtist: text("raw_artist"),
+    rawTitle: text("raw_title"),
+    // Null when the tracklist gives no time for the entry
+    startMs: integer("start_ms"),
+    endMs: integer("end_ms"),
   },
   (table) => [
     primaryKey({ columns: [table.sourceId, table.position] }),
-    index("source_segment_track_idx").on(table.trackId),
+    index("source_segment_recording_idx").on(table.recordingId),
   ],
 );
 
