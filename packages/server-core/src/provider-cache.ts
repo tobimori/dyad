@@ -1,7 +1,7 @@
-import { providerItem, source } from "@dyad/db";
+import { playbackSession, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { ProviderSource } from "@dyad/plugin";
-import { and, eq, lt, notInArray } from "drizzle-orm";
+import { and, eq, lt, notInArray, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
 
 import { sourceId } from "./ids.ts";
@@ -92,14 +92,14 @@ export const providerCacheSweepLayer = Layer.effectDiscard(
     yield* jobs.register(sweepJob, Schema.Struct({}), () =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        yield* db
-          .delete(providerItem)
-          .where(
-            and(
-              lt(providerItem.fetchedAt, now - cacheLifetimeMs),
-              notInArray(providerItem.sourceId, db.select({ id: source.id }).from(source)),
-            ),
-          );
+        yield* db.delete(providerItem).where(
+          and(
+            lt(providerItem.fetchedAt, now - cacheLifetimeMs),
+            notInArray(providerItem.sourceId, db.select({ id: source.id }).from(source)),
+            // A queued search result plays from this cache, maybe weeks later
+            sql`${providerItem.sourceId} NOT IN (SELECT json_extract(entry.value, '$.source.id') FROM ${playbackSession}, json_each(${playbackSession.entries}) AS entry)`,
+          ),
+        );
         yield* jobs.enqueue(sweepJob, sweepJob, {}, { runAt: now + sweepIntervalMs });
       }),
     );

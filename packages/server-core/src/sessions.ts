@@ -1,5 +1,5 @@
 import { device, providerItem, source } from "@dyad/db";
-import { Database } from "@dyad/db/node";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   CurrentPrincipal,
   EntryId,
@@ -31,6 +31,7 @@ import {
   Exit,
   Layer,
   Match,
+  Option,
   Queue,
   Random,
   Schedule,
@@ -40,6 +41,7 @@ import {
 } from "effect";
 
 import { usableProviders } from "./providers.ts";
+import { SessionState, loadSessions, saveSession } from "./session-store.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 
 const maxEntries = 10_000;
@@ -53,17 +55,22 @@ type Command = typeof SessionCommand.Type;
 
 const deviceOutput = (deviceId: DeviceId) => OutputId.make(`device:${deviceId}`);
 
-const emptyPlayback = new Playback({
-  state: "stopped",
-  entryId: null,
-  positionMs: 0,
-  at: 0,
-  rate: 0,
-  revision: 0,
-  outputId: null,
-  lost: false,
-  shuffle: false,
-  repeat: "off",
+const emptyState = new SessionState({
+  entries: [],
+  nextEntryId: 1,
+  queueVersion: 0,
+  playback: new Playback({
+    state: "stopped",
+    entryId: null,
+    positionMs: 0,
+    at: 0,
+    rate: 0,
+    revision: 0,
+    outputId: null,
+    lost: false,
+    shuffle: false,
+    repeat: "off",
+  }),
 });
 
 class Connection extends Data.Class<{
@@ -96,15 +103,15 @@ const removalSplices = (indexes: ReadonlyArray<number>) =>
     .toReversed()
     .map((run) => new QueueSplice({ ...run, insert: [] }));
 
-const makeSession = () =>
+const makeSession = (initial: SessionState) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
     // Changed only under `lock`
     const state = {
-      entries: new Array<QueueEntry>(),
-      nextEntryId: 1,
-      queueVersion: 0,
-      playback: emptyPlayback,
+      entries: initial.entries,
+      nextEntryId: initial.nextEntryId,
+      queueVersion: initial.queueVersion,
+      playback: initial.playback,
       // Failed starts since the last start that played. One pass over the queue at most.
       failures: 0,
       reportDeadline: 0,
@@ -112,6 +119,8 @@ const makeSession = () =>
       connections: new Set<Connection>(),
       players: new Map<OutputId, Player>(),
       requests: new Map<string, RememberedResult>(),
+      // Changed since the last save
+      dirty: false,
     };
 
     const broadcast = (event: Event) => {
@@ -197,7 +206,9 @@ const makeSession = () =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           const before = state.playback;
+          const queueVersion = state.queueVersion;
           const exit = yield* Effect.exit(change(now));
+          if (state.playback !== before || state.queueVersion !== queueVersion) state.dirty = true;
 
           if (state.playback !== before) {
             // The output gets `lostAfterMs` to report after each new transport
@@ -787,14 +798,56 @@ const makeSession = () =>
       }),
     );
 
-    return { connect, control, report, removeDevice, tick };
+    /** The state to save when it changed since the last call. With `all`, a moving position counts. */
+    const changes = (all: boolean) =>
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          const moving = all && state.playback.rate === 1;
+          if (!state.dirty && !moving) return Option.none<SessionState>();
+
+          const now = yield* Clock.currentTimeMillis;
+          state.dirty = false;
+          const playback = state.playback;
+          return Option.some(
+            new SessionState({
+              entries: state.entries,
+              nextEntryId: state.nextEntryId,
+              queueVersion: state.queueVersion,
+              playback: new Playback({
+                ...playback,
+                positionMs: positionAt(playback, now),
+                at: now,
+              }),
+            }),
+          );
+        }),
+      );
+
+    return { connect, control, report, removeDevice, tick, changes };
   });
 
 type Session = Effect.Success<ReturnType<typeof makeSession>>;
 
 const makeSessions = Effect.gen(function* () {
+  const db = yield* Database;
   const sessions = new Map<UserId, Session>();
   const creating = yield* Semaphore.make(1);
+
+  for (const [userId, state] of yield* loadSessions)
+    sessions.set(userId, yield* makeSession(state));
+
+  const save = (userId: UserId, session: Session, all: boolean) =>
+    session.changes(all).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (state) => saveSession(userId, state),
+        }),
+      ),
+      orDieOnDatabaseError("saveSession"),
+      Effect.catchCause((cause) => Effect.logError("Cannot save a playback session", cause)),
+      Effect.provideService(Database, db),
+    );
 
   const sessionFor = (userId: UserId) =>
     Effect.suspend(() => {
@@ -803,16 +856,26 @@ const makeSessions = Effect.gen(function* () {
 
       return creating.withPermits(1)(
         Effect.gen(function* () {
-          const created = sessions.get(userId) ?? (yield* makeSession());
+          const created = sessions.get(userId) ?? (yield* makeSession(emptyState));
           sessions.set(userId, created);
           return created;
         }),
       );
     });
 
+  // Registered before the ticker, so that it runs after the ticker stopped
+  yield* Effect.addFinalizer(() =>
+    Effect.forEach(sessions, ([userId, session]) => save(userId, session, true)),
+  );
+
+  // Saves happen at most once a second
   yield* Effect.forkScoped(
     Effect.repeat(
-      Effect.suspend(() => Effect.forEach(sessions, ([, session]) => session.tick)),
+      Effect.suspend(() =>
+        Effect.forEach(sessions, ([userId, session]) =>
+          session.tick.pipe(Effect.andThen(save(userId, session, false))),
+        ),
+      ),
       Schedule.spaced("1 second"),
     ),
   );
@@ -832,7 +895,10 @@ export class Sessions extends Context.Service<Sessions, Effect.Success<typeof ma
   "@dyad/server-core/Sessions",
 ) {}
 
-export const sessionsLayer = Layer.effect(Sessions, makeSessions);
+export const sessionsLayer = Layer.effect(
+  Sessions,
+  makeSessions.pipe(orDieOnDatabaseError("loadSessions")),
+);
 
 // A search result is not in `source` until it plays, so its summary comes from the provider cache
 const sourceSummaries = (userId: UserId, sourceIds: ReadonlyArray<string>) =>

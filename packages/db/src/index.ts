@@ -10,5 +10,6 @@ export * from "./schema/local.ts";
 export * from "./schema/matching.ts";
 export * from "./schema/provider-cache.ts";
 export * from "./schema/replica.ts";
+export * from "./schema/session.ts";
 export * from "./schema/source.ts";
 export { relations, schema } from "./relations.ts";

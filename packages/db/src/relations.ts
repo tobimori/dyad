@@ -12,11 +12,13 @@ import * as local from "./schema/local.ts";
 import * as matching from "./schema/matching.ts";
 import * as providerCache from "./schema/provider-cache.ts";
 import * as replica from "./schema/replica.ts";
+import * as session from "./schema/session.ts";
 import * as source from "./schema/source.ts";
 
 export const schema = {
   ...replica,
   ...auth,
+  ...session,
   ...account,
   ...catalog,
   ...assertion,
