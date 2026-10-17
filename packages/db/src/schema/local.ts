@@ -4,8 +4,8 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-or
 
 export const libraryRoot = sqliteTable("library_root", {
   id: text("id").primaryKey(),
-  // Imports go to this user's library
-  ownerId: text("owner_id").notNull(),
+  // Imports go to this user's library. Null: the files are only in the catalog.
+  ownerId: text("owner_id"),
   path: text("path").notNull().unique(),
   createdAt: integer("created_at").notNull(),
 });
