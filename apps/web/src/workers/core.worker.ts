@@ -2,7 +2,7 @@ import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
 import { CoreWorkerRpc } from "@dyad/domain";
 import { BrowserWorkerRunner } from "@effect/platform-browser";
 import { Effect, Layer, Predicate } from "effect";
-import { RpcServer } from "effect/unstable/rpc";
+import { RpcServer } from "effect/rpc";
 
 const handlers = CoreWorkerRpc.toLayer({
   describe: () =>

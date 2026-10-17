@@ -40,8 +40,8 @@ export const nodeDatabaseLayer = (options: NodeDatabaseOptions) =>
           }
 
           const identity = {
-            replicaId: yield* crypto.randomUUIDv4,
-            workspaceId: yield* crypto.randomUUIDv4,
+            replicaId: yield* crypto.randomUUIDv4(),
+            workspaceId: yield* crypto.randomUUIDv4(),
           };
           const createdAt = yield* Clock.currentTimeMillis;
           yield* tx.insert(replicaIdentity).values({ slot: 1, ...identity, createdAt });

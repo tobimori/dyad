@@ -7,12 +7,7 @@ import type { Plugin } from "@dyad/plugin";
 import { ServerIdentity, pluginLayer, serverRoutes } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
-import {
-  HttpMiddleware,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";

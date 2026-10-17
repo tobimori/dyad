@@ -1,6 +1,6 @@
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
 import { Effect } from "effect";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 export const serverDescriptor = (serverUrl: string) =>
   Atom.runtime(serverConnectionLayer(serverUrl)).atom(

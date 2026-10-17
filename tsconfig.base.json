@@ -54,6 +54,8 @@
           "cryptoRandomUUID": "error",
           "cryptoRandomUUIDInEffect": "error",
           "nodeBuiltinImport": "error",
+          // Effect marks rpc, http, socket and reactivity as unstable. Dyad is built on them.
+          "unstableApiUsage": "off",
           "strictEffectProvide": "off",
           "lazyEffect": "off",
           "strictBooleanExpressions": "off"

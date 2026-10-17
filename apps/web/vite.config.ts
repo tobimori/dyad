@@ -3,7 +3,7 @@ import stylex from "@stylexjs/unplugin";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import { Config, ConfigProvider, Effect, Option } from "effect";
-import { Url } from "effect/unstable/http";
+import { Url } from "effect/http";
 import { defineConfig, loadEnv } from "vite-plus";
 
 export default defineConfig(({ mode }) => {

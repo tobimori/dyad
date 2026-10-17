@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import * as stylex from "@stylexjs/stylex";
 import { createFileRoute } from "@tanstack/react-router";
 import { Match } from "effect";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { serverDescriptor, workerDescriptor } from "../state/core.ts";
 

@@ -1,9 +1,9 @@
 import { HttpUrl, ServerRpc } from "@dyad/domain";
 import { Context, Effect, Layer, Schema, pipe } from "effect";
-import { Url } from "effect/unstable/http";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import { Socket } from "effect/unstable/socket";
+import { Url } from "effect/http";
+import { RpcClient, RpcSerialization } from "effect/rpc";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
+import { Socket } from "effect/socket";
 
 export class ServerConnection extends Context.Service<
   ServerConnection,

@@ -1,7 +1,7 @@
 import { ServerDescriptor, ServerRpc } from "@dyad/domain";
 import { Context, Effect, Layer } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter, HttpServerResponse } from "effect/http";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 
 export { pluginLayer } from "./plugin.ts";
 

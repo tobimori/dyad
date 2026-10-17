@@ -1,8 +1,8 @@
 import { CoreWorkerRpc } from "@dyad/domain";
 import { BrowserWorker } from "@effect/platform-browser";
 import { Effect, Layer } from "effect";
-import { AtomRpc } from "effect/unstable/reactivity";
-import { RpcClient } from "effect/unstable/rpc";
+import { AtomRpc } from "effect/reactivity";
+import { RpcClient } from "effect/rpc";
 
 const workerPlatform = Layer.unwrap(
   Effect.gen(function* () {

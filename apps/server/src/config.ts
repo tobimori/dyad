@@ -1,6 +1,6 @@
 import { HttpUrl } from "@dyad/domain";
 import { Config, Context, Effect, Layer, Option, Path } from "effect";
-import { Url } from "effect/unstable/http";
+import { Url } from "effect/http";
 import envPaths from "env-paths";
 
 const configuration = Effect.gen(function* () {

@@ -1,10 +1,5 @@
 import { Effect, Layer, Path, Predicate, Schema } from "effect";
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-  HttpStaticServer,
-} from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse, HttpStaticServer } from "effect/http";
 
 import { ServerConfig } from "./config.ts";
 
