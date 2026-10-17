@@ -40,6 +40,14 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
   codec: Schema.String,
 }) {}
 
+/** Search results, best first */
+export class SearchResults extends Schema.Class<SearchResults>("SearchResults")({
+  sources: Schema.Array(SourceSummary),
+}) {}
+
+/** Where the user started a play */
+export const PlayContext = Schema.Literals(["library", "search"]);
+
 export const AudioContainer = Schema.Literals(["mp3", "flac", "mp4", "adts", "ogg", "webm"]);
 export const AudioCodec = Schema.Literals(["mp3", "flac", "aac", "alac", "opus", "vorbis"]);
 
@@ -193,12 +201,12 @@ const PublicRpc = RpcGroup.make(
 const UserRpc = RpcGroup.make(
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
   /**
-   * Streams matches as they arrive: sources on this server first, then the results of each linked
-   * provider. Every result can play at once with `preparePlayback`.
+   * Streams the complete ranked list again each time that a provider answers; the last list is
+   * final. Clients replace their list. Every result can play at once with `preparePlayback`.
    */
   Rpc.make("search", {
     payload: { query: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)) },
-    success: SourceSummary,
+    success: SearchResults,
     stream: true,
   }),
   Rpc.make("preparePlayback", {
@@ -208,6 +216,16 @@ const UserRpc = RpcGroup.make(
     },
     success: PlaybackPlan,
     error: PlaybackUnavailable,
+  }),
+  /** Records one play when the source ends, or when the user skips it, plays another or quits */
+  Rpc.make("recordPlay", {
+    payload: {
+      sourceId: Schema.String.check(Schema.isUUID()),
+      startedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      playedMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      completed: Schema.Boolean,
+      context: PlayContext,
+    },
   }),
   Rpc.make("createPairingCode", { success: PairingCode }),
   Rpc.make("listDevices", { success: Schema.Array(DeviceSummary) }),

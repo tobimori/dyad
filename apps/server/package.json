@@ -17,6 +17,7 @@
     "@dyad/plugin": "workspace:*",
     "@dyad/plugin-apple-music": "workspace:*",
     "@dyad/plugin-bandcamp": "workspace:*",
+    "@dyad/plugin-deezer": "workspace:*",
     "@dyad/plugin-local-files": "workspace:*",
     "@dyad/server-core": "workspace:*",
     "@dyad/web": "workspace:*",

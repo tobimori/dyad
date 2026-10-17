@@ -20,10 +20,11 @@ const player = Effect.gen(function* () {
     (audio) => Effect.sync(() => audio.dispose()),
   );
 
-  // The Effect runtime owns process signals; the renderer still handles Ctrl+C as a key
+  // The Effect runtime owns process signals. The app handles Ctrl+C as a key, so that it can
+  // report the current play before it quits.
   const renderer = yield* Effect.acquireRelease(
     Effect.tryPromise({
-      try: () => createCliRenderer({ exitSignals: [] }),
+      try: () => createCliRenderer({ exitSignals: [], exitOnCtrlC: false }),
       catch: (cause) => new RendererError({ cause }),
     }),
     (renderer) =>

@@ -6,6 +6,7 @@ import { ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
 import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
+import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { ServerIdentity, coreServicesLayer, pluginLayer, serverRoutes } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
@@ -15,7 +16,12 @@ import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } fro
 import { ServerConfig } from "./config.ts";
 import { webApplicationLayer } from "./web.ts";
 
-const builtinPlugins: ReadonlyArray<Plugin> = [localFilesPlugin, appleMusicPlugin, bandcampPlugin];
+const builtinPlugins: ReadonlyArray<Plugin> = [
+  localFilesPlugin,
+  appleMusicPlugin,
+  bandcampPlugin,
+  deezerPlugin,
+];
 
 export const serverLayer = Layer.unwrap(
   Effect.gen(function* () {

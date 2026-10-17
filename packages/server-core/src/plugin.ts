@@ -6,7 +6,7 @@ import type { Crypto, FileSystem, Path } from "effect";
 
 import { AccountProviders } from "./accounts.ts";
 import { addProviderSource, syncLibraryRoot } from "./library.ts";
-import { SourceResolvers, SourceSearches } from "./providers.ts";
+import { SourcePopularities, SourceResolvers, SourceSearches } from "./providers.ts";
 
 // Closing the plugin scope removes the registration
 const register = <A>(registry: Map<string, A>, provider: string, value: A) =>
@@ -22,6 +22,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
       const scope = yield* Effect.scope;
       const resolvers = yield* SourceResolvers;
       const searches = yield* SourceSearches;
+      const popularities = yield* SourcePopularities;
       const accountProviders = yield* AccountProviders;
       const services = yield* Effect.context<
         Database | Crypto.Crypto | FileSystem.FileSystem | Path.Path
@@ -43,6 +44,9 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
         },
         search: {
           add: (provider, search) => register(searches, provider, search),
+        },
+        popularity: {
+          add: (name, popularity) => register(popularities, name, popularity),
         },
         account: {
           add: (provider, accountProvider) => register(accountProviders, provider, accountProvider),

@@ -21,9 +21,10 @@ import {
   removeDevice,
   setup,
 } from "./auth.ts";
+import { recordPlay } from "./history.ts";
 import { listSources } from "./library.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
-import { sourceResolversLayer, sourceSearchesLayer } from "./providers.ts";
+import { sourcePopularitiesLayer, sourceResolversLayer, sourceSearchesLayer } from "./providers.ts";
 import { providerCacheSweepLayer, search } from "./search.ts";
 
 export { pluginLayer } from "./plugin.ts";
@@ -36,6 +37,7 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescri
 export const coreServicesLayer = Layer.mergeAll(
   sourceResolversLayer,
   sourceSearchesLayer,
+  sourcePopularitiesLayer,
   accountProvidersLayer,
   streamKeyLayer,
   authCodesLayer,
@@ -54,6 +56,7 @@ export const serverRoutes = Layer.unwrap(
       search: ({ query }) => search(query).pipe(Stream.orDie),
       preparePlayback: ({ sourceId, capabilities }) =>
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError),
+      recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError),
       createPairingCode: () => createPairingCode,
       listDevices: () => listDevices.pipe(orDieOnDatabaseError),
       removeDevice: ({ deviceId }) => removeDevice(deviceId).pipe(orDieOnDatabaseError),

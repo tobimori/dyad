@@ -1,16 +1,17 @@
-import { providerItem, source } from "@dyad/db";
+import { playEvent, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
+import { CurrentPrincipal, SearchResults, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import { ProviderSource } from "@dyad/plugin";
-import type { Search } from "@dyad/plugin";
-import { eq, lt, or, sql } from "drizzle-orm";
+import { PopularityHit, ProviderSource } from "@dyad/plugin";
+import type { Popularity, Search } from "@dyad/plugin";
+import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Column } from "drizzle-orm";
-import { Clock, Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
+import { Clock, Data, Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
 
 import { loadCredentials } from "./accounts.ts";
 import { Tags, selectPlayableSources, sourceSummary, uuidV5 } from "./library.ts";
-import { SourceSearches } from "./providers.ts";
+import { SourcePopularities, SourceSearches } from "./providers.ts";
+import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 
 const localResultLimit = 50;
 
@@ -48,18 +49,21 @@ const searchLocalSources = (query: string, userId: UserId) =>
     const rows = yield* playable.limit(localResultLimit);
 
     // A source with several files has one row per file
-    const summaries = new Map(
-      rows.map((row) => [row.source.id, sourceSummary(row.source, row.variant)] as const),
-    );
+    const unique = [...new Map(rows.map((row) => [row.source.id, row] as const)).values()];
 
-    const isrcs = rows.flatMap((row) => {
+    return unique.map((row, position) => {
       const tags = Schema.decodeUnknownOption(Tags)(row.tags);
       // ID3 stores the ISRC in the `TSRC` frame
       const isrc = Option.flatMapNullishOr(tags, (values) => values.isrc ?? values.tsrc);
-      return Option.toArray(isrc).map(normalizeIsrc);
-    });
 
-    return { summaries: [...summaries.values()], isrcs: new Set(isrcs) };
+      return new Candidate({
+        summary: sourceSummary(row.source, row.variant),
+        isrc: Option.getOrNull(Option.map(isrc, normalizeIsrc)),
+        position,
+        local: row.tags !== null,
+        lossless: row.variant.lossless,
+      });
+    });
   });
 
 const cacheProviderSources = (providerSources: ReadonlyArray<ProviderSource>) =>
@@ -110,50 +114,141 @@ const searchProvider = (provider: string, providerSearch: Search, query: string,
         ),
       ),
     );
-    return yield* cacheProviderSources(providerSources);
+    const rows = yield* cacheProviderSources(providerSources);
+
+    return rows.map(
+      (row, position) =>
+        new Candidate({
+          summary: new SourceSummary({
+            id: row.sourceId,
+            provider: row.provider,
+            title: row.data.title,
+            artist: row.data.artist,
+            album: row.data.album,
+            durationMs: row.data.durationMs,
+            codec: row.data.codec,
+          }),
+          isrc: row.isrc,
+          position,
+          local: false,
+          lossless: row.data.lossless,
+        }),
+    );
   });
 
-/** Sources on this replica first, then the results of each provider that the user can use */
+const fetchPopularity = (name: string, popularity: Popularity, query: string) =>
+  popularity(query).pipe(
+    Effect.map((hits) =>
+      hits.map(
+        (hit) =>
+          new PopularityHit({
+            ...hit,
+            isrc: hit.isrc === null ? null : normalizeIsrc(hit.isrc),
+          }),
+      ),
+    ),
+    Effect.catchTag("SearchError", (error) =>
+      Effect.logWarning("Popularity source failed", error.reason).pipe(
+        Effect.annotateLogs("popularity", name),
+        Effect.as([]),
+      ),
+    ),
+  );
+
+// Plays of the candidates, of their ISRCs and of their artists. The ISRC of a played provider
+// source is known only while it is in the provider cache.
+const loadPlays = (userId: UserId, candidates: ReadonlyArray<Candidate>, now: number) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const sourceIds = candidates.map((candidate) => candidate.summary.id);
+    const isrcs = candidates.flatMap((candidate) => candidate.isrc ?? []);
+    const artists = candidates.flatMap(
+      (candidate) => candidate.summary.artist?.toLowerCase() ?? [],
+    );
+
+    const rows = yield* db
+      .select({
+        sourceId: playEvent.sourceId,
+        isrc: providerItem.isrc,
+        artist: source.rawArtist,
+        startedAt: playEvent.startedAt,
+        playedMs: playEvent.playedMs,
+        completed: playEvent.completed,
+      })
+      .from(playEvent)
+      .innerJoin(source, eq(source.id, playEvent.sourceId))
+      .leftJoin(providerItem, eq(providerItem.sourceId, playEvent.sourceId))
+      .where(
+        and(
+          eq(playEvent.userId, userId),
+          gte(playEvent.startedAt, now - playHistoryMs),
+          or(
+            inArray(playEvent.sourceId, sourceIds),
+            inArray(providerItem.isrc, isrcs),
+            inArray(sql`lower(${source.rawArtist})`, artists),
+          ),
+        ),
+      );
+
+    return rows.map((row) => new Play(row));
+  });
+
+class Answer extends Data.Class<{
+  readonly candidates: ReadonlyArray<Candidate>;
+  readonly hits: ReadonlyArray<PopularityHit>;
+}> {}
+
+const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
+  Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+
+    // A played provider source is also a local result. The provider copy has the ISRC and the
+    // position, and a provider can return an item twice.
+    const candidates = [
+      ...new Map(answer.candidates.map((candidate) => [candidate.summary.id, candidate])).values(),
+    ];
+    const plays = yield* loadPlays(userId, candidates, now);
+
+    const ranked = rank(query, candidates, answer.hits, plays, now);
+    return new SearchResults({ sources: ranked.map((result) => result.summary) });
+  });
+
+/**
+ * The ranked sources on this replica first, then the complete ranked list again each time that a
+ * provider search or a popularity source answers
+ */
 export const search = (query: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const principal = yield* CurrentPrincipal;
       const searches = yield* SourceSearches;
+      const popularities = yield* SourcePopularities;
 
       const local = yield* searchLocalSources(query, principal.userId);
-      const emittedIds = new Set(local.summaries.map((summary) => summary.id));
 
-      const providerResults = Stream.fromIterable([...searches]).pipe(
-        Stream.flatMap(
-          ([provider, providerSearch]) =>
-            Stream.fromIterableEffect(
-              searchProvider(provider, providerSearch, query, principal.userId),
-            ),
-          { concurrency: "unbounded" },
+      const providerAnswers = [...searches].map(([provider, providerSearch]) =>
+        searchProvider(provider, providerSearch, query, principal.userId).pipe(
+          Effect.map((candidates) => new Answer({ candidates, hits: [] })),
         ),
-        // A local file of the same recording plays first, so its provider result is not shown
-        Stream.filter((row) => row.isrc === null || !local.isrcs.has(row.isrc)),
-        // A played result can also be a local result, and a provider can return an item twice
-        Stream.filter((row) => {
-          if (emittedIds.has(row.sourceId)) return false;
-          emittedIds.add(row.sourceId);
-          return true;
-        }),
-        Stream.map(
-          (row) =>
-            new SourceSummary({
-              id: row.sourceId,
-              provider: row.provider,
-              title: row.data.title,
-              artist: row.data.artist,
-              album: row.data.album,
-              durationMs: row.data.durationMs,
-              codec: row.data.codec,
-            }),
+      );
+      const popularityAnswers = [...popularities].map(([name, popularity]) =>
+        fetchPopularity(name, popularity, query).pipe(
+          Effect.map((hits) => new Answer({ candidates: [], hits })),
         ),
       );
 
-      return Stream.fromIterable(local.summaries).pipe(Stream.concat(providerResults));
+      return Stream.fromIterable([...providerAnswers, ...popularityAnswers]).pipe(
+        Stream.flatMap(Stream.fromEffect, { concurrency: "unbounded" }),
+        Stream.scan(
+          () => new Answer({ candidates: local, hits: [] }),
+          (all, next) =>
+            new Answer({
+              candidates: [...all.candidates, ...next.candidates],
+              hits: [...all.hits, ...next.hits],
+            }),
+        ),
+        Stream.mapEffect((all) => rankAnswers(query, principal.userId, all)),
+      );
     }),
   );
 

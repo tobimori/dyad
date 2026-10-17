@@ -35,11 +35,28 @@ export type Resolve = (
   credentials: Credentials,
 ) => Effect.Effect<ProviderAudio, ResolveError>;
 
-/** Searches the provider's catalog with the credentials of the user who searches */
+/**
+ * Searches the provider's catalog with the credentials of the user who searches. The results are in
+ * the provider's order of relevance; the core uses that order when it has no popularity.
+ */
 export type Search = (
   query: string,
   credentials: Credentials,
 ) => Effect.Effect<ReadonlyArray<ProviderSource>, SearchError>;
+
+/** Popularity of one recording, for search ranking */
+export class PopularityHit extends Data.Class<{
+  readonly title: string;
+  readonly artist: string;
+  readonly isrc: string | null;
+  /** From 0 to 1 */
+  readonly popularity: number;
+}> {}
+
+/** Popularity of the recordings that match `query` */
+export type Popularity = (
+  query: string,
+) => Effect.Effect<ReadonlyArray<PopularityHit>, SearchError>;
 
 /** The core logs `reason`, so it must not contain tokens, signed URLs or keys */
 export class SearchError extends Data.TaggedError("SearchError")<{
@@ -77,10 +94,17 @@ export class PluginContext extends Data.Class<{
   };
   readonly search: {
     /**
-     * Adds the catalog search of `provider` for users who linked an account. The core caches the
+     * Adds the catalog search of `provider` for users who can use the provider. The core caches the
      * results on this replica and adds a result to the shared catalog when it is played.
      */
     readonly add: (provider: string, search: Search) => Effect.Effect<void, never, Scope.Scope>;
+  };
+  readonly popularity: {
+    /**
+     * Adds a popularity source for search ranking. The core matches hits to results by ISRC, or
+     * else by title and artist, and uses the highest value of all sources.
+     */
+    readonly add: (name: string, popularity: Popularity) => Effect.Effect<void, never, Scope.Scope>;
   };
   readonly account: {
     /** Lets users link their account of `provider`. The core stores the credentials. */
