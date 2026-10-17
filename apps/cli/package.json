@@ -8,7 +8,10 @@
     "build": "vp pack",
     "dev": "vp pack && node --experimental-ffi --env-file-if-exists=.env.local dist/main.mjs",
     "start": "node --experimental-ffi dist/main.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:linux-x64": "DYAD_EXE_TARGET=linux-x64 vp pack",
+    "build:linux-arm64": "DYAD_EXE_TARGET=linux-arm64 vp pack",
+    "build:darwin-arm64": "DYAD_EXE_TARGET=darwin-arm64 vp pack"
   },
   "dependencies": {
     "@dyad/client-runtime": "workspace:*",

@@ -1,3 +1,5 @@
+import "./sea-assets.ts";
+
 import type { SavedSession } from "@dyad/client-runtime";
 import { RegistryProvider } from "@effect/atom-react";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
