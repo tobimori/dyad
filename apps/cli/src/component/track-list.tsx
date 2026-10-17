@@ -1,8 +1,9 @@
-import { formatDuration, sourceLabel, titleOf } from "@dyad/client-runtime";
-import type { PlayContext, SourceSummary } from "@dyad/domain";
+import { formatDuration, sourceLabel, titleOf, unavailableLabel } from "@dyad/client-runtime";
+import type { LibraryEntry, PlayContext, SourceSummary } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
 import { Clock, Data, Effect } from "effect";
 import { useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
@@ -14,10 +15,36 @@ export class ListItem extends Data.Class<{
   readonly context: typeof PlayContext.Type;
 }> {}
 
+/** A library entry that the user cannot play. The list shows it dimmed and never queues it. */
+export class UnavailableItem extends Data.Class<{
+  readonly key: string;
+  readonly entry: LibraryEntry;
+  readonly label: string;
+}> {}
+
+export type TrackItem = ListItem | UnavailableItem;
+
 export const listItems = (
   sources: ReadonlyArray<SourceSummary>,
   context: typeof PlayContext.Type,
 ) => sources.map((source) => new ListItem({ key: source.id, source, context }));
+
+export const entryItems = <E extends LibraryEntry>(
+  entries: ReadonlyArray<E>,
+  context: typeof PlayContext.Type,
+  keyOf: (entry: E) => string,
+) =>
+  entries.map((entry) => {
+    const key = keyOf(entry);
+    if (entry.source !== null) return new ListItem({ key, source: entry.source, context });
+    // The contract sets `unavailable` whenever `source` is `null`
+    const label = entry.unavailable === null ? "" : unavailableLabel(entry.unavailable);
+    return new UnavailableItem({ key, entry, label });
+  });
+
+/** Marks the items of the source that plays now */
+export const playsSource = (sourceId: string | undefined) => (item: TrackItem) =>
+  item instanceof ListItem && item.source.id === sourceId;
 
 const doubleClickMs = 400;
 // Rows that stay visible above and below the selection before the list scrolls
@@ -51,7 +78,7 @@ export function useRowClick(
 const gap = 2;
 const markerWidth = 1;
 const timeWidth = 6;
-const sourceWidth = 11;
+const sourceWidth = 13;
 // Below this width, the list leaves out the album and source columns
 const wideMinWidth = 68;
 
@@ -123,9 +150,11 @@ export function ListTitle(props: { readonly title: string; readonly detail: stri
 /** A click selects a row; a double click plays it */
 export function TrackList(props: {
   readonly title: string;
-  readonly items: ReadonlyArray<ListItem>;
+  /** Shows between the title and the column header */
+  readonly header?: ReactNode;
+  readonly items: ReadonlyArray<TrackItem>;
   readonly selected: number;
-  readonly playingKey: string | null;
+  readonly playing: (item: TrackItem) => boolean;
   /** Rows above this index are history and show dimmed */
   readonly historyRows: number;
   readonly empty: string;
@@ -137,8 +166,7 @@ export function TrackList(props: {
   const offset = useRef(0);
   const click = useRowClick(props.onSelect, props.onActivate);
 
-  // The title and the column header take two rows
-  const rows = Math.max(1, size.height - 2);
+  const rows = Math.max(1, size.height);
   // The rows have one column of padding on each side
   const width = size.width - 2;
   const wide = width >= wideMinWidth;
@@ -146,21 +174,20 @@ export function TrackList(props: {
   const visible = props.items.slice(offset.current, offset.current + rows);
 
   const count = props.items.length === 1 ? "1 track" : `${props.items.length} tracks`;
+  const rowColor = (played: boolean) => (played ? theme.muted : theme.text);
 
   return (
     <box
       flexDirection="column"
       flexGrow={1}
-      onSizeChange={function () {
-        setSize({ width: this.width, height: this.height });
-      }}
       onMouseScroll={(event) => {
         const delta = event.scroll?.direction === "up" ? -1 : 1;
         props.onSelect(Math.max(0, Math.min(props.items.length - 1, props.selected + delta)));
       }}
     >
       <ListTitle title={props.title} detail={props.items.length === 0 ? "" : count} />
-      <box flexDirection="row" gap={gap} paddingX={1} height={1}>
+      {props.header}
+      <box flexDirection="row" gap={gap} paddingX={1} height={1} flexShrink={0}>
         <Columns
           marker=" "
           title="Title"
@@ -176,46 +203,55 @@ export function TrackList(props: {
           attributes={TextAttributes.BOLD}
         />
       </box>
-      {props.items.length === 0 && (
-        <text fg={theme.muted} paddingX={1}>
-          {props.empty}
-        </text>
-      )}
-      {visible.map((item, row) => {
-        const index = offset.current + row;
-        const selected = index === props.selected;
-        const playing = item.key === props.playingKey;
-        const played = index < props.historyRows;
-        const source = item.source;
-        const color = played ? theme.muted : theme.text;
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        onSizeChange={function () {
+          setSize({ width: this.width, height: this.height });
+        }}
+      >
+        {props.items.length === 0 && (
+          <text fg={theme.muted} paddingX={1}>
+            {props.empty}
+          </text>
+        )}
+        {visible.map((item, row) => {
+          const index = offset.current + row;
+          const selected = index === props.selected;
+          const playing = props.playing(item);
+          const played = index < props.historyRows;
+          const unavailable = item instanceof UnavailableItem;
+          const track = unavailable ? item.entry : item.source;
+          const color = unavailable ? theme.faint : rowColor(played);
 
-        return (
-          <box
-            key={item.key}
-            flexDirection="row"
-            gap={gap}
-            paddingX={1}
-            height={1}
-            backgroundColor={selected ? theme.selection : "transparent"}
-            onMouseDown={() => click(index)}
-          >
-            <Columns
-              marker={playing ? "▶" : " "}
-              title={titleOf(source)}
-              artist={source.artist ?? ""}
-              album={source.album ?? ""}
-              time={formatDuration(source.durationMs)}
-              source={sourceLabel(source)}
-              width={width}
-              wide={wide}
-              fg={playing ? theme.accent : color}
-              secondary={selected ? color : theme.muted}
-              accent={theme.accent}
-              attributes={selected ? TextAttributes.BOLD : TextAttributes.NONE}
-            />
-          </box>
-        );
-      })}
+          return (
+            <box
+              key={item.key}
+              flexDirection="row"
+              gap={gap}
+              paddingX={1}
+              height={1}
+              backgroundColor={selected ? theme.selection : "transparent"}
+              onMouseDown={() => click(index)}
+            >
+              <Columns
+                marker={playing ? "▶" : " "}
+                title={titleOf(track)}
+                artist={track.artist ?? ""}
+                album={track.album ?? ""}
+                time={formatDuration(track.durationMs)}
+                source={unavailable ? item.label : sourceLabel(item.source)}
+                width={width}
+                wide={wide}
+                fg={playing ? theme.accent : color}
+                secondary={selected || unavailable ? color : theme.muted}
+                accent={theme.accent}
+                attributes={selected ? TextAttributes.BOLD : TextAttributes.NONE}
+              />
+            </box>
+          );
+        })}
+      </box>
     </box>
   );
 }

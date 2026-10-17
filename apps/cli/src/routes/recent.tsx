@@ -2,7 +2,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { TrackList, listItems } from "../component/track-list.tsx";
+import { TrackList, listItems, playsSource } from "../component/track-list.tsx";
 import { Section, SectionView } from "../context/routes.ts";
 
 const title = "Recently played";
@@ -34,7 +34,7 @@ export const recent = new Section({
           title={title}
           items={items}
           selected={list.selected}
-          playingKey={app.player.current?.source.id ?? null}
+          playing={playsSource(app.player.current?.source.id)}
           historyRows={0}
           empty={empty}
           onSelect={list.select}

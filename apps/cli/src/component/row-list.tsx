@@ -1,5 +1,11 @@
 import { formatDuration, titleOf } from "@dyad/client-runtime";
-import type { AlbumCard, ArtistCard, PageTrack, SourceSummary } from "@dyad/domain";
+import type {
+  AlbumCard,
+  ArtistCard,
+  PageTrack,
+  PlaylistSummary,
+  SourceSummary,
+} from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
 import { Data } from "effect";
 import { useRef, useState } from "react";
@@ -32,7 +38,14 @@ export class ArtistRow extends Data.Class<{
   readonly artist: ArtistCard;
 }> {}
 
-export type SelectableRow = TrackRow | AlbumRow | ArtistRow;
+export class PlaylistRow extends Data.Class<{
+  readonly key: string;
+  readonly playlist: PlaylistSummary;
+  /** The display name of the provider of an imported playlist */
+  readonly providerName: string | null;
+}> {}
+
+export type SelectableRow = TrackRow | AlbumRow | ArtistRow | PlaylistRow;
 export type Row = HeadingRow | SelectableRow;
 
 export const selectableRows = (rows: ReadonlyArray<Row>) =>
@@ -81,6 +94,7 @@ const timeWidth = 6;
 const yearWidth = 4;
 const typeWidth = 11;
 const countWidth = 9;
+const playlistCountWidth = 11;
 // Below this width, album rows leave out the type
 const wideMinWidth = 68;
 
@@ -173,6 +187,30 @@ function RowCells(props: {
         <Cell
           text={album.trackCount === null ? "" : counted(album.trackCount, "track")}
           width={countWidth}
+          fg={secondary}
+          bold={bold}
+          align="right"
+        />
+      </>
+    );
+  }
+
+  if (row instanceof PlaylistRow) {
+    const flexible = Math.max(0, props.width - markerWidth - playlistCountWidth - gap * 3);
+    const nameWidth = Math.floor(flexible * 0.65);
+    return (
+      <>
+        {marker}
+        <Cell text={row.playlist.name} width={nameWidth} fg={theme.text} bold={bold} />
+        <Cell
+          text={row.providerName ?? ""}
+          width={flexible - nameWidth}
+          fg={secondary}
+          bold={bold}
+        />
+        <Cell
+          text={counted(row.playlist.entryCount, "track")}
+          width={playlistCountWidth}
           fg={secondary}
           bold={bold}
           align="right"

@@ -47,7 +47,7 @@ export const commands = {
   nowPlaying: command("view.nowPlaying", "Now playing", "Playback", ["p"], "playing"),
 
   play: command("list.play", "Play, queue the rest", "Browse", ["return"], "play"),
-  open: command("list.open", "Open the artist or album", "Browse", ["return"], "open"),
+  open: command("list.open", "Open the artist, album or playlist", "Browse", ["return"], "open"),
   back: command("browse.back", "Back", "Browse", ["escape", "backspace"], "back"),
   actions: command("list.actions", "Actions", "Browse", ["a"], "actions"),
   search: command("browse.search", "Search", "Browse", ["/"], "search"),

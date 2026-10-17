@@ -13,7 +13,9 @@ export function Header(props: {
   readonly status: keyof typeof statusText;
 }) {
   const theme = useTheme();
-  const status = statusText[props.status];
+  // Without the sidebar, the section names need the width
+  const status =
+    props.server === null && props.status === "connected" ? "" : statusText[props.status];
 
   return (
     <box flexDirection="row" height={1} paddingX={1} gap={2}>
@@ -23,10 +25,10 @@ export function Header(props: {
           <span
             key={section.id}
             fg={section.id === props.active ? theme.accent : theme.muted}
-          >{`   ${section.title}`}</span>
+          >{`  ${section.title}`}</span>
         ))}
       </text>
-      <text wrapMode="none">
+      <text wrapMode="none" flexShrink={0}>
         <span fg={theme.faint}>{props.server === null ? "" : `${props.server} · `}</span>
         <span fg={props.status === "connected" ? theme.faint : theme.accent}>{status}</span>
       </text>

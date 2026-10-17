@@ -16,21 +16,35 @@ import { HelpDialog } from "./component/dialog-help.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
-import { AlbumRow, ArtistRow, TrackRow, selectableRows } from "./component/row-list.tsx";
+import {
+  AlbumRow,
+  ArtistRow,
+  PlaylistRow,
+  TrackRow,
+  selectableRows,
+} from "./component/row-list.tsx";
 import type { SelectableRow } from "./component/row-list.tsx";
 import { Sidebar } from "./component/sidebar.tsx";
-import { ListItem } from "./component/track-list.tsx";
+import { ListItem, UnavailableItem, playsSource } from "./component/track-list.tsx";
+import type { TrackItem } from "./component/track-list.tsx";
 import { useArtwork } from "./component/use-artwork.ts";
 import { commands, useCommands } from "./context/keymap.ts";
 import type { Command } from "./context/keymap.ts";
 import type { PluginHost } from "./context/plugin-host.ts";
-import { AlbumRoute, ArtistRoute, SectionRoute, useRoutes } from "./context/routes.ts";
+import {
+  AlbumRoute,
+  ArtistRoute,
+  PlaylistRoute,
+  SectionRoute,
+  useRoutes,
+} from "./context/routes.ts";
 import type { Section } from "./context/routes.ts";
 import { useCoverAccent } from "./context/theme-provider.tsx";
 import { useSearch } from "./context/use-search.ts";
 import { usePlayer } from "./playback/use-player.ts";
 import { NowPlayingPanel, NowPlayingView } from "./routes/now-playing.tsx";
 import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
+import { PlaylistView, usePlaylist } from "./routes/page/playlist-view.tsx";
 import { sections, startSection } from "./routes/sections.ts";
 import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
@@ -93,6 +107,7 @@ export function App(props: {
   const route = routes.route;
   const section = routes.section;
   const page = usePage(props.atoms, route);
+  const playlist = usePlaylist(props.atoms, route);
 
   const main = useRef<BoxRenderable | null>(null);
   const [view, setView] = useState<"browse" | "nowPlaying">("browse");
@@ -130,6 +145,7 @@ export function App(props: {
   const reload = () => {
     for (const entry of views.values()) entry.refresh?.();
     page.refresh();
+    playlist.refresh();
   };
 
   const previousStatus = useRef(status);
@@ -154,7 +170,12 @@ export function App(props: {
     () => (AsyncResult.isSuccess(page.result) ? pageRows(page.result.value) : []),
     [page.result],
   );
-  const items = route instanceof SectionRoute ? sectionView.items : selectableRows(pageItems);
+  const routeItems = () => {
+    if (route instanceof SectionRoute) return sectionView.items;
+    if (route instanceof PlaylistRoute) return playlist.items;
+    return selectableRows(pageItems);
+  };
+  const items: ReadonlyArray<TrackItem | SelectableRow> = routeItems();
 
   const indexOfSelection = () =>
     Math.max(
@@ -179,6 +200,11 @@ export function App(props: {
     routes.push(new AlbumRoute({ ref, hint: title ?? "Unknown album" }));
   };
 
+  const openPlaylist = (id: string, name: string) => {
+    setView("browse");
+    routes.push(new PlaylistRoute({ id, hint: name }));
+  };
+
   const playRow = (row: TrackRow) => {
     const index = row.section.findIndex((source) => source.id === row.track.source.id);
     if (!row.track.playable || index === -1) {
@@ -191,19 +217,31 @@ export function App(props: {
   const activate = (index: number) => {
     const item = items[index];
 
-    if (item instanceof ListItem && sectionView.play !== undefined) {
+    if (
+      item instanceof ListItem &&
+      route instanceof SectionRoute &&
+      sectionView.play !== undefined
+    ) {
       sectionView.play(index);
       return;
     }
     if (item instanceof ListItem) {
-      const sources = items.flatMap((entry) => (entry instanceof ListItem ? [entry.source] : []));
-      player.playList(sources, index, item.context);
+      const tracks = items.filter((entry) => entry instanceof ListItem);
+      player.playList(
+        tracks.map((entry) => entry.source),
+        tracks.indexOf(item),
+        item.context,
+      );
       return;
     }
 
+    if (item instanceof UnavailableItem) {
+      toast("notice", `${titleOf(item.entry)} cannot play: ${item.label}`);
+    }
     if (item instanceof TrackRow) playRow(item);
     if (item instanceof AlbumRow) openAlbum(item.album.ref, item.album.title);
     if (item instanceof ArtistRow) openArtist(item.artist.ref, item.artist.name);
+    if (item instanceof PlaylistRow) openPlaylist(item.playlist.id, item.playlist.name);
   };
 
   const openSection = (target: Section) => {
@@ -245,7 +283,7 @@ export function App(props: {
       return new ActionTarget({
         source: item.source,
         context: item.context,
-        sectionActions: sectionView.actions?.(index) ?? [],
+        sectionActions: route instanceof SectionRoute ? (sectionView.actions?.(index) ?? []) : [],
       });
     }
     if (view === "browse" && item instanceof TrackRow) {
@@ -343,10 +381,17 @@ export function App(props: {
     ];
   };
 
-  const pageSources = pageItems.flatMap((row) =>
-    row instanceof TrackRow && row.track.playable ? [row.track.source] : [],
-  );
-  const pageContext = route instanceof AlbumRoute ? "album" : "artist";
+  const pageSources =
+    route instanceof PlaylistRoute
+      ? playlist.items.flatMap((item) => (item instanceof ListItem ? [item.source] : []))
+      : pageItems.flatMap((row) =>
+          row instanceof TrackRow && row.track.playable ? [row.track.source] : [],
+        );
+  const pageContext = () => {
+    if (route instanceof AlbumRoute) return "album";
+    if (route instanceof ArtistRoute) return "artist";
+    return "library";
+  };
 
   const pageActions = () => {
     if (view !== "browse" || route instanceof SectionRoute || pageSources.length === 0) return [];
@@ -355,17 +400,17 @@ export function App(props: {
       new Action({
         command: commands.playAll,
         label: "Play all",
-        run: () => player.playList(pageSources, 0, pageContext),
+        run: () => player.playList(pageSources, 0, pageContext()),
       }),
       new Action({
         command: commands.shuffleAll,
         label: "Shuffle",
-        run: () => player.shuffleList(pageSources, pageContext),
+        run: () => player.shuffleList(pageSources, pageContext()),
       }),
       new Action({
         command: commands.addAllToQueue,
         label: "Add all to queue",
-        run: () => player.addToQueue(pageSources, pageContext),
+        run: () => player.addToQueue(pageSources, pageContext()),
       }),
     ];
   };
@@ -434,7 +479,10 @@ export function App(props: {
     [commands.addToQueue, () => runAction(commands.addToQueue)],
   ];
 
-  const opensCard = selectedItem instanceof AlbumRow || selectedItem instanceof ArtistRow;
+  const opensCard =
+    selectedItem instanceof AlbumRow ||
+    selectedItem instanceof ArtistRow ||
+    selectedItem instanceof PlaylistRow;
   const listCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [
       opensCard ? commands.open : commands.play,
@@ -493,6 +541,22 @@ export function App(props: {
         selectRow,
         activateRow,
       });
+    }
+
+    if (route instanceof PlaylistRoute) {
+      return (
+        <PlaylistView
+          atoms={props.atoms}
+          route={route}
+          breadcrumb={routes.breadcrumb}
+          result={playlist.result}
+          items={playlist.items}
+          selected={selectedIndex}
+          playing={playsSource(player.current?.source.id)}
+          onSelect={select}
+          onActivate={activate}
+        />
+      );
     }
 
     return (

@@ -1,7 +1,17 @@
 import { ServerConnection } from "@dyad/client-runtime";
 import { AudioFormat, PlaybackCapabilities } from "@dyad/domain";
 import type { Audio, AudioStream } from "@opentui/core";
-import { Array as Arr, Data, Deferred, Effect, Semaphore, Stream, SubscriptionRef } from "effect";
+import {
+  Array as Arr,
+  Data,
+  Deferred,
+  Effect,
+  Exit,
+  Scope,
+  Semaphore,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import { HttpClient } from "effect/http";
 
 import { findSeekPoint, startPoint } from "./seek.ts";
@@ -74,11 +84,22 @@ const readFrom = (received: SubscriptionRef.SubscriptionRef<Received>, offset: n
     Stream.filter((chunk) => chunk.length > 0),
   );
 
+/** One response of the stream. A response with `start` begins `startMs` into the source. */
+class Download extends Data.Class<{
+  readonly startMs: number;
+  readonly received: SubscriptionRef.SubscriptionRef<Received>;
+  /** Closing it stops the request */
+  readonly scope: Scope.Closeable;
+}> {}
+
 export class Track extends Data.Class<{
   readonly position: () => number;
   /** Length of the received audio, after the download ends */
   readonly durationMs: () => number | null;
-  /** Continues at `ms`, or at the last received frame before it */
+  /**
+   * Continues at `ms`, or at the last received frame before it. Outside the received audio, it
+   * requests the stream again from `ms`.
+   */
   readonly seek: (ms: number) => Effect.Effect<void>;
   readonly ended: Effect.Effect<void, PlaybackError>;
 }> {}
@@ -98,11 +119,27 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
     const format = decoder[0];
 
     const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient);
-    const response = yield* client.get(new URL(plan.path, serverUrl));
-    const received = yield* SubscriptionRef.make(
-      new Received({ bytes: new Uint8Array(0), state: "loading" }),
-    );
-    yield* Effect.forkScoped(download(response.stream, received));
+    const trackScope = yield* Effect.scope;
+
+    // The grant in `path` stays valid for hours, so a new start needs no new `preparePlayback`
+    const startDownload = (startMs: number) =>
+      Effect.gen(function* () {
+        const url = new URL(plan.path, serverUrl);
+        if (startMs > 0) url.searchParams.set("start", String(Math.floor(startMs)));
+
+        const scope = yield* Scope.fork(trackScope);
+        const response = yield* client.get(url).pipe(
+          Scope.provide(scope),
+          Effect.mapError((cause) => new PlaybackError({ cause })),
+        );
+        const received = yield* SubscriptionRef.make(
+          new Received({ bytes: new Uint8Array(0), state: "loading" }),
+        );
+        yield* Effect.forkIn(download(response.stream, received), scope);
+        return new Download({ startMs, received, scope });
+      });
+
+    let current = yield* startDownload(0);
 
     const ended = yield* Deferred.make<void, PlaybackError>();
     const seeks = yield* Semaphore.make(1);
@@ -118,18 +155,21 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
     };
     yield* Effect.addFinalizer(() => Effect.sync(stopStream));
 
-    const play = (point: SeekPoint) =>
+    const play = (from: Download, point: SeekPoint) =>
       Effect.gen(function* () {
         stopStream();
 
-        const body = Stream.concat(Stream.succeed(point.prefix), readFrom(received, point.offset));
+        const body = Stream.concat(
+          Stream.succeed(point.prefix),
+          readFrom(from.received, point.offset),
+        );
         const next = yield* Effect.tryPromise({
           try: () => audio.playStream(Stream.toReadableStream(body), { format }),
           catch: (cause) => new PlaybackError({ cause }),
         });
 
         stream = next;
-        streamStartMs = point.ms;
+        streamStartMs = from.startMs + point.ms;
         next.once("ended", () => {
           if (stream === next) Deferred.doneUnsafe(ended, Effect.void);
         });
@@ -139,7 +179,7 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
         });
       });
 
-    yield* play(startPoint);
+    yield* play(current, startPoint);
 
     const position = () => {
       if (stream === null) return streamStartMs;
@@ -148,21 +188,41 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
       return streamStartMs + (Number(stats.framesPlayed) / stats.sampleRate) * 1000;
     };
 
+    // The start of the last received frame, relative to the start of the download
+    const receivedMs = (bytes: Uint8Array) =>
+      findSeekPoint(bytes, format, Number.POSITIVE_INFINITY)?.ms ?? null;
+
     let downloadedMs: number | null = null;
     const durationMs = () => {
       if (downloadedMs !== null) return downloadedMs;
-      const current = SubscriptionRef.getUnsafe(received);
-      if (current.state !== "done") return null;
-      downloadedMs = findSeekPoint(current.bytes, format, Number.POSITIVE_INFINITY)?.ms ?? null;
+      const received = SubscriptionRef.getUnsafe(current.received);
+      if (received.state !== "done") return null;
+      const lastMs = receivedMs(received.bytes);
+      downloadedMs = lastMs === null ? null : current.startMs + lastMs;
       return downloadedMs;
     };
 
     const seek = (ms: number) =>
       Effect.gen(function* () {
-        const current = yield* SubscriptionRef.get(received);
-        const point = findSeekPoint(current.bytes, format, ms);
-        if (point === undefined) return;
-        yield* play(point);
+        const received = yield* SubscriptionRef.get(current.received);
+        const offsetMs = ms - current.startMs;
+        const lastMs = receivedMs(received.bytes);
+        const inside =
+          offsetMs >= 0 && (received.state === "done" || (lastMs !== null && offsetMs <= lastMs));
+
+        if (inside) {
+          const point = findSeekPoint(received.bytes, format, offsetMs);
+          if (point !== undefined) yield* play(current, point);
+          return;
+        }
+
+        // The old audio plays on until the new response starts
+        const previous = current;
+        const next = yield* startDownload(ms);
+        current = next;
+        downloadedMs = null;
+        yield* play(next, startPoint);
+        yield* Scope.close(previous.scope, Exit.void);
       }).pipe(
         Semaphore.withPermits(seeks, 1),
         Effect.catch((error) => Deferred.fail(ended, error)),

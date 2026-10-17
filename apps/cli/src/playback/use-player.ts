@@ -227,8 +227,12 @@ export function usePlayer(props: {
     const playing = track.current;
     if (playing === null) return;
 
+    // Past the received audio, the seek requests the stream again, so it must not pass the end
+    const end = durationMs();
+    const target = Math.max(0, end === null ? ms : Math.min(ms, end));
+
     Effect.runFork(
-      playing.seek(Math.max(0, ms)).pipe(
+      playing.seek(target).pipe(
         Effect.andThen(
           Effect.sync(() => {
             setTick((t) => t + 1);

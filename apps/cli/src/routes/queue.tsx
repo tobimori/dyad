@@ -46,7 +46,7 @@ export const queue = new Section({
           items={items}
           selected={list.selected}
           // The queue can have the same source twice, so it marks the entry, not the source
-          playingKey={player.current?.key ?? null}
+          playing={(item) => item.key === player.current?.key}
           historyRows={current ?? 0}
           empty="The queue is empty. Press a on a track to add it."
           onSelect={list.select}

@@ -2,7 +2,7 @@ import type { InputRenderable } from "@opentui/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 
-import { TrackList, listItems } from "../component/track-list.tsx";
+import { TrackList, listItems, playsSource } from "../component/track-list.tsx";
 import { commands, useCommands } from "../context/keymap.ts";
 import { Section, SectionView } from "../context/routes.ts";
 import { useTheme } from "../theme/theme.ts";
@@ -96,7 +96,7 @@ export const search = new Section({
             title={status === null ? title : `${title}  ·  ${status}`}
             items={items}
             selected={list.selected}
-            playingKey={app.player.current?.source.id ?? null}
+            playing={playsSource(app.player.current?.source.id)}
             historyRows={0}
             empty={query.trim() === "" ? "Type to search the library and the providers" : ""}
             onSelect={list.select}

@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 
 import type { Action } from "../component/dialog-actions.tsx";
 import type { SelectableRow } from "../component/row-list.tsx";
-import type { ListItem } from "../component/track-list.tsx";
+import type { TrackItem } from "../component/track-list.tsx";
 import type { usePlayer } from "../playback/use-player.ts";
 import type { Command } from "./keymap.ts";
 import type { useSearch } from "./use-search.ts";
@@ -14,7 +14,7 @@ import type { useSearch } from "./use-search.ts";
 /** The host renders it only while the section route is on top */
 export class SectionView extends Data.Class<{
   /** The rows that the cursor moves over. The sidebar shows their count. */
-  readonly items: ReadonlyArray<ListItem | SelectableRow>;
+  readonly items: ReadonlyArray<TrackItem | SelectableRow>;
   readonly render: (list: {
     readonly selected: number;
     readonly select: (index: number) => void;
@@ -65,7 +65,12 @@ export class AlbumRoute extends Data.TaggedClass("Album")<{
   readonly hint: string;
 }> {}
 
-export type PageRoute = ArtistRoute | AlbumRoute;
+export class PlaylistRoute extends Data.TaggedClass("Playlist")<{
+  readonly id: string;
+  readonly hint: string;
+}> {}
+
+export type PageRoute = ArtistRoute | AlbumRoute | PlaylistRoute;
 
 class Navigation extends Data.Class<{
   readonly stack: readonly [SectionRoute, ...Array<PageRoute>];
@@ -73,11 +78,12 @@ class Navigation extends Data.Class<{
   readonly selections: ReadonlyMap<string, string>;
 }> {}
 
-// Artist and album refs can have the same text, so the key names the kind
+// Refs and IDs of different kinds can have the same text, so the key names the kind
 const routeKey = (route: SectionRoute | PageRoute) => {
   if (route instanceof SectionRoute) return route.section.id;
   if (route instanceof ArtistRoute) return `artist:${route.ref}`;
-  return `album:${route.ref}`;
+  if (route instanceof AlbumRoute) return `album:${route.ref}`;
+  return `playlist:${route.id}`;
 };
 
 export function useRoutes(initial: Section) {
