@@ -102,15 +102,24 @@ importers:
 
   .:
     devDependencies:
+      '@dyad/client-runtime':
+        specifier: workspace:*
+        version: link:packages/client-runtime
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:packages/domain
       '@dyad/oxlint':
         specifier: workspace:*
         version: link:packages/oxlint
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.53.3
-      '@li0ard/widevine':
-        specifier: 'catalog:'
-        version: 0.1.6(typescript@7.0.2)
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
