@@ -21,6 +21,7 @@ class SearchTrack extends Schema.Class<SearchTrack>("SearchTrack")({
   band_id: Schema.Int,
   band_name: Schema.String,
   album_name: Schema.NullOr(Schema.String),
+  art_id: Schema.optional(Schema.NullOr(Schema.Int)),
 }) {}
 
 const SearchResults = Schema.Struct({
@@ -101,6 +102,11 @@ export const searchTracks = (query: string) =>
           codec: "mp3",
           lossless: false,
           encrypted: false,
+          // Image format `_10` is the full-size JPEG of the release art
+          artworkUrl:
+            track.art_id === undefined || track.art_id === null
+              ? null
+              : `https://f4.bcbits.com/img/a${track.art_id}_10.jpg`,
         }),
     );
   }).pipe(Effect.mapError((error) => new SearchError({ reason: error.reason })));

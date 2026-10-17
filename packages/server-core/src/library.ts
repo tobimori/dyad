@@ -1,11 +1,18 @@
-import { libraryRoot, localFile, providerAccount, source, sourceVariant } from "@dyad/db";
+import {
+  libraryRoot,
+  localFile,
+  providerAccount,
+  providerItem,
+  source,
+  sourceVariant,
+} from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import { readAudioFile } from "@dyad/media/node";
 import type { AudioFile } from "@dyad/media/node";
 import type { ProviderSource } from "@dyad/plugin";
-import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path, Schema } from "effect";
 
@@ -217,25 +224,34 @@ export const selectPlayableSources = (userId: UserId, match?: SQL) =>
     );
 
     return db
-      .select({ source, variant: sourceVariant, tags: localFile.tags })
+      .select({
+        source,
+        variant: sourceVariant,
+        tags: localFile.tags,
+        // The catalog has no artwork yet. A provider source has it while its search result is cached.
+        artworkUrl: sql<string | null>`json_extract(${providerItem.data}, '$.artworkUrl')`,
+      })
       .from(source)
       .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
       .leftJoin(localFile, eq(localFile.sourceId, source.id))
+      .leftJoin(providerItem, eq(providerItem.sourceId, source.id))
       .where(and(or(isNotNull(localFile.id), inArray(source.provider, playableProviders)), match));
   });
 
-export const sourceSummary = (
-  row: typeof source.$inferSelect,
-  variant: typeof sourceVariant.$inferSelect,
-) =>
+export const sourceSummary = (row: {
+  readonly source: typeof source.$inferSelect;
+  readonly variant: typeof sourceVariant.$inferSelect;
+  readonly artworkUrl: string | null;
+}) =>
   new SourceSummary({
-    id: row.id,
-    provider: row.provider,
-    title: row.rawTitle,
-    artist: row.rawArtist,
-    album: row.rawAlbum,
-    durationMs: row.rawDurationMs,
-    codec: variant.codec,
+    id: row.source.id,
+    provider: row.source.provider,
+    title: row.source.rawTitle,
+    artist: row.source.rawArtist,
+    album: row.source.rawAlbum,
+    durationMs: row.source.rawDurationMs,
+    codec: row.variant.codec,
+    artworkUrl: row.artworkUrl,
   });
 
 /** Playable sources in album order */
@@ -249,7 +265,7 @@ export const listSources = Effect.gen(function* () {
     .map((row) => {
       const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
       return {
-        summary: sourceSummary(row.source, row.variant),
+        summary: sourceSummary(row),
         disc: position(tags, "disc", 1),
         track: position(tags, "track", 0),
       };

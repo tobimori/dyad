@@ -20,6 +20,8 @@ export class ProviderSource extends Data.Class<{
   readonly codec: string;
   readonly lossless: boolean;
   readonly encrypted: boolean;
+  /** Cover image of 500 pixels or more. Clients load it from the provider's server. */
+  readonly artworkUrl: string | null;
 }> {}
 
 /** Audio bytes of a provider source, in the container and codec of its `ProviderSource` */

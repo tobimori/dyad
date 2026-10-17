@@ -36,6 +36,7 @@ class Track extends Schema.Class<Track>("Track")({
   policy: Schema.String,
   track_authorization: Schema.String,
   user: Schema.Struct({ username: Schema.String }),
+  artwork_url: Schema.optional(Schema.NullOr(Schema.String)),
   // Label releases have publisher metadata. Most uploads of users have none.
   publisher_metadata: Schema.optional(
     Schema.NullOr(
@@ -182,6 +183,8 @@ export const searchTracks = (query: string) =>
             codec: "aac",
             lossless: false,
             encrypted: false,
+            // The API gives the 100 pixel `-large` variant; `-t500x500` is the same image larger
+            artworkUrl: track.artwork_url?.replace("-large.", "-t500x500.") ?? null,
           }),
       );
   }).pipe(Effect.mapError((error) => new SearchError({ reason: error.reason })));

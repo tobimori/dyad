@@ -29,6 +29,8 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
     albumName: Schema.optional(Schema.String),
     durationInMillis: Schema.Finite,
     isrc: Schema.optional(Schema.String),
+    // `url` is a template with `{w}` and `{h}` for the size in pixels
+    artwork: Schema.optional(Schema.Struct({ url: Schema.String })),
   }),
 }) {}
 
@@ -230,6 +232,7 @@ export const catalogSource = (song: AppleTrack) =>
     codec: "aac",
     lossless: false,
     encrypted: true,
+    artworkUrl: song.attributes.artwork?.url.replace("{w}", "600").replace("{h}", "600") ?? null,
   });
 
 /** The catalog needs only the web client token, not a subscriber */

@@ -21,7 +21,7 @@ import {
   removeDevice,
   setup,
 } from "./auth.ts";
-import { recordPlay } from "./history.ts";
+import { listRecentPlays, recordPlay } from "./history.ts";
 import { listSources } from "./library.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { sourcePopularitiesLayer, sourceResolversLayer, sourceSearchesLayer } from "./providers.ts";
@@ -53,6 +53,7 @@ export const serverRoutes = Layer.unwrap(
       login: (payload) => login(payload).pipe(orDieOnDatabaseError),
       pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError),
       listSources: () => listSources.pipe(orDieOnDatabaseError),
+      listRecentPlays: () => listRecentPlays.pipe(orDieOnDatabaseError),
       search: ({ query }) => search(query).pipe(Stream.orDie),
       preparePlayback: ({ sourceId, capabilities }) =>
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError),

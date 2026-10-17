@@ -38,6 +38,8 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
   album: Schema.NullOr(Schema.String),
   durationMs: Schema.NullOr(Schema.Number),
   codec: Schema.String,
+  /** Cover image on the provider's server. `null` for local files and for sources without art. */
+  artworkUrl: Schema.NullOr(Schema.String),
 }) {}
 
 /** Search results, best first */
@@ -46,7 +48,7 @@ export class SearchResults extends Schema.Class<SearchResults>("SearchResults")(
 }) {}
 
 /** Where the user started a play */
-export const PlayContext = Schema.Literals(["library", "search"]);
+export const PlayContext = Schema.Literals(["library", "search", "history"]);
 
 export const AudioContainer = Schema.Literals(["mp3", "flac", "mp4", "adts", "ogg", "webm"]);
 export const AudioCodec = Schema.Literals(["mp3", "flac", "aac", "alac", "opus", "vorbis"]);
@@ -200,6 +202,8 @@ const PublicRpc = RpcGroup.make(
 
 const UserRpc = RpcGroup.make(
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
+  /** The sources that the user played and can still play, newest play first, one entry per source */
+  Rpc.make("listRecentPlays", { success: Schema.Array(SourceSummary) }),
   /**
    * Streams the complete ranked list again each time that a provider answers; the last list is
    * final. Clients replace their list. Every result can play at once with `preparePlayback`.

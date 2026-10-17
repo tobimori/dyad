@@ -30,6 +30,10 @@ class CachedProviderSource extends Schema.Class<CachedProviderSource>("CachedPro
   codec: Schema.String,
   lossless: Schema.Boolean,
   encrypted: Schema.Boolean,
+  // Rows that a server cached before artwork existed have no key
+  artworkUrl: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
 }) {}
 
 // Tags and providers can write an ISRC with hyphens, for example `US-RC1-76-07839`
@@ -57,7 +61,7 @@ const searchLocalSources = (query: string, userId: UserId) =>
       const isrc = Option.flatMapNullishOr(tags, (values) => values.isrc ?? values.tsrc);
 
       return new Candidate({
-        summary: sourceSummary(row.source, row.variant),
+        summary: sourceSummary(row),
         isrc: Option.getOrNull(Option.map(isrc, normalizeIsrc)),
         position,
         local: row.tags !== null,
@@ -127,6 +131,7 @@ const searchProvider = (provider: string, providerSearch: Search, query: string,
             album: row.data.album,
             durationMs: row.data.durationMs,
             codec: row.data.codec,
+            artworkUrl: row.data.artworkUrl,
           }),
           isrc: row.isrc,
           position,
