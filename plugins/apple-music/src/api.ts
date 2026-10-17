@@ -5,7 +5,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 export const provider = "apple_music";
 
 const origin = "https://music.apple.com";
-const amp = "https://amp-api.music.apple.com";
+export const amp = "https://amp-api.music.apple.com";
 const playback = "https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa";
 
 /** `stage` and `reason` go into logs, so they never contain tokens, signed URLs or keys */
@@ -20,7 +20,8 @@ class AppleTokenRejected extends Data.TaggedError("AppleTokenRejected")<{
   readonly reason: string;
 }> {}
 
-class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
+/** Song of the Apple Music catalog */
+export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
   id: Schema.String,
   attributes: Schema.Struct({
     name: Schema.String,
@@ -59,23 +60,26 @@ export class AppleSession extends Data.Class<{
 }> {}
 
 // HTTP errors contain requests and response bodies, including cookies and signed asset URLs
-const requestJson = <S extends Schema.Constraint>(
-  request: HttpClientRequest.HttpClientRequest,
+export const sendRequest = (request: HttpClientRequest.HttpClientRequest, stage: string) =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    return yield* client
+      .execute(request)
+      .pipe(Effect.mapError(() => new AppleMusicError({ stage, reason: "Request failed" })));
+  });
+
+export const readResponse = <S extends Schema.Constraint>(
+  response: HttpClientResponse.HttpClientResponse,
   schema: S,
   stage: string,
 ) =>
   Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    const response = yield* client
-      .execute(request)
-      .pipe(Effect.mapError(() => new AppleMusicError({ stage, reason: "Request failed" })));
-
     const status = response.status;
     if (status === 401) {
       return yield* new AppleTokenRejected({ stage, reason: "Apple rejected the token" });
     }
     // A new web client token does not help, because the subscriber's token is the problem
-    if (status === 403 && request.url.startsWith(`${amp}/v1/me/`)) {
+    if (status === 403 && response.request.url.startsWith(`${amp}/v1/me/`)) {
       return yield* new AppleMusicError({
         stage,
         reason: "Apple rejected the account token. Link the account again.",
@@ -93,6 +97,13 @@ const requestJson = <S extends Schema.Constraint>(
     );
   });
 
+export const requestJson = <S extends Schema.Constraint>(
+  request: HttpClientRequest.HttpClientRequest,
+  schema: S,
+  stage: string,
+) =>
+  Effect.flatMap(sendRequest(request, stage), (response) => readResponse(response, schema, stage));
+
 const withBearer =
   (bearer: Redacted.Redacted<string>) => (request: HttpClientRequest.HttpClientRequest) =>
     request.pipe(
@@ -100,7 +111,7 @@ const withBearer =
       HttpClientRequest.setHeader("Origin", origin),
     );
 
-const authorize =
+export const authorize =
   (user: {
     readonly bearer: Redacted.Redacted<string>;
     readonly mediaUserToken: Redacted.Redacted<string>;
@@ -206,6 +217,21 @@ export class AppleSessions extends Context.Service<
 
 export const appleSessionsLayer = Layer.effect(AppleSessions, makeSessions);
 
+export const catalogSource = (song: AppleTrack) =>
+  new ProviderSource({
+    provider,
+    externalId: song.id,
+    title: song.attributes.name,
+    artist: song.attributes.artistName,
+    album: song.attributes.albumName ?? null,
+    durationMs: song.attributes.durationInMillis,
+    isrc: song.attributes.isrc ?? null,
+    container: "mov",
+    codec: "aac",
+    lossless: false,
+    encrypted: true,
+  });
+
 /** The catalog needs only the web client token, not a subscriber */
 export const searchCatalog = (
   bearer: Redacted.Redacted<string>,
@@ -220,22 +246,7 @@ export const searchCatalog = (
     const response = yield* requestJson(request, SearchResults, "search");
     const songs = response.results.songs?.data ?? [];
 
-    return songs.map(
-      (song) =>
-        new ProviderSource({
-          provider,
-          externalId: song.id,
-          title: song.attributes.name,
-          artist: song.attributes.artistName,
-          album: song.attributes.albumName ?? null,
-          durationMs: song.attributes.durationInMillis,
-          isrc: song.attributes.isrc ?? null,
-          container: "mov",
-          codec: "aac",
-          lossless: false,
-          encrypted: true,
-        }),
-    );
+    return songs.map(catalogSource);
   });
 
 /** URL of the HLS media playlist of the 256 kbps AAC web asset */
