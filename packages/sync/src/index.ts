@@ -1,12 +1,14 @@
 import { RecordingId, ReplicaId, WorkspaceId } from "@dyad/domain";
 import { Schema } from "effect";
 
-export const HybridLogicalClock = Schema.Struct({
+export class HybridLogicalClock extends Schema.Class<HybridLogicalClock>("HybridLogicalClock")({
   wallTime: Schema.Natural,
   counter: Schema.Natural,
-});
+}) {}
 
-export const FavoriteSetOperation = Schema.Struct({
+export class FavoriteSetOperation extends Schema.Class<FavoriteSetOperation>(
+  "FavoriteSetOperation",
+)({
   type: Schema.Literal("favorite.set"),
   schemaVersion: Schema.Literal(1),
   workspaceId: WorkspaceId,
@@ -16,5 +18,4 @@ export const FavoriteSetOperation = Schema.Struct({
   userId: Schema.String.check(Schema.isUUID()),
   recordingId: RecordingId,
   favorite: Schema.Boolean,
-});
-export type FavoriteSetOperation = typeof FavoriteSetOperation.Type;
+}) {}

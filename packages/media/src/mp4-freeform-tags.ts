@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Data, Effect, Schema } from "effect";
 
 // Mediabunny 1.61.0 keeps only the first MP4 freeform atom (`----`) and does not read its
 // `mean` and `name` boxes. Picard stores MusicBrainz IDs and ISRC in these atoms.
@@ -7,11 +7,11 @@ export class Mp4MetadataError extends Schema.TaggedError<Mp4MetadataError>()("Mp
   reason: Schema.String,
 }) {}
 
-interface Box {
+class Box extends Data.Class<{
   readonly type: string;
   readonly start: number;
   readonly end: number;
-}
+}> {}
 
 const iTunesNamespace = "com.apple.iTunes";
 const utf8DataType = 1;
@@ -47,12 +47,11 @@ function* children(bytes: Uint8Array, start: number, end: number) {
     if (header === undefined || header.size < header.headerSize || offset + header.size > end) {
       return;
     }
-    const box: Box = {
+    yield new Box({
       type: header.type,
       start: offset + header.headerSize,
       end: offset + header.size,
-    };
-    yield box;
+    });
     offset += header.size;
   }
 }
@@ -66,7 +65,9 @@ const findChild = (bytes: Uint8Array, parent: Box, type: string) => {
 
 // ISO `meta` is a full box with 4 bytes of version and flags. QuickTime `meta` has none.
 const metaContent = (bytes: Uint8Array, meta: Box) =>
-  readBoxType(bytes, meta.start + 4) === "hdlr" ? meta : { ...meta, start: meta.start + 4 };
+  readBoxType(bytes, meta.start + 4) === "hdlr"
+    ? meta
+    : new Box({ ...meta, start: meta.start + 4 });
 
 const readFreeformAtom = (bytes: Uint8Array, atom: Box) => {
   let mean: string | undefined;
@@ -114,7 +115,7 @@ export const readMp4FreeformTags = Effect.fn("readMp4FreeformTags")(function* (b
   if (moovRange === undefined) return tags;
 
   const bytes = yield* readSlice(blob, moovRange.start, moovRange.end);
-  const moov = { type: "moov", start: 0, end: bytes.byteLength };
+  const moov = new Box({ type: "moov", start: 0, end: bytes.byteLength });
   const udta = findChild(bytes, moov, "udta");
   const meta =
     (udta === undefined ? undefined : findChild(bytes, udta, "meta")) ??

@@ -34,6 +34,7 @@ export default defineConfig({
       "@project/require-safety-comment-for-type-assertion": "error",
       "@project/require-suppression-reason": "error",
       "@project/no-service-constructor-imports": "error",
+      "@project/no-shape-declarations": "error",
       "@project/prefer-effect-fn": "error",
     },
   },

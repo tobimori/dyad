@@ -1,3 +1,4 @@
+import { PluginContext } from "@dyad/plugin";
 import type { Plugin } from "@dyad/plugin";
 import { Effect, Exit, Layer, Scope } from "effect";
 
@@ -11,7 +12,9 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>) =>
         (plugin) =>
           Effect.gen(function* () {
             const pluginScope = yield* Scope.fork(scope);
-            const exit = yield* plugin.setup({}).pipe(Scope.provide(pluginScope), Effect.exit);
+            const exit = yield* plugin
+              .setup(new PluginContext())
+              .pipe(Scope.provide(pluginScope), Effect.exit);
             if (Exit.isSuccess(exit)) return;
             yield* Scope.close(pluginScope, exit);
             yield* Effect.logError("Plugin setup failed", exit.cause).pipe(

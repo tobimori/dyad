@@ -21,7 +21,7 @@ export const serverLayer = Layer.unwrap(
     const path = yield* Path.Path;
 
     yield* fs.makeDirectory(dataDirectory, { recursive: true });
-    const database = nodeDatabaseLayer({ filename: path.join(dataDirectory, "replica.sqlite") });
+    const database = nodeDatabaseLayer(path.join(dataDirectory, "replica.sqlite"));
     const identity = Layer.effect(
       ServerIdentity,
       ReplicaDatabase.use((value) =>

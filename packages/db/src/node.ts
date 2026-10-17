@@ -7,21 +7,16 @@ import { Clock, Context, Crypto, Effect, Layer, Path, Schema } from "effect";
 import { relations } from "./relations.ts";
 import { replicaIdentity } from "./schema/replica.ts";
 
-const Identity = Schema.Struct({
+export class Identity extends Schema.Class<Identity>("Identity")({
   replicaId: Schema.String.check(Schema.isUUID()),
   workspaceId: Schema.String.check(Schema.isUUID()),
-});
-export type Identity = typeof Identity.Type;
-
-export interface NodeDatabaseOptions {
-  readonly filename: string;
-}
+}) {}
 
 export class ReplicaDatabase extends Context.Service<ReplicaDatabase, Identity>()(
   "@dyad/db/ReplicaDatabase",
 ) {}
 
-export const nodeDatabaseLayer = (options: NodeDatabaseOptions) =>
+export const nodeDatabaseLayer = (filename: string) =>
   Layer.effect(
     ReplicaDatabase,
     Effect.gen(function* () {
@@ -49,4 +44,4 @@ export const nodeDatabaseLayer = (options: NodeDatabaseOptions) =>
         }),
       );
     }),
-  ).pipe(Layer.provide(SqliteClient.layer({ filename: options.filename })));
+  ).pipe(Layer.provide(SqliteClient.layer({ filename })));

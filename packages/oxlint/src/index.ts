@@ -15,6 +15,7 @@ import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.
 import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
 import { noReflectGetRule } from "./rules/no-reflect-get.ts";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.ts";
+import { noShapeDeclarationsRule } from "./rules/no-shape-declarations.ts";
 import { noServiceConstructorImportsRule } from "./rules/no-service-constructor-imports.ts";
 import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.ts";
 import { noSwitchStatementsRule } from "./rules/no-switch-statements.ts";
@@ -47,6 +48,7 @@ const projectPlugin = eslintCompatPlugin({
     "no-reflect-get": noReflectGetRule,
     "no-runtime-typeof": noRuntimeTypeofRule,
     "no-service-constructor-imports": noServiceConstructorImportsRule,
+    "no-shape-declarations": noShapeDeclarationsRule,
     "no-switch-statements": noSwitchStatementsRule,
     "no-unsafe-dictionary-type": noUnsafeDictionaryTypeRule,
     "no-shape-in-symbol-names": noForbiddenTermInSymbolNamesRule,

@@ -12,6 +12,8 @@ Local design notes are in `.docs/`. Git ignores them, so they can be missing. St
 - Validate unknown input once, at the boundary that owns it, with Effect Schema. Pass typed values inward. Do not check again what a schema or type already guarantees.
 - Do not extract a helper that is used once, unless it names a real concept or hides a complex boundary.
 - Prefer inferred types. Use `const`, early returns and expressions instead of reassignment and `else`.
+- Model values with Effect, not with `interface` or object `type` declarations. Use `Schema.Class` for data that crosses a boundary (wire, storage, config) and `Data.Class` or `Data.TaggedError` for values that code constructs. A parameter gets an inline type, or a plain argument if it is one value. `type X = typeof X.Type` stays for branded schemas.
+- Use `interface` or `type` only when nothing else works, for example a library type that you must match. `no-shape-declarations` rejects them; suppress it on that line with the reason (`-- reason`).
 - Match the style of the file that you change.
 - If a rule here conflicts with the task, say so and get approval before you break it.
 
