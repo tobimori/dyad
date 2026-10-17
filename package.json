@@ -10,6 +10,7 @@
     "dev:app": "vp run --filter @dyad/server --filter @dyad/web --parallel dev:app",
     "dev:server": "vp run @dyad/server#dev",
     "dev:web": "vp run @dyad/web#dev",
+    "dev:cli": "vp run @dyad/cli#dev",
     "build": "vp run -r build",
     "check": "vp fmt --check && vp lint apps packages plugins && vp exec tsc --noEmit && vp run -r typecheck",
     "format": "vp fmt",

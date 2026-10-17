@@ -1,0 +1,30 @@
+{
+  "name": "@dyad/cli",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack && node --experimental-ffi --env-file-if-exists=.env.local dist/main.mjs",
+    "start": "node --experimental-ffi dist/main.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dyad/client-runtime": "workspace:*",
+    "@dyad/domain": "workspace:*",
+    "@effect/atom-react": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@opentui/core": "catalog:",
+    "@opentui/react": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.4.0"
+  }
+}
