@@ -48,3 +48,11 @@ export const normalizeTitle = (title: string) => {
 /** The first credited artist, normalized */
 export const normalizeArtist = (artist: string) =>
   normalizeText(artist.toLowerCase().split(artistSeparator)[0] ?? "");
+
+/**
+ * The frozen `norm_v1` of binding: NFKC, case fold, trim and one space between words. A change
+ * needs a new name and a migration of the stored keys. `toLowerCase` is the case fold, because
+ * JavaScript has no full case folding.
+ */
+export const normV1 = (text: string) =>
+  text.normalize("NFKC").toLowerCase().trim().replaceAll(/\s+/gu, " ");

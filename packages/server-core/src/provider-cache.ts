@@ -1,14 +1,15 @@
-import { providerItem } from "@dyad/db";
+import { providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { ProviderSource } from "@dyad/plugin";
-import { eq, lt } from "drizzle-orm";
+import { and, eq, lt, notInArray } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
 
 import { sourceId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
 
-// Played results are in `source` and do not expire. The TTL only limits the size of the cache.
+// Results of played sources do not expire, because `source` has no artwork and no ISRC. The TTL
+// only limits the size of the cache.
 const cacheLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const sweepIntervalMs = 6 * 60 * 60 * 1000;
 const sweepJob = "provider-cache.sweep";
@@ -91,7 +92,14 @@ export const providerCacheSweepLayer = Layer.effectDiscard(
     yield* jobs.register(sweepJob, Schema.Struct({}), () =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        yield* db.delete(providerItem).where(lt(providerItem.fetchedAt, now - cacheLifetimeMs));
+        yield* db
+          .delete(providerItem)
+          .where(
+            and(
+              lt(providerItem.fetchedAt, now - cacheLifetimeMs),
+              notInArray(providerItem.sourceId, db.select({ id: source.id }).from(source)),
+            ),
+          );
         yield* jobs.enqueue(sweepJob, sweepJob, {}, { runAt: now + sweepIntervalMs });
       }),
     );

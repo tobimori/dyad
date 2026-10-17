@@ -45,7 +45,9 @@ const rpc = Command.make(
         const result = call(decodedPayload);
 
         if (Stream.isStream(result)) {
-          return yield* Stream.runForEach(result, (element) =>
+          // The streaming methods emit different values, and `runForEach` takes one stream type
+          const stream: Stream.Stream<unknown, Stream.Error<typeof result>> = result;
+          return yield* Stream.runForEach(stream, (element) =>
             Console.log(JSON.stringify(element)),
           );
         }

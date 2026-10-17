@@ -29,6 +29,17 @@ export class ServerDescriptor extends Schema.Class<ServerDescriptor>("ServerDesc
   }),
 }) {}
 
+/**
+ * An opaque page ref that the server makes, for example `apple_music:657515`. Clients never build
+ * or parse refs; they get them in `SourceSummary` and in cards.
+ */
+export const ArtistRef = Schema.String.pipe(Schema.brand("ArtistRef"));
+export type ArtistRef = typeof ArtistRef.Type;
+
+/** An opaque page ref that the server makes, like `ArtistRef` */
+export const AlbumRef = Schema.String.pipe(Schema.brand("AlbumRef"));
+export type AlbumRef = typeof AlbumRef.Type;
+
 export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")({
   id: Schema.String,
   /** `local` for a file on the server, else the provider ID, for example `apple_music` */
@@ -40,7 +51,109 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
   codec: Schema.String,
   /** Cover image on the provider's server. `null` for local files and for sources without art. */
   artworkUrl: Schema.NullOr(Schema.String),
+  // The decoding defaults keep queues decodable that clients saved before these fields existed
+  artistRef: Schema.NullOr(ArtistRef).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  albumRef: Schema.NullOr(AlbumRef).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  explicit: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 }) {}
+
+/** `YYYY`, `YYYY-MM` or `YYYY-MM-DD` */
+export const PartialDate = Schema.String.check(Schema.isPattern(/^\d{4}(-\d{2}(-\d{2})?)?$/));
+
+/** The same values as `release_group.primary_type` */
+export const ReleaseType = Schema.Literals(["album", "single", "ep"]);
+export const SecondaryType = Schema.Literals(["compilation", "live"]);
+
+export class AlbumCard extends Schema.Class<AlbumCard>("AlbumCard")({
+  ref: AlbumRef,
+  title: Schema.String,
+  artist: Schema.NullOr(Schema.String),
+  artistRef: Schema.NullOr(ArtistRef),
+  releaseDate: Schema.NullOr(PartialDate),
+  /** `null`: unclassified, which is not the same as an album */
+  primaryType: Schema.NullOr(ReleaseType),
+  secondaryTypes: Schema.Array(SecondaryType),
+  explicit: Schema.Boolean,
+  trackCount: Schema.NullOr(Schema.Int),
+  artworkUrl: Schema.NullOr(Schema.String),
+}) {}
+
+export class ArtistCard extends Schema.Class<ArtistCard>("ArtistCard")({
+  ref: ArtistRef,
+  name: Schema.String,
+  artworkUrl: Schema.NullOr(Schema.String),
+}) {}
+
+export class PageTrack extends Schema.Class<PageTrack>("PageTrack")({
+  source: SourceSummary,
+  disc: Schema.NullOr(Schema.Int),
+  number: Schema.NullOr(Schema.Int),
+  /** `false`: the provider does not stream it, for example outside the storefront */
+  playable: Schema.Boolean,
+}) {}
+
+// The section kinds are fixed and do not depend on the provider. Clients map a kind to a heading.
+
+export class TrackSection extends Schema.TaggedClass<TrackSection>()("TrackSection", {
+  kind: Schema.Literals(["top_tracks", "tracks"]),
+  tracks: Schema.Array(PageTrack),
+}) {}
+
+export class AlbumSection extends Schema.TaggedClass<AlbumSection>()("AlbumSection", {
+  /** Newest first. Clients call `other` "Releases" when it is the only album section. */
+  kind: Schema.Literals([
+    "albums",
+    "singles_eps",
+    "compilations",
+    "live",
+    "appears_on",
+    "in_library",
+    "other",
+  ]),
+  albums: Schema.Array(AlbumCard),
+}) {}
+
+export class ArtistSection extends Schema.TaggedClass<ArtistSection>()("ArtistSection", {
+  kind: Schema.Literal("similar_artists"),
+  artists: Schema.Array(ArtistCard),
+}) {}
+
+export const PageSection = Schema.Union([TrackSection, AlbumSection, ArtistSection]);
+
+/**
+ * `local`: built from the data on the server. `fetching` without `fetchedAt`: not fetched yet.
+ * `failed` with `fetchedAt`: the page shows old data.
+ */
+export class PageState extends Schema.Class<PageState>("PageState")({
+  status: Schema.Literals(["local", "fetching", "fresh", "failed"]),
+  fetchedAt: Schema.NullOr(Schema.Int),
+  /** Safe to show */
+  reason: Schema.NullOr(Schema.String),
+}) {}
+
+export class ArtistPage extends Schema.Class<ArtistPage>("ArtistPage")({
+  /** The canonical ref, which can differ from the requested ref */
+  ref: ArtistRef,
+  /** `null` for a library page */
+  providerName: Schema.NullOr(Schema.String),
+  name: Schema.NullOr(Schema.String),
+  artworkUrl: Schema.NullOr(Schema.String),
+  sections: Schema.Array(PageSection),
+  state: PageState,
+}) {}
+
+export class AlbumPage extends Schema.Class<AlbumPage>("AlbumPage")({
+  /** The canonical ref, which can differ from the requested ref */
+  ref: AlbumRef,
+  /** `null` for a library page */
+  providerName: Schema.NullOr(Schema.String),
+  album: Schema.NullOr(AlbumCard),
+  tracks: Schema.Array(PageTrack),
+  state: PageState,
+}) {}
+
+/** No page has this ref, for example a library ref after a tag edit changed the keys */
+export class PageNotFound extends Schema.TaggedError<PageNotFound>()("PageNotFound", {}) {}
 
 /** Search results, best first */
 export class SearchResults extends Schema.Class<SearchResults>("SearchResults")({
@@ -50,7 +163,14 @@ export class SearchResults extends Schema.Class<SearchResults>("SearchResults")(
 }) {}
 
 /** Where the user started a play */
-export const PlayContext = Schema.Literals(["library", "search", "history"]);
+export const PlayContext = Schema.Literals([
+  "library",
+  "search",
+  "history",
+  "album",
+  "artist",
+  "home",
+]);
 
 export const AudioContainer = Schema.Literals(["mp3", "flac", "mp4", "adts", "ogg", "webm"]);
 export const AudioCodec = Schema.Literals(["mp3", "flac", "aac", "alac", "opus", "vorbis"]);
@@ -216,6 +336,23 @@ const UserRpc = RpcGroup.make(
     success: SearchResults,
     stream: true,
   }),
+  // Streams the page again each time that it changes; the last emission is the current page. A
+  // library ref gives one emission.
+  Rpc.make("artistPage", {
+    payload: { ref: ArtistRef },
+    success: ArtistPage,
+    error: PageNotFound,
+    stream: true,
+  }),
+  Rpc.make("albumPage", {
+    payload: { ref: AlbumRef },
+    success: AlbumPage,
+    error: PageNotFound,
+    stream: true,
+  }),
+  // The album artists and the albums of the files on the server, sorted by name
+  Rpc.make("listLibraryArtists", { success: Schema.Array(ArtistCard) }),
+  Rpc.make("listLibraryAlbums", { success: Schema.Array(AlbumCard) }),
   Rpc.make("preparePlayback", {
     payload: {
       sourceId: Schema.String.check(Schema.isUUID()),

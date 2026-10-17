@@ -17,6 +17,7 @@ import {
 } from "./auth.ts";
 import { listRecentPlays, recordPlay } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
+import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
@@ -51,6 +52,12 @@ export const serverRoutes = Layer.unwrap(
       search: ({ query }) =>
         // Only database errors remain
         search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
+      artistPage: ({ ref }) =>
+        Stream.fromEffect(artistPage(ref).pipe(orDieOnDatabaseError("artistPage"))),
+      albumPage: ({ ref }) =>
+        Stream.fromEffect(albumPage(ref).pipe(orDieOnDatabaseError("albumPage"))),
+      listLibraryArtists: () => listLibraryArtists.pipe(orDieOnDatabaseError("listLibraryArtists")),
+      listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
       recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError("recordPlay")),

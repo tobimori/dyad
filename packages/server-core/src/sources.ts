@@ -9,6 +9,7 @@ import { Effect, Option, Schema } from "effect";
 import { sourceId, variantId } from "./ids.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { usableProviders } from "./providers.ts";
+import { libraryAlbumRef, libraryArtistRef } from "./refs.ts";
 
 // Projection columns before replication assigns revisions
 const projection = { policyVersion: 1, revision: 0 };
@@ -98,6 +99,9 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
         variant: sourceVariant,
         // From one of the files when a source has several
         tags: localFile.tags,
+        albumArtistKey: localFile.albumArtistKey,
+        artistKey: localFile.artistKey,
+        albumKey: localFile.albumKey,
         // `source` has no artwork. A provider source has it only while its search result is cached.
         artworkUrl: sql<string | null>`json_extract(${providerItem.data}, '$.artworkUrl')`,
       })
@@ -118,6 +122,9 @@ export const sourceSummary = (row: {
   readonly source: typeof source.$inferSelect;
   readonly variant: typeof sourceVariant.$inferSelect;
   readonly artworkUrl: string | null;
+  readonly albumArtistKey: string | null;
+  readonly artistKey: string | null;
+  readonly albumKey: string | null;
 }) =>
   new SourceSummary({
     id: row.source.id,
@@ -128,11 +135,17 @@ export const sourceSummary = (row: {
     durationMs: row.source.rawDurationMs,
     codec: row.variant.codec,
     artworkUrl: row.artworkUrl,
+    artistRef: row.artistKey === null ? null : libraryArtistRef(row.artistKey),
+    albumRef:
+      row.albumArtistKey === null || row.albumKey === null
+        ? null
+        : libraryAlbumRef(row.albumArtistKey, row.albumKey),
+    explicit: false,
   });
 
-// Tags such as `3/12` give the position and the total
-const position = (tags: typeof Tags.Type, key: string, fallback: number) =>
-  Number.parseInt(tags[key] ?? "", 10) || fallback;
+/** The disc or track number. Tags such as `3/12` give the position and the total. */
+export const position = (tags: typeof Tags.Type, key: "disc" | "track") =>
+  Number.parseInt(tags[key] ?? "", 10) || null;
 
 /** Playable sources in album order */
 export const listSources = Effect.gen(function* () {
@@ -143,8 +156,8 @@ export const listSources = Effect.gen(function* () {
     const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
     return {
       summary: sourceSummary(row),
-      disc: position(tags, "disc", 1),
-      track: position(tags, "track", 0),
+      disc: position(tags, "disc") ?? 1,
+      track: position(tags, "track") ?? 0,
     };
   });
 

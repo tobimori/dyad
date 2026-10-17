@@ -25,6 +25,11 @@ export const localFile = sqliteTable(
     // SHA-256 over the encoded audio packets, so that tag edits keep the same hash
     audioHash: text("audio_hash").notNull(),
     tags: text("tags", { mode: "json" }).notNull(),
+    // `norm_v1` keys from the tags for the library views. Binding will replace them with the
+    // `local_key` of catalog artists and release groups.
+    albumArtistKey: text("album_artist_key"),
+    artistKey: text("artist_key"),
+    albumKey: text("album_key"),
     fingerprint: text("fingerprint"),
     loudnessLufs: real("loudness_lufs"),
     truePeak: real("true_peak"),
@@ -35,5 +40,7 @@ export const localFile = sqliteTable(
   (table) => [
     uniqueIndex("local_file_path_idx").on(table.libraryRootId, table.path),
     index("local_file_source_idx").on(table.sourceId),
+    index("local_file_album_idx").on(table.albumArtistKey, table.albumKey),
+    index("local_file_artist_idx").on(table.artistKey),
   ],
 );

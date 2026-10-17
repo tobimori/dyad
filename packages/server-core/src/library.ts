@@ -5,9 +5,21 @@ import type { AudioFile } from "@dyad/media/node";
 import { eq } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path } from "effect";
 
+import { normV1 } from "./normalize.ts";
 import { writeSource } from "./sources.ts";
+import type { Tags } from "./sources.ts";
 
 class Stat extends Data.Class<{ readonly size: number; readonly mtime: number }> {}
+
+/**
+ * The album artist rule of binding: the album artist tag, else Various Artists when the
+ * compilation flag is set, else the track artist. A blank tag counts as missing.
+ */
+export const albumArtistOf = (tags: typeof Tags.Type) =>
+  tags.album_artist?.trim() || (tags.compilation === "1" ? "Various Artists" : tags.artist);
+
+// A blank name gives no key
+const libraryKey = (name: string | undefined) => (name === undefined ? null : normV1(name) || null);
 
 const importFile = (rootId: string, relativePath: string, file: AudioFile, stat: Stat) =>
   Effect.gen(function* () {
@@ -16,6 +28,7 @@ const importFile = (rootId: string, relativePath: string, file: AudioFile, stat:
     const path = yield* Path.Path;
     const fileId = yield* crypto.randomUUIDv7();
     const scannedAt = yield* Clock.currentTimeMillis;
+    const tags = Object.fromEntries(file.tags);
 
     yield* db.transaction((tx) =>
       Effect.gen(function* () {
@@ -47,7 +60,10 @@ const importFile = (rootId: string, relativePath: string, file: AudioFile, stat:
           size: stat.size,
           mtime: stat.mtime,
           audioHash: file.audioHash,
-          tags: Object.fromEntries(file.tags),
+          tags,
+          albumArtistKey: libraryKey(albumArtistOf(tags)),
+          artistKey: libraryKey(tags.artist),
+          albumKey: libraryKey(tags.album),
           scannedAt,
         };
         yield* tx
