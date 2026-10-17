@@ -1,4 +1,3 @@
-import type { DeviceId } from "@dyad/domain";
 import type { ProviderAudio, ProviderError } from "@dyad/plugin";
 import {
   Clock,
@@ -70,7 +69,8 @@ const makeMediaCache = Effect.gen(function* () {
   const writing = new Set<string>();
   // Playback downloads by provider. Prefetch waits until a provider has none.
   const liveDownloads = new Map<string, number>();
-  const hints = new Map<DeviceId, ReadonlyArray<PrefetchItem>>();
+  // By holder: a device ID for the `prefetch` RPC, or a session
+  const hints = new Map<string, ReadonlyArray<PrefetchItem>>();
   // One prefetch download at a time for each provider, by provider
   const prefetches = new Map<string, PrefetchRun>();
   // Items whose prefetch did not give a file. A hint tries them again after they leave all hints.
@@ -362,11 +362,11 @@ const makeMediaCache = Effect.gen(function* () {
       }),
     );
 
-  /** An empty list removes the hint */
-  const hint = (deviceId: DeviceId, items: ReadonlyArray<PrefetchItem>) =>
+  /** Replaces the hint of `holder`. An empty list removes it. */
+  const hint = (holder: string, items: ReadonlyArray<PrefetchItem>) =>
     Effect.gen(function* () {
-      if (items.length === 0) hints.delete(deviceId);
-      else hints.set(deviceId, items);
+      if (items.length === 0) hints.delete(holder);
+      else hints.set(holder, items);
 
       const wanted = hinted();
       for (const variantId of failed) {

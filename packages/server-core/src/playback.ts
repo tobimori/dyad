@@ -328,16 +328,15 @@ const providerStream = <E>(
   });
 
 /**
- * Replaces the device's hint of the sources that it plays next. The media cache downloads them.
- * It skips sources that the user cannot play and sources that it does not keep.
+ * Replaces the hint of `holder` with the sources that it plays next. The media cache downloads
+ * them. It skips sources that the user cannot play and sources that it does not keep.
  */
-export const prefetch = (sourceIds: ReadonlyArray<string>) =>
+export const hintPrefetch = (holder: string, userId: UserId, sourceIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
     const cache = yield* MediaCache;
 
     const items = yield* Effect.forEach(sourceIds, (sourceId) =>
-      findPlayableSource(sourceId, principal.userId).pipe(
+      findPlayableSource(sourceId, userId).pipe(
         Effect.map(({ playable }) =>
           playable instanceof ProviderPlayback && playable.cacheId !== null
             ? [
@@ -352,7 +351,13 @@ export const prefetch = (sourceIds: ReadonlyArray<string>) =>
         Effect.catchTag("PlaybackUnavailable", () => Effect.succeed([])),
       ),
     );
-    yield* cache.hint(principal.deviceId, items.flat());
+    yield* cache.hint(holder, items.flat());
+  });
+
+export const prefetch = (sourceIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentPrincipal;
+    yield* hintPrefetch(principal.deviceId, principal.userId, sourceIds);
   });
 
 const unavailableStatus = { not_found: 404, unsupported_format: 406, account_required: 403 };

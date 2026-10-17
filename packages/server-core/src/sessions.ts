@@ -42,6 +42,7 @@ import {
 } from "effect";
 
 import { insertPlay } from "./history.ts";
+import { hintPrefetch } from "./playback.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSessions, saveSession } from "./session-store.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
@@ -115,7 +116,11 @@ class OpenPlay extends Data.Class<{
   readonly resumedAt: number | null;
 }> {}
 
-const makeSession = (userId: UserId, initial: SessionState) =>
+const makeSession = (
+  userId: UserId,
+  initial: SessionState,
+  prefetch: (sourceIds: ReadonlyArray<string>) => void,
+) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<Database | Crypto.Crypto>();
     const lock = yield* Semaphore.make(1);
@@ -137,6 +142,8 @@ const makeSession = (userId: UserId, initial: SessionState) =>
       play: Option.none<OpenPlay>(),
       // The entry that ended by itself in this change. Its play is complete.
       ended: Option.none<EntryId>(),
+      // The sources of the last prefetch hint, joined
+      prefetched: "",
     };
 
     const broadcast = (event: Event) => {
@@ -274,6 +281,18 @@ const makeSession = (userId: UserId, initial: SessionState) =>
         }
       });
 
+    // The next two entries that a skip or the end of an entry can start
+    const upcomingSources = () => {
+      const { entryId, repeat, state: transport } = state.playback;
+      // A paused session can wait for weeks, for example after a restart
+      if (transport !== "playing") return [];
+
+      const first = nextEntry(state.entries, entryId, repeat, "skip");
+      const second = first && nextEntry(state.entries, first.id, repeat, "skip");
+      const entries = [first, second].filter((entry) => entry && entry.id !== entryId);
+      return [...new Set(entries.flatMap((entry) => entry?.source.id ?? []))];
+    };
+
     // Runs `change` under the lock and publishes the new playback once
     const modify = <A, E>(change: (now: number) => Effect.Effect<A, E>) =>
       lock.withPermits(1)(
@@ -284,6 +303,12 @@ const makeSession = (userId: UserId, initial: SessionState) =>
           const exit = yield* Effect.exit(change(now));
           if (state.playback !== before || state.queueVersion !== queueVersion) state.dirty = true;
           yield* trackPlay(now);
+
+          const upcoming = upcomingSources();
+          if (upcoming.join(" ") !== state.prefetched) {
+            state.prefetched = upcoming.join(" ");
+            prefetch(upcoming);
+          }
 
           if (state.playback !== before) {
             // The output gets `lostAfterMs` to report after each new transport
@@ -925,12 +950,28 @@ type Session = Effect.Success<ReturnType<typeof makeSession>>;
 
 const makeSessions = Effect.gen(function* () {
   const db = yield* Database;
-  const services = yield* Effect.context<Effect.Services<ReturnType<typeof makeSession>>>();
+  const services =
+    yield* Effect.context<Effect.Services<ReturnType<typeof makeSession | typeof hintPrefetch>>>();
   const sessions = new Map<UserId, Session>();
   const creating = yield* Semaphore.make(1);
 
+  // In order, so that the last hint of a session wins
+  const prefetches = yield* Queue.unbounded<readonly [UserId, ReadonlyArray<string>]>();
+  yield* Effect.forkScoped(
+    Effect.forever(
+      Effect.flatMap(Queue.take(prefetches), ([userId, sourceIds]) =>
+        hintPrefetch(`session:${userId}`, userId, sourceIds).pipe(
+          orDieOnDatabaseError("hintPrefetch"),
+          Effect.catchCause((cause) => Effect.logError("Cannot prefetch for a session", cause)),
+        ),
+      ),
+    ),
+  );
+
   const create = (userId: UserId, state: SessionState) =>
-    makeSession(userId, state).pipe(Effect.provide(services));
+    makeSession(userId, state, (sourceIds) =>
+      Queue.offerUnsafe(prefetches, [userId, sourceIds]),
+    ).pipe(Effect.provide(services));
 
   for (const [userId, state] of yield* loadSessions)
     sessions.set(userId, yield* create(userId, state));
