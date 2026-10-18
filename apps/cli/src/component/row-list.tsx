@@ -12,7 +12,7 @@ import { useRef, useState } from "react";
 
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
-import { scrollOffset, useRowClick } from "./track-list.tsx";
+import { scrollOffset, useRowClick, videoMark } from "./track-list.tsx";
 
 /** A heading or the empty row above it. The cursor skips it. */
 export class HeadingRow extends Data.Class<{
@@ -148,12 +148,14 @@ function RowCells(props: {
           bold={false}
           align="right"
         />
-        <Cell
-          text={titleOf(source)}
+        <text
           width={titleWidth}
           fg={props.playing ? theme.accent : fg}
-          bold={bold}
-        />
+          attributes={bold ? TextAttributes.BOLD : TextAttributes.NONE}
+        >
+          {fit(titleOf(source), titleWidth - (source.video ? videoMark.length : 0))}
+          {source.video && <span fg={secondary}>{videoMark}</span>}
+        </text>
         <Cell
           text={source.artist ?? ""}
           width={flexible - titleWidth}

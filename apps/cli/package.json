@@ -24,6 +24,7 @@
     "@effect/atom-react": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
+    "@libav.js/variant-vp9-opus": "catalog:",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",
     "@opentui/react": "catalog:",

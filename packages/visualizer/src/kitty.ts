@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- a frame file must exist before the escape that names it goes out
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
 import { Rgb } from "./palette.ts";
@@ -43,6 +47,8 @@ const more = ascii.encode("m=1;");
 const last = ascii.encode("m=0;");
 // 4096 base64 characters per chunk, the protocol maximum
 const chunkBytes = 3072;
+// The terminal can still read a file while the next frames are written
+const frameFiles = 4;
 
 /**
  * One Kitty graphics image that shows through Unicode placeholders. Each `encode` replaces the
@@ -60,6 +66,7 @@ export class KittyImage {
   private rgb = new Uint8Array(0);
   private output = new Uint8Array(0);
   private header = new Uint8Array(0);
+  private frame = 0;
 
   /** `id` is 1 to 0xffffff; `columns` and `rows` are at most 297 */
   constructor(id: number, columns: number, rows: number) {
@@ -126,8 +133,51 @@ export class KittyImage {
     return out.subarray(0, o);
   }
 
+  /**
+   * The escape that shows `rgba` like `encode`, through a temporary file that the terminal reads
+   * and deletes (`t=t`). The terminal must run on this host; `fileQuery` checks it.
+   */
+  encodeFile(rgba: Uint8Array, width: number, height: number) {
+    const path = this.framePath(this.frame++ % frameFiles);
+    writeFileSync(path, rgba);
+    return this.fileCommand(
+      `a=T,U=1,q=2,C=1,f=32,s=${width},v=${height},c=${this.columns},r=${this.rows}`,
+      path,
+    );
+  }
+
+  /** A query that `fileAnswer` reads: `true` when the terminal reads `encodeFile` files */
+  fileQuery() {
+    const path = this.framePath(frameFiles);
+    writeFileSync(path, new Uint8Array(4));
+    return this.fileCommand("a=q,f=32,s=1,v=1", path);
+  }
+
+  /** `undefined` when `input` holds no answer to `fileQuery` */
+  fileAnswer(input: string) {
+    const answer = input.match(new RegExp(`\x1b_Gi=${this.id};([^\x1b]*)\x1b\\\\`))?.[1];
+    return answer === undefined ? undefined : answer === "OK";
+  }
+
+  /** Removes the files that the terminal did not read */
+  removeFiles() {
+    for (let index = 0; index <= frameFiles; index++)
+      rmSync(this.framePath(index), { force: true });
+  }
+
   /** The escape that deletes the image and frees its data */
   delete() {
     return `\x1b_Ga=d,d=I,q=2,i=${this.id}\x1b\\`;
+  }
+
+  // Ghostty 1.3.1 reads only files in the temporary folder after `realpath`, so not `/tmp` on
+  // macOS, and only with `tty-graphics-protocol` in the name
+  private framePath(index: number) {
+    return join(tmpdir(), `tty-graphics-protocol-dyad-${process.pid}-${this.id}-${index}`);
+  }
+
+  // Ghostty 1.3.1 rejects `S=<size>` with `t=t` as invalid data, so the command has no `S`
+  private fileCommand(keys: string, path: string) {
+    return `\x1b_G${keys},i=${this.id},t=t;${Buffer.from(path).toString("base64")}\x1b\\`;
   }
 }

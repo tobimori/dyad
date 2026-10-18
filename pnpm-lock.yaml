@@ -24,6 +24,9 @@ catalogs:
     '@li0ard/widevine':
       specifier: 0.1.6
       version: 0.1.6
+    '@libav.js/variant-vp9-opus':
+      specifier: 6.10.9
+      version: 6.10.9
     '@opentui/core':
       specifier: 0.6.6
       version: 0.6.6
@@ -196,6 +199,9 @@ importers:
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)
+      '@libav.js/variant-vp9-opus':
+        specifier: 'catalog:'
+        version: 6.10.9
       '@opentui/core':
         specifier: 'catalog:'
         version: 0.6.6(typescript@7.0.2)(web-tree-sitter@0.25.10)
@@ -1065,6 +1071,9 @@ packages:
     resolution: {integrity: sha512-J4p09tKYu53KnWq2udklAyjo/v+0n1lpymRtwjA80ZIYW5NmaGMXVmsRdMmZfFkHOI5cwHBDOCjXp902GT5fAQ==}
     peerDependencies:
       typescript: ^5
+
+  '@libav.js/variant-vp9-opus@6.10.9':
+    resolution: {integrity: sha512-2vRsnDHjM3WN3I4KEhjcLMH7I+D+L2MtgiqiOIcBpaDhzS7S+N5dc97/+cnBMHTPrIWc9LMVN6YjXtbo4nfF9Q==}
 
   '@minhducsun2002/leb128@1.0.0':
     resolution: {integrity: sha512-eFrYUPDVHeuwWHluTG1kwNQUEUcFjVKYwPkU8z9DR1JH3AW7JtJsG9cRVGmwz809kKtGfwGJj58juCZxEvnI/g==}
@@ -3562,6 +3571,8 @@ snapshots:
     dependencies:
       google-protobuf: 4.0.3
       typescript: 7.0.2
+
+  '@libav.js/variant-vp9-opus@6.10.9': {}
 
   '@minhducsun2002/leb128@1.0.0':
     optional: true

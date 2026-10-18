@@ -96,9 +96,13 @@ const columnWidths = (width: number, wide: boolean) => {
   return { title, artist, album: flexible - title - artist };
 };
 
+/** After the title of a source with `video` */
+export const videoMark = " video";
+
 function Columns(props: {
   readonly marker: string;
   readonly title: string;
+  readonly video: boolean;
   readonly artist: string;
   readonly album: string;
   readonly time: string;
@@ -119,7 +123,8 @@ function Columns(props: {
         {props.marker}
       </text>
       <text width={widths.title} fg={props.fg} attributes={props.attributes}>
-        {fit(props.title, widths.title)}
+        {fit(props.title, widths.title - (props.video ? videoMark.length : 0))}
+        {props.video && <span fg={props.secondary}>{videoMark}</span>}
       </text>
       <text width={widths.artist} fg={props.secondary} attributes={props.attributes}>
         {fit(props.artist, widths.artist)}
@@ -196,6 +201,7 @@ export function TrackList(props: {
         <Columns
           marker=" "
           title="Title"
+          video={false}
           artist="Artist"
           album="Album"
           time="Time"
@@ -242,6 +248,7 @@ export function TrackList(props: {
               <Columns
                 marker={playing ? "▶" : " "}
                 title={titleOf(track)}
+                video={!unavailable && item.source.video}
                 artist={track.artist ?? ""}
                 album={track.album ?? ""}
                 time={formatDuration(track.durationMs)}

@@ -6,15 +6,19 @@ import envPaths from "env-paths";
 
 declare const DYAD_SEA_ASSET_HASH: string;
 
-// `node:ffi` needs a real file, so the executable extracts its assets before OpenTUI loads
-if (isSea()) {
-  const parent = join(envPaths("dyad", { suffix: "" }).cache, "sea");
-  // The folder name is the content hash, so a new build never uses files of an old build
-  const root = join(parent, DYAD_SEA_ASSET_HASH);
+const parent = join(envPaths("dyad", { suffix: "" }).cache, "sea");
 
-  if (!existsSync(root) && existsSync(parent)) {
+/**
+ * The folder of the extracted assets, `null` outside the executable. Its name is the content hash,
+ * so a new build never uses files of an old build.
+ */
+export const seaAssetRoot = isSea() ? join(parent, DYAD_SEA_ASSET_HASH) : null;
+
+// `node:ffi` needs a real file, so the executable extracts its assets before OpenTUI loads
+if (seaAssetRoot !== null) {
+  if (!existsSync(seaAssetRoot) && existsSync(parent)) {
     // A running old build keeps its loaded library when its file is removed. Another process of
-    // this build can already write to `root`.
+    // this build can already write to `seaAssetRoot`.
     for (const entry of readdirSync(parent)) {
       if (entry === DYAD_SEA_ASSET_HASH) continue;
       rmSync(join(parent, entry), { recursive: true, force: true });
@@ -22,7 +26,7 @@ if (isSea()) {
   }
 
   for (const key of getAssetKeys()) {
-    const target = join(root, key);
+    const target = join(seaAssetRoot, key);
     if (existsSync(target)) continue;
 
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -32,5 +36,5 @@ if (isSea()) {
     renameSync(temporary, target);
   }
 
-  process.env.OTUI_ASSET_ROOT = root;
+  process.env.OTUI_ASSET_ROOT = seaAssetRoot;
 }

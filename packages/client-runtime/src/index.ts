@@ -6,3 +6,4 @@ export * from "./library.ts";
 export * from "./replica/database.ts";
 export * from "./replica/engine.ts";
 export * from "./session.ts";
+export * from "./video.ts";

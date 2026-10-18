@@ -51,6 +51,9 @@ export const commands = {
   visualizer: command("view.visualizer", "Visualizer", "Playback", ["v"], "visual"),
   nextPreset: command("visualizer.next", "Next visual", "Playback", ["]"]),
   previousPreset: command("visualizer.previous", "Previous visual", "Playback", ["["]),
+  watchVideo: command("view.video", "Watch the video", "Playback", ["shift+v"]),
+  videoEarlier: command("video.earlier", "Show the video earlier", "Playback", ["["]),
+  videoLater: command("video.later", "Show the video later", "Playback", ["]"]),
 
   play: command("list.play", "Play, queue the rest", "Browse", ["return"], "play"),
   open: command("list.open", "Open the artist, album or playlist", "Browse", ["return"], "open"),

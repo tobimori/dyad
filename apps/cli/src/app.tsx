@@ -63,6 +63,7 @@ import { sections, startSection } from "./routes/sections.ts";
 import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
 import { useToast } from "./ui/toast.tsx";
+import { VideoView } from "./video/video-view.tsx";
 import { VisualizerView } from "./visualizer/visualizer-view.tsx";
 
 const sidebarMinWidth = 100;
@@ -145,7 +146,7 @@ export function App(props: {
 
   const main = useRef<BoxRenderable | null>(null);
   const [downloadQuality, setDownloadQuality] = useState(props.downloadQuality);
-  const [view, setView] = useState<"browse" | "nowPlaying" | "visualizer">("browse");
+  const [view, setView] = useState<"browse" | "nowPlaying" | "visualizer" | "video">("browse");
 
   // `sections` never changes, so each render calls the same hooks in the same order
   const views = new Map(
@@ -386,6 +387,12 @@ export function App(props: {
   };
 
   // No "Go to" for the page that shows now; a source without a ref falls back to a search
+  // The video plays with its own audio, so a source that does not play yet starts first
+  const watchVideo = (source: SourceSummary) => {
+    if (player.current?.source.id !== source.id) activate(indexOfSelection());
+    setView("video");
+  };
+
   const trackActions = (target: ActionTarget) => {
     const source = target.source;
     const list = [
@@ -399,6 +406,15 @@ export function App(props: {
         label: "Add to queue",
         run: () => player.addToQueue([source], target.context),
       }),
+      ...(source.video
+        ? [
+            new Action({
+              command: commands.watchVideo,
+              label: "Watch the video",
+              run: () => watchVideo(source),
+            }),
+          ]
+        : []),
     ];
 
     const artist = source.artist;
@@ -702,6 +718,16 @@ export function App(props: {
     [commands.playNext, () => runAction(commands.playNext)],
     [commands.addToQueue, () => runAction(commands.addToQueue)],
     [commands.addToPlaylist, () => runAction(commands.addToPlaylist)],
+    [
+      commands.watchVideo,
+      () => {
+        const target = actionTarget();
+        const current = player.current?.source;
+        if (target instanceof ActionTarget) watchVideo(target.source);
+        else if (current !== undefined) setView("video");
+        else toast("notice", "Nothing is playing");
+      },
+    ],
   ];
 
   const opensCard =
@@ -856,7 +882,7 @@ export function App(props: {
       height="100%"
       backgroundColor={theme.background}
     >
-      {view !== "visualizer" && (
+      {view !== "visualizer" && view !== "video" && (
         <Header
           sections={showSidebar || view === "nowPlaying" ? [] : sections}
           active={section.id}
@@ -872,6 +898,18 @@ export function App(props: {
           tap={player.tap}
           positionMs={player.position}
           durationMs={player.durationMs()}
+          width={screen.width}
+          height={screen.height}
+        />
+      )}
+      {view === "video" && (
+        <VideoView
+          source={player.current?.source}
+          playing={player.state === "playing"}
+          positionMs={player.position}
+          durationMs={player.durationMs()}
+          connection={client}
+          serverUrl={props.serverUrl}
           width={screen.width}
           height={screen.height}
         />
@@ -919,12 +957,14 @@ export function App(props: {
           )}
         </box>
       )}
-      {view !== "visualizer" && (
+      {view !== "visualizer" && view !== "video" && (
         <Footer
           entry={player.current}
           state={player.state}
           positionMs={player.position()}
           durationMs={player.durationMs()}
+          segments={segments}
+          currentSegment={currentSegment}
           volume={player.volume}
           muted={player.muted}
           quality={player.quality()}
@@ -935,8 +975,6 @@ export function App(props: {
           }
           artwork={artwork}
           showCover={view === "browse" && !showPanel}
-          segments={segments}
-          currentSegment={currentSegment}
           onOpen={openNowPlaying}
           onSeek={player.seekTo}
           onVolume={player.setVolume}

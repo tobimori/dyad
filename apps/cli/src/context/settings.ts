@@ -14,6 +14,10 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   volume: Schema.optionalKey(Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
   /** For downloads that do not choose their own. Missing until it first changes. */
   downloadQuality: Schema.optionalKey(DownloadQuality),
+  /** Shows video this much later, for audio outputs with latency such as Bluetooth headphones */
+  videoDelayMs: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: -2000, maximum: 2000 })),
+  ),
 }) {}
 
 export const defaultSettings = new Settings({ enabledPlugins: [], disabledPlugins: [] });
