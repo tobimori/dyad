@@ -48,6 +48,8 @@ export const commands = {
   repeat: command("playback.repeat", "Repeat: off, all, one", "Playback", ["shift+r"]),
   outputs: command("playback.outputs", "Play on another output", "Playback", ["o"]),
   groupOutput: command("outputs.group", "Play in sync with the active output", null, ["g"], "sync"),
+  crossfade: command("outputs.crossfade", "Crossfade on or off", null, ["x"], "crossfade"),
+  djMode: command("outputs.dj", "DJ mode: off or the next style", null, ["m"], "dj"),
   nowPlaying: command("view.nowPlaying", "Now playing", "Playback", ["p"], "playing"),
   visualizer: command("view.visualizer", "Visualizer", "Playback", ["v"], "visual"),
   nextPreset: command("visualizer.next", "Next visual", "Playback", ["]"]),

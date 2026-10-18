@@ -4,6 +4,7 @@ import { encodeFlac, remuxAudio } from "@dyad/media/node";
 import type { MediaStream } from "@dyad/media/node";
 import { Loudness } from "@dyad/player";
 import { TimedMedia, TimedOutput } from "@dyad/plugin";
+import type { OutputError } from "@dyad/plugin";
 import {
   Clock,
   Data,
@@ -16,7 +17,7 @@ import {
   SubscriptionRef,
 } from "effect";
 
-import { sourceAnalysis } from "./audio-analysis.ts";
+import { sourceAnalysis, sourceDjAnalysis } from "./audio-analysis.ts";
 import { Outputs } from "./outputs.ts";
 import { Receivers } from "./receivers.ts";
 import { FilePlayback, choosePlayableSource, providerStream } from "./playback.ts";
@@ -57,6 +58,7 @@ const renderInput = (userId: UserId, entry: QueueEntry) =>
         analysis === null
           ? undefined
           : new Loudness({ integrated: analysis.loudness, truePeak: analysis.truePeak }),
+      dj: yield* sourceDjAnalysis(sourceId),
     });
   });
 
@@ -96,8 +98,14 @@ export const driveTimedOutputs = (options: {
   readonly userId: UserId;
   readonly desired: TimedDesired;
   readonly report: (report: OutputReport) => Effect.Effect<void>;
-  /** Another session took the output */
-  readonly taken: (outputId: OutputId) => Effect.Effect<void>;
+  /** Another session took the output. Not used with `open`. */
+  readonly taken?: (outputId: OutputId) => Effect.Effect<void>;
+  /** Opens the outputs instead of the timed outputs and receivers of the core */
+  readonly open?: (outputId: OutputId) => Effect.Effect<TimedOutput, OutputError, Scope.Scope>;
+  /** The outputs close while the session pauses, for example a stream that plays on until it ends */
+  readonly closePaused?: boolean;
+  /** The outputs open after this */
+  readonly after?: Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
     const outputs = yield* Outputs;
@@ -120,6 +128,7 @@ export const driveTimedOutputs = (options: {
       // The entry that the last `EntryStarted` made current
       started: Option.none<EntryId>(),
       entries: "",
+      transitions: "",
     };
 
     const report = (state: OutputReport["state"], entryId: EntryId, positionMs: number) =>
@@ -137,13 +146,16 @@ export const driveTimedOutputs = (options: {
     const openMember = (id: OutputId) =>
       Effect.gen(function* () {
         const memberScope = yield* Scope.fork(scope);
-        const opening = receivers.has(options.userId, id)
-          ? receivers.open(options.userId, id)
-          : outputs.openTimed(id, {
-              userId: options.userId,
-              taken: closeMember(id).pipe(Effect.andThen(options.taken(id))),
-            });
-        const exit = yield* opening.pipe(
+        const taken = options.taken ?? (() => Effect.void);
+        const opening =
+          options.open?.(id) ??
+          (receivers.has(options.userId, id)
+            ? receivers.open(options.userId, id)
+            : outputs.openTimed(id, {
+                userId: options.userId,
+                taken: closeMember(id).pipe(Effect.andThen(taken(id))),
+              }));
+        const exit = yield* Effect.andThen(options.after ?? Effect.void, opening).pipe(
           Effect.timeout(openTimeout),
           Scope.provide(memberScope),
           Effect.exit,
@@ -168,11 +180,42 @@ export const driveTimedOutputs = (options: {
       if (entryId !== null) yield* report("stalled", entryId, position?.positionMs ?? 0);
     });
 
+    // A changed setting plans the next join again
+    const applyTransitions = ({ crossfadeSeconds, djStyle }: Playback) =>
+      Effect.gen(function* () {
+        const transitions = `${crossfadeSeconds} ${djStyle}`;
+        if (transitions === local.transitions) return;
+        local.transitions = transitions;
+        yield* renderer.setCrossfade(crossfadeSeconds);
+        yield* renderer.setDj(djStyle ?? undefined);
+      });
+
     const apply = Effect.gen(function* () {
       const { playback, entries } = yield* SubscriptionRef.get(desired);
+      yield* applyTransitions(playback);
+      const revised = playback.revision !== local.revision;
+      const order = entries.map((entry) => entry.id).join(" ");
+      const [first] = entries;
+      const plays = playback.state === "playing" && first !== undefined;
+
+      // Before the outputs close, so that the position is where they stopped
+      if (revised && !plays) {
+        const wasPlaying = local.playing;
+        local.playing = false;
+        local.entries = order;
+        const position = yield* renderer.pause;
+        local.revision = playback.revision;
+        // The exact position, which the extrapolated one of the session is not
+        if (wasPlaying && playback.state === "paused" && position?.entryId === playback.entryId) {
+          yield* report("paused", position.entryId, position.positionMs);
+        }
+      }
+
       // A stopped session releases its receivers, which else show that they play
       const wanted =
-        playback.outputId === null || playback.state === "stopped"
+        playback.outputId === null ||
+        playback.state === "stopped" ||
+        (options.closePaused === true && playback.state !== "playing")
           ? []
           : [playback.outputId, ...playback.group];
       yield* Effect.forEach(
@@ -181,7 +224,6 @@ export const driveTimedOutputs = (options: {
         { discard: true },
       );
 
-      const revised = playback.revision !== local.revision;
       if (revised) failed.clear();
       if (playback.state === "playing") {
         yield* Effect.forEach(
@@ -191,27 +233,15 @@ export const driveTimedOutputs = (options: {
         );
       }
 
-      const order = entries.map((entry) => entry.id).join(" ");
       if (!revised) {
         if (order === local.entries || !local.playing) return;
         local.entries = order;
         return yield* renderer.setQueue(entries);
       }
+      if (!plays) return;
 
-      const [first] = entries;
-      const wasPlaying = local.playing;
       local.playing = false;
       local.entries = order;
-      if (playback.state !== "playing" || first === undefined) {
-        const position = yield* renderer.pause;
-        local.revision = playback.revision;
-        // The exact position, which the extrapolated one of the session is not
-        if (wasPlaying && playback.state === "paused" && position?.entryId === playback.entryId) {
-          yield* report("paused", position.entryId, position.positionMs);
-        }
-        return;
-      }
-
       if (members.size === 0) {
         local.revision = playback.revision;
         return yield* stall;
@@ -301,8 +331,8 @@ export const driveTimedOutputs = (options: {
 
     return {
       desire: (next: TimedDesired) => SubscriptionRef.set(desired, next),
-      /** Stops the renderer and closes the outputs */
-      close: Scope.close(scope, Exit.void).pipe(Effect.forkDetach, Effect.asVoid),
+      /** Stops the renderer and closes the outputs. Gives the fiber that closes. */
+      close: Scope.close(scope, Exit.void).pipe(Effect.forkDetach),
     };
   });
 

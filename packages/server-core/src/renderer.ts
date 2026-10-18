@@ -1,7 +1,7 @@
 import { EntryId } from "@dyad/domain";
 import type { QueueEntry } from "@dyad/domain";
 import { Entry, openRenderer, Span, timelineRate } from "@dyad/player";
-import type { Loudness, Renderer } from "@dyad/player";
+import type { DjAnalysis, DjStyle, Loudness, Renderer } from "@dyad/player";
 import { OutputError, TimedMedia } from "@dyad/plugin";
 import type { TimedOutput } from "@dyad/plugin";
 import { Clock, Data, Deferred, Effect, Exit, Fiber, PubSub, Semaphore, Stream } from "effect";
@@ -12,6 +12,8 @@ export class RenderInput<E> extends Data.Class<{
   readonly bytes: Stream.Stream<Uint8Array, E>;
   /** Without it, the entry plays 8 dB quieter */
   readonly loudness: Loudness | undefined;
+  /** Without it, DJ mode joins the entry by crossfade */
+  readonly dj: DjAnalysis | undefined;
 }> {}
 
 /** The entry plays from `positionMs` at `atUs`, after a join or at the start of an epoch */
@@ -62,6 +64,8 @@ export class SessionRenderer extends Data.Class<{
   readonly pause: Effect.Effect<RenderPosition | undefined>;
   /** 0 turns crossfade off */
   readonly setCrossfade: (seconds: number) => Effect.Effect<void>;
+  /** `undefined` turns DJ mode off */
+  readonly setDj: (style: DjStyle | undefined) => Effect.Effect<void>;
   /** What plays now */
   readonly position: Effect.Effect<RenderPosition | undefined>;
   /** The output gets the next block, so it joins in sync with the others */
@@ -179,6 +183,7 @@ export const openSessionRenderer = <E, F>(
 
     let queue: ReadonlyArray<QueueEntry> = [];
     let crossfadeSeconds = 0;
+    let djStyle: DjStyle | undefined;
     // The next unused timeline frame. Epochs never reuse a frame.
     let timeline = 0;
     // What plays when no epoch has audio on the timeline
@@ -251,6 +256,7 @@ export const openSessionRenderer = <E, F>(
               window.needs = offset;
             },
             loudness: audio.loudness,
+            dj: audio.dj,
           });
           resolved.set(entry.id, loaded);
           yield* Deferred.succeed(ready, loaded);
@@ -353,6 +359,7 @@ export const openSessionRenderer = <E, F>(
 
         const current = yield* openRenderer;
         yield* current.setCrossfade(crossfadeSeconds);
+        yield* current.setDj(djStyle);
         player = current;
         yield* locked(syncPlayer);
         yield* current.seek(Math.round((positionMs * timelineRate) / 1000));
@@ -496,6 +503,12 @@ export const openSessionRenderer = <E, F>(
         if (player !== undefined) yield* player.setCrossfade(seconds);
       });
 
+    const setDj = (style: DjStyle | undefined) =>
+      Effect.gen(function* () {
+        djStyle = style;
+        if (player !== undefined) yield* player.setDj(style);
+      });
+
     const removeOutput = (id: string) =>
       Effect.gen(function* () {
         const removed = outputs.get(id);
@@ -522,6 +535,7 @@ export const openSessionRenderer = <E, F>(
       setQueue: (entries) => locked(setQueue(entries)),
       pause: locked(pause),
       setCrossfade: (seconds) => locked(setCrossfade(seconds)),
+      setDj: (style) => locked(setDj(style)),
       position: Effect.map(nowUs, positionAt),
       addOutput: (id, output) => locked(addOutput(id, output)),
       removeOutput: (id) => locked(removeOutput(id)),

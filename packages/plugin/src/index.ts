@@ -465,6 +465,8 @@ export class OutputInfo extends Data.Class<{
   readonly name: string;
   /** IP address. Outputs of two plugins on one address show as one row of the device. */
   readonly host?: string | undefined;
+  /** URL outputs of one plugin with the same value can play in sync through `UrlOutputs.join` */
+  readonly nativeGroup?: string | undefined;
 }> {}
 
 export class UrlStatus extends Data.Class<{
@@ -512,6 +514,19 @@ export class UrlOutput extends Data.Class<{
    * when the device does not answer.
    */
   readonly status: Stream.Stream<UrlStatus, OutputError>;
+  /**
+   * The device plays a FLAC stream without an end, so that the server can render crossfades and DJ
+   * transitions for it
+   */
+  readonly live?: boolean;
+}> {}
+
+/** A device that plays what another device plays, in sync, until the scope closes */
+export class UrlMember extends Data.Class<{
+  /** `volume` is from 0 to 1. A muted device unmutes. */
+  readonly setVolume: (volume: number) => Effect.Effect<void, OutputError>;
+  /** Completes when another controller takes the device out of the group */
+  readonly left: Effect.Effect<void>;
 }> {}
 
 /** Devices of one protocol that pull stream URLs, for example UPnP renderers */
@@ -520,6 +535,14 @@ export class UrlOutputs extends Data.Class<{
   readonly discover: Stream.Stream<ReadonlyArray<OutputInfo>>;
   /** Opens a device of the last `discover` list until the scope closes */
   readonly open: (id: string) => Effect.Effect<UrlOutput, OutputError, Scope.Scope>;
+  /**
+   * Makes device `id` play what device `coordinator` plays, until the scope closes. Both have the
+   * same `OutputInfo.nativeGroup`.
+   */
+  readonly join?: (
+    id: string,
+    coordinator: string,
+  ) => Effect.Effect<UrlMember, OutputError, Scope.Scope>;
 }> {}
 
 /** What a timed output shows for the entry that plays */

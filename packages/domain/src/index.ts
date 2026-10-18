@@ -560,6 +560,9 @@ export type OutputId = typeof OutputId.Type;
 
 export const RepeatMode = Schema.Literals(["off", "all", "one"]);
 
+/** How DJ mode joins two entries with beat analysis, as `@dyad/player` plays it */
+export const DjStyle = Schema.Literals(["blend", "filter", "echo-out", "rise"]);
+
 export class QueueEntry extends Schema.Class<QueueEntry>("QueueEntry")({
   id: EntryId,
   source: SourceSummary,
@@ -586,7 +589,7 @@ export class Playback extends Schema.Class<Playback>("Playback")({
   /** Changes at each command that changes the transport, but not at the natural end of an entry */
   revision: Schema.Int,
   outputId: Schema.NullOr(OutputId),
-  /** The other `timed` outputs that play in sync with `outputId` */
+  /** The other outputs that play in sync with `outputId`. A group of Sonos only is a Sonos group. */
   group: Schema.Array(OutputId).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   /** The output stopped reporting and can still play from its buffer, or it did not start to play */
   lost: Schema.Boolean,
@@ -596,6 +599,19 @@ export class Playback extends Schema.Class<Playback>("Playback")({
   autoplay: Schema.Boolean.pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(true)),
     Schema.withConstructorDefault(Effect.succeed(true)),
+  ),
+  /**
+   * Crossfade between entries, 0 for gapless. Like `djStyle`, only outputs that the server renders
+   * for play it: timed outputs, groups and Sonos.
+   */
+  crossfadeSeconds: Schema.Int.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(0)),
+    Schema.withConstructorDefault(Effect.succeed(0)),
+  ),
+  /** DJ mode joins entries with beat analysis in this style, and the others by crossfade */
+  djStyle: Schema.NullOr(DjStyle).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
   ),
 }) {}
 
@@ -679,6 +695,10 @@ export const SessionCommand = Schema.TaggedUnion({
   SetShuffle: { on: Schema.Boolean },
   SetRepeat: { mode: RepeatMode },
   SetAutoplay: { on: Schema.Boolean },
+  SetTransitions: {
+    crossfadeSeconds: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 12 })),
+    djStyle: Schema.NullOr(DjStyle),
+  },
   /** `play: null` keeps the state. The session leaves its group. */
   Transfer: { outputId: OutputId, play: Schema.NullOr(Schema.Boolean) },
   /**

@@ -23,6 +23,7 @@ import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
 import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { mediaCacheLayer } from "./media-cache.ts";
+import { liveRoute } from "./live-output.ts";
 import { outputsLayer } from "./outputs.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { receiversLayer } from "./receivers.ts";
@@ -169,6 +170,7 @@ export const serverRoutes = Layer.unwrap(
       HttpRouter.add("GET", "/health", HttpServerResponse.text("ok")),
       streamRoute,
       timedRoute,
+      liveRoute,
       videoRoute,
       downloadRoute,
       peerRoutes,

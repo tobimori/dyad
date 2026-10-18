@@ -1,7 +1,8 @@
 import { Data, Effect, Schema } from "effect";
 
 import { describe } from "./description.ts";
-import { findService, soap } from "./soap.ts";
+import { findService, soap, soapCommand } from "./soap.ts";
+import { CommandFailed } from "../target.ts";
 import type { UpnpDevice } from "../target.ts";
 import { decodeXml } from "./xml.ts";
 
@@ -61,11 +62,17 @@ export const sonosBonded = (device: UpnpDevice) =>
     ),
   );
 
+export class SonosRoom extends Data.Class<{
+  /** UDN, as in `UpnpDevice.id` */
+  readonly id: string;
+  readonly name: string;
+}> {}
+
 export class SonosGroup extends Data.Class<{
   /** UDN of the coordinator, as in `UpnpDevice.id` */
   readonly coordinatorId: string;
   /** The rooms of the other members. A stereo pair or a surround speaker is not a room. */
-  readonly otherRooms: ReadonlyArray<string>;
+  readonly otherRooms: ReadonlyArray<SonosRoom>;
 }> {}
 
 /** The groups of the Sonos household of `device`, as the Sonos app shows them */
@@ -81,12 +88,59 @@ export const sonosGroups = (device: UpnpDevice) =>
               member.Invisible === "1" ||
               member.ZoneName === undefined
                 ? []
-                : [member.ZoneName],
+                : [new SonosRoom({ id: `uuid:${member.UUID}`, name: member.ZoneName })],
             ),
           }),
       ),
     ),
   );
+
+const avTransportOf = (device: UpnpDevice) => {
+  const service = findService(device.services, "AVTransport");
+  return service === undefined
+    ? Effect.fail(
+        new CommandFailed({ device: device.name, command: "group", reason: "No AVTransport" }),
+      )
+    : Effect.succeed(service);
+};
+
+/** Makes `member` play what the group of `coordinator` plays */
+export const sonosJoin = (member: UpnpDevice, coordinator: UpnpDevice) =>
+  Effect.flatMap(avTransportOf(member), (service) =>
+    soapCommand(member.name, service, "SetAVTransportURI", [
+      ["InstanceID", 0],
+      ["CurrentURI", `x-rincon:${uuidOf(coordinator)}`],
+      ["CurrentURIMetaData", ""],
+    ]),
+  );
+
+/** Takes `member` out of its group. It then plays nothing. */
+export const sonosLeave = (member: UpnpDevice) =>
+  Effect.flatMap(avTransportOf(member), (service) =>
+    soapCommand(member.name, service, "BecomeCoordinatorOfStandaloneGroup", [["InstanceID", 0]]),
+  );
+
+/** Sets the volume of the room `device` alone, also in a group, and unmutes it */
+export const sonosRoomVolume = (device: UpnpDevice, volume: number) =>
+  Effect.gen(function* () {
+    const service = findService(device.services, "RenderingControl");
+    if (service === undefined) {
+      return yield* new CommandFailed({
+        device: device.name,
+        command: "setVolume",
+        reason: "No RenderingControl",
+      });
+    }
+    const channel = [
+      ["InstanceID", 0],
+      ["Channel", "Master"],
+    ] as const;
+    yield* soapCommand(device.name, service, "SetMute", [...channel, ["DesiredMute", 0]]);
+    yield* soapCommand(device.name, service, "SetVolume", [
+      ...channel,
+      ["DesiredVolume", Math.round(Math.min(Math.max(volume, 0), 1) * 100)],
+    ]);
+  });
 
 /**
  * The coordinator of the Sonos group of `device`. A group member ignores transport commands, so

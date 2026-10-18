@@ -30,6 +30,7 @@ import {
   Data,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Match,
   Option,
@@ -163,6 +164,9 @@ const makeSession = (
       urlDriver: Option.none<UrlDriver>(),
       // Set while the output is a timed output
       timedDriver: Option.none<TimedDriver>(),
+      // The drivers that close now. A new driver waits for them, else the last commands of an old
+      // driver can stop a device that the new one started, for example a Sonos that leaves AirPlay.
+      closing: Effect.void,
       // A play on a URL output counts for the device that sent the last command
       commandDevice: Option.none<DeviceId>(),
       // The play of an entry that the output started offline. The server continues it.
@@ -194,15 +198,22 @@ const makeSession = (
     const available = (outputId: OutputId) =>
       state.players.has(outputId) || urlOutputs.has(outputId);
 
-    const groupable = (outputId: OutputId) =>
+    const timedCapable = (outputId: OutputId) =>
       state.players.has(outputId)
         ? receivers.has(userId, outputId)
-        : urlOutputs.has(outputId) && urlOutputs.groupable(outputId);
+        : urlOutputs.has(outputId) && urlOutputs.timedCapable(outputId);
 
-    // A group always plays through the renderer. A URL output or a device alone plays by itself.
+    // In a timed group, or in a group of URL outputs that the plugin groups
+    const groupable = (outputId: OutputId) =>
+      timedCapable(outputId) || (!state.players.has(outputId) && urlOutputs.joinable([outputId]));
+
+    // A group plays through the renderer, unless its plugin groups it, for example a group of Sonos
+    // only. A URL output or a device alone plays by itself.
     const timedRoute = () => {
       const { outputId, group } = state.playback;
-      return outputId !== null && (group.length > 0 || urlOutputs.isTimed(outputId));
+      if (outputId === null) return false;
+      const members = [outputId, ...group];
+      return urlOutputs.isTimed(outputId) || (group.length > 0 && !urlOutputs.isNative(members));
     };
 
     const broadcastOutputs = () =>
@@ -356,36 +367,6 @@ const makeSession = (
       return [...new Set(entries.flatMap((entry) => entry?.source.id ?? []))];
     };
 
-    // A session from the database opens its URL output only at its first change, so that it does
-    // not take the output from another session
-    const syncUrlOutput: Effect.Effect<void> = Effect.gen(function* () {
-      const { outputId } = state.playback;
-      const driver = Option.getOrUndefined(state.urlDriver);
-      if (driver !== undefined && (driver.outputId !== outputId || timedRoute())) {
-        state.urlDriver = Option.none();
-        yield* driver.close(true);
-      }
-      if (outputId === null || timedRoute()) return;
-
-      const { entryId, repeat } = state.playback;
-      const desired = new UrlDesired({
-        playback: state.playback,
-        entry: currentEntry(),
-        next: nextEntry(state.entries, entryId, repeat, "end"),
-      });
-      if (Option.isSome(state.urlDriver)) return yield* state.urlDriver.value.desire(desired);
-      if (!urlOutputs.has(outputId)) return;
-
-      const created: UrlDriver = yield* driveUrlOutput({
-        userId,
-        outputId,
-        desired,
-        report: (received) => reportOutput(created, received),
-        taken: Effect.suspend(() => outputTaken(created)),
-      }).pipe(Effect.provideContext(driverServices));
-      state.urlDriver = Option.some(created);
-    });
-
     // The current entry and the entries that follow it, until one repeats
     const playOrder = () => {
       const first = currentEntry();
@@ -404,15 +385,38 @@ const makeSession = (
       return order;
     };
 
+    // A session from the database opens its URL output only at its first change, so that it does
+    // not take the output from another session
+    const syncUrlOutput: Effect.Effect<void> = Effect.gen(function* () {
+      const { outputId } = state.playback;
+      if (outputId === null || timedRoute()) return;
+
+      const { entryId, repeat } = state.playback;
+      const desired = new UrlDesired({
+        playback: state.playback,
+        entry: currentEntry(),
+        next: nextEntry(state.entries, entryId, repeat, "end"),
+        entries: playOrder(),
+      });
+      if (Option.isSome(state.urlDriver)) return yield* state.urlDriver.value.desire(desired);
+      if (!urlOutputs.has(outputId)) return;
+
+      const created: UrlDriver = yield* driveUrlOutput({
+        userId,
+        outputId,
+        desired,
+        report: (received) => reportOutput(created, received),
+        taken: Effect.suspend(() => outputTaken(created)),
+        memberTaken: (taken) => memberTaken(created, taken),
+        after: state.closing,
+      }).pipe(Effect.provideContext(driverServices));
+      state.urlDriver = Option.some(created);
+    });
+
     // Like `syncUrlOutput`. One driver serves all outputs of the group.
     const syncTimedOutput: Effect.Effect<void> = Effect.gen(function* () {
-      const timed = timedRoute();
+      if (!timedRoute()) return;
       const driver = Option.getOrUndefined(state.timedDriver);
-      if (driver !== undefined && !timed) {
-        state.timedDriver = Option.none();
-        yield* driver.close;
-      }
-      if (!timed) return;
 
       const desired = new TimedDesired({ playback: state.playback, entries: playOrder() });
       if (driver !== undefined) return yield* driver.desire(desired);
@@ -422,8 +426,27 @@ const makeSession = (
         desired,
         report: (received) => reportTimed(created, received),
         taken: (taken) => memberTaken(created, taken),
+        after: state.closing,
       }).pipe(Effect.provideContext(timedServices));
       state.timedDriver = Option.some(created);
+    });
+
+    // The drivers that do not fit the output or the route any more
+    const closeStaleDrivers = Effect.gen(function* () {
+      const { outputId } = state.playback;
+      const timed = timedRoute();
+      const url = Option.getOrUndefined(state.urlDriver);
+      const renderer = Option.getOrUndefined(state.timedDriver);
+      const closing = [];
+      if (url !== undefined && (url.outputId !== outputId || timed)) {
+        state.urlDriver = Option.none();
+        closing.push(yield* url.close(true));
+      }
+      if (renderer !== undefined && !timed) {
+        state.timedDriver = Option.none();
+        closing.push(yield* renderer.close);
+      }
+      if (closing.length > 0) state.closing = Effect.asVoid(Fiber.awaitAll(closing));
     });
 
     // Runs `change` under the lock and publishes the new playback once
@@ -464,6 +487,7 @@ const makeSession = (
           }
           // A queue edit can change the entry that the URL output plays next
           if (changed) {
+            yield* closeStaleDrivers;
             yield* syncUrlOutput;
             yield* syncTimedOutput;
           }
@@ -774,6 +798,16 @@ const makeSession = (
               return [];
             }),
 
+          // The drivers keep the position: a renderer changes the next join, and a Sonos changes
+          // between its queue and a live stream at the current position
+          SetTransitions: ({ crossfadeSeconds, djStyle }) =>
+            Effect.sync(() => {
+              if (crossfadeSeconds !== playback.crossfadeSeconds || djStyle !== playback.djStyle) {
+                setPlayback({ crossfadeSeconds, djStyle });
+              }
+              return [];
+            }),
+
           Transfer: (command) => transfer(command.outputId, command.play, []),
 
           SetGroup: (command) =>
@@ -781,7 +815,7 @@ const makeSession = (
               const first = command.outputIds[0];
               const all = [...new Set(command.outputIds)];
               const rest = all.slice(1);
-              if (!all.every(groupable)) {
+              if (!all.every(timedCapable) && !urlOutputs.joinable(all)) {
                 return yield* fail("output_unavailable");
               }
 
@@ -921,11 +955,14 @@ const makeSession = (
         }),
       );
 
-    // Another session took one output of the group. The others play on.
-    const memberTaken = (driver: TimedDriver, taken: OutputId) =>
+    // Another session or controller took one output of the group. The others play on.
+    const memberTaken = (driver: TimedDriver | UrlDriver, taken: OutputId) =>
       modify((now) =>
         Effect.sync(() => {
-          if (Option.getOrUndefined(state.timedDriver) !== driver) return;
+          const current =
+            Option.getOrUndefined(state.timedDriver) === driver ||
+            Option.getOrUndefined(state.urlDriver) === driver;
+          if (!current) return;
           const { outputId, group } = state.playback;
           if (outputId === null) return;
           const [first, ...rest] = [outputId, ...group].filter((id) => id !== taken);
@@ -1186,8 +1223,10 @@ const makeSession = (
     const tick = modify((now) =>
       Effect.sync(() => {
         const playback = state.playback;
-        // A timed output sends no reports while an entry plays: the renderer knows the position
-        const reports = Option.isNone(state.timedDriver);
+        // A renderer sends no reports while an entry plays: it knows the position
+        const reports =
+          Option.isNone(state.timedDriver) &&
+          !Option.exists(state.urlDriver, (driver) => driver.rendering());
         if (
           playback.state === "playing" &&
           !playback.lost &&

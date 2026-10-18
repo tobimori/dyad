@@ -229,8 +229,12 @@ export function usePlayer(props: {
       if (current === undefined) return null;
       const own = props.engine?.tap(current.id) ?? null;
       const output = view.outputs.find((candidate) => candidate.id === playback.outputId);
-      const timed = playback.group.length > 0 || output?.kind === "timed";
-      return own ?? (timed ? props.listen : null);
+      // The server renders groups, timed outputs and the live stream of a Sonos with transitions
+      const rendered =
+        playback.group.length > 0 ||
+        output?.kind === "timed" ||
+        (output?.kind === "url" && (playback.crossfadeSeconds > 0 || playback.djStyle !== null));
+      return own ?? (rendered ? props.listen : null);
     },
     /** `null` while the audio plays on another device */
     quality: () => (current === undefined ? null : (props.engine?.quality(current.id) ?? null)),

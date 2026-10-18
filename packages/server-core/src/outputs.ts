@@ -2,7 +2,14 @@ import { outputSetting } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import { Output, OutputId } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import { OutputError, TimedOutput, TimedOutputs, UrlOutput, UrlOutputs } from "@dyad/plugin";
+import {
+  OutputError,
+  TimedOutput,
+  TimedOutputs,
+  UrlMember,
+  UrlOutput,
+  UrlOutputs,
+} from "@dyad/plugin";
 import type { OutputInfo } from "@dyad/plugin";
 import { Context, Data, Deferred, Effect, Layer, PubSub, Stream } from "effect";
 
@@ -29,7 +36,9 @@ const makeOutputs = Effect.gen(function* () {
   const registrations = new Map<string, UrlOutputs | TimedOutputs>();
   const discovered = new Map<string, ReadonlyArray<OutputInfo>>();
   const holders = new Map<OutputId, Holder>();
-  const opened = new Map<OutputId, UrlOutput | TimedOutput>();
+  const opened = new Map<OutputId, UrlOutput | TimedOutput | UrlMember>();
+  // Live streams that URL outputs pull, by the random ID in their URL
+  const liveStreams = new Map<string, Effect.Effect<Stream.Stream<Uint8Array>>>();
   // The last volume and mute state that an open URL output reported, or that the core set on a
   // timed output
   const volumes = new Map<OutputId, number>();
@@ -59,6 +68,30 @@ const makeOutputs = Effect.gen(function* () {
   const isTimed = (id: OutputId) =>
     registrations.get(locate(id).registration) instanceof TimedOutputs;
 
+  const infoOf = (id: OutputId) => {
+    const { registration, nativeId } = locate(id);
+    return discovered.get(registration)?.find((info) => info.id === nativeId);
+  };
+
+  /** Whether all outputs are URL outputs of one plugin that groups them itself */
+  const isNative = (ids: ReadonlyArray<OutputId>) => {
+    const registration = ids[0] === undefined ? undefined : locate(ids[0]).registration;
+    const outputs = registration === undefined ? undefined : registrations.get(registration);
+    return (
+      outputs instanceof UrlOutputs &&
+      outputs.join !== undefined &&
+      ids.every((id) => locate(id).registration === registration)
+    );
+  };
+
+  /** Whether the plugin of the outputs can group them now */
+  const joinable = (ids: ReadonlyArray<OutputId>) => {
+    const group = ids[0] === undefined ? undefined : infoOf(ids[0])?.nativeGroup;
+    return (
+      group !== undefined && isNative(ids) && ids.every((id) => infoOf(id)?.nativeGroup === group)
+    );
+  };
+
   const found = () =>
     [...discovered].flatMap(([registration, infos]) =>
       infos.map(
@@ -81,8 +114,8 @@ const makeOutputs = Effect.gen(function* () {
       : all.find((each) => each.timed && each.info.host === host)?.id;
   };
 
-  /** Whether the output can play in a group, itself or through its timed twin */
-  const groupable = (id: OutputId) => isTimed(id) || twinOf(id) !== undefined;
+  /** Whether the output can play in a timed group, itself or through its timed twin */
+  const timedCapable = (id: OutputId) => isTimed(id) || twinOf(id) !== undefined;
 
   const list = () => {
     const all = found();
@@ -98,7 +131,7 @@ const makeOutputs = Effect.gen(function* () {
             volume: volumes.get(id) ?? null,
             muted: mutes.get(id) ?? false,
             delayMs: delays.get(id) ?? 0,
-            groupable: timed || twinOf(id) !== undefined,
+            groupable: timed || twinOf(id) !== undefined || info.nativeGroup !== undefined,
           }),
       );
   };
@@ -177,6 +210,23 @@ const makeOutputs = Effect.gen(function* () {
       });
     });
 
+  /**
+   * Makes the URL output play what `coordinator` plays, until the scope closes. The output belongs
+   * to the session of `userId` like after `open`.
+   */
+  const join = (
+    id: OutputId,
+    coordinator: OutputId,
+    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
+  ) =>
+    Effect.gen(function* () {
+      const { outputs, nativeId } = yield* hold(id, holder);
+      if (!(outputs instanceof UrlOutputs) || outputs.join === undefined) return yield* kindError;
+      const member = yield* outputs.join(nativeId, locate(coordinator).nativeId);
+      opened.set(id, member);
+      return member;
+    });
+
   const rememberVolume = (id: OutputId, volume: number) =>
     Effect.sync(() => volumes.set(id, volume)).pipe(Effect.andThen(notify));
 
@@ -213,9 +263,20 @@ const makeOutputs = Effect.gen(function* () {
    */
   const setVolume = (id: OutputId, volume: number) => {
     const output = opened.get(id);
+    // A group member reports no volume
+    if (output instanceof UrlMember) {
+      return output.setVolume(volume).pipe(Effect.andThen(rememberVolume(id, volume)));
+    }
     if (output !== undefined) return output.setVolume(volume);
     return isTimed(id) && has(id) ? rememberVolume(id, volume) : undefined;
   };
+
+  /** Serves the stream at `/live/<id>` until the scope closes. Each request connects again. */
+  const addLiveStream = (id: string, connect: Effect.Effect<Stream.Stream<Uint8Array>>) =>
+    Effect.acquireRelease(
+      Effect.sync(() => liveStreams.set(id, connect)),
+      () => Effect.sync(() => liveStreams.delete(id)),
+    );
 
   const setDelay = (id: OutputId, delayMs: number) =>
     Effect.gen(function* () {
@@ -233,13 +294,18 @@ const makeOutputs = Effect.gen(function* () {
     follow,
     has,
     isTimed,
-    groupable,
+    isNative,
+    joinable,
+    timedCapable,
     list,
     open,
     openTimed,
+    join,
     setVolume,
     delayOf: (id: OutputId) => delays.get(id) ?? 0,
     setDelay,
+    addLiveStream,
+    liveStream: (id: string) => liveStreams.get(id),
     /** The user whose session holds the output */
     heldBy: (id: OutputId) => holders.get(id)?.userId,
     /** Emits after each change of `list` */
