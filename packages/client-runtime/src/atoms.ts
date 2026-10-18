@@ -1,6 +1,6 @@
 import type { AlbumRef, ArtistRef } from "@dyad/domain";
 import { Context, Effect, Layer, Option, Stream } from "effect";
-import { Atom, Reactivity } from "effect/reactivity";
+import { AsyncResult, Atom, Reactivity } from "effect/reactivity";
 
 import { ConnectionStatus, ServerConnection } from "./connection.ts";
 import { ClientDatabase, accountProvidersState } from "./replica/database.ts";
@@ -10,6 +10,7 @@ import {
   localPlaylistEntries,
   localPlaylists,
   localRecentPlays,
+  localSourceSegments,
   localSyncProgress,
 } from "./replica/views.ts";
 
@@ -101,13 +102,17 @@ export const serverAtoms = (
         .pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
     homePage: runtime.atom(Stream.unwrap(ServerConnection.useSync((client) => client.homePage()))),
-    sourceSegments: Atom.family((sourceId: string) =>
-      runtime
-        .atom(
-          Stream.unwrap(ServerConnection.useSync((client) => client.sourceSegments({ sourceId }))),
-        )
-        .pipe(Atom.setIdleTTL(pageIdleTime)),
-    ),
+    /** The tracklist of a DJ set source from the server, else from the replica */
+    sourceSegments: Atom.family((sourceId: string) => {
+      const remote = runtime.atom(
+        Stream.unwrap(ServerConnection.useSync((client) => client.sourceSegments({ sourceId }))),
+      );
+      const replica = local(["source_segment"], localSourceSegments(sourceId));
+      return Atom.make((get) => {
+        const online = get(remote);
+        return AsyncResult.isSuccess(online) ? online : get(replica);
+      }).pipe(Atom.setIdleTTL(pageIdleTime));
+    }),
   };
 };
 

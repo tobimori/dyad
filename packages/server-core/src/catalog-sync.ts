@@ -7,6 +7,7 @@ import {
   playlistEntry,
   recording,
   source,
+  sourceSegment,
   sourceVariant,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
@@ -19,6 +20,7 @@ import {
   RecordingRow,
   SourceKeyRow,
   SourceRow,
+  SourceSegmentRow,
   SourceVariantRow,
 } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
@@ -82,6 +84,10 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
       .select()
       .from(sourceVariant)
       .where(inArray(sourceVariant.sourceId, sourceIds));
+    const segments = yield* db
+      .select()
+      .from(sourceSegment)
+      .where(inArray(sourceSegment.sourceId, sourceIds));
     const keys = yield* db
       .select({
         sourceId: localFile.sourceId,
@@ -106,11 +112,12 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
         recordings: Schema.Array(RecordingRow),
         sources: Schema.Array(SourceRow),
         variants: Schema.Array(SourceVariantRow),
+        segments: Schema.Array(SourceSegmentRow),
         // Copies of one file on the server have the same keys
         keys: Schema.Array(SourceKeyRow),
         remoteTracks: Schema.Array(LibraryRemoteTrackRow),
       }),
-    )({ recordings, sources, variants, keys, remoteTracks }).pipe(Effect.orDie);
+    )({ recordings, sources, variants, segments, keys, remoteTracks }).pipe(Effect.orDie);
 
     const rootOf = new Map<string, string>(
       decoded.recordings.map((row) => [row.id, row.mergedIntoId ?? row.id]),
@@ -136,6 +143,7 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
           ).values(),
         ],
         remoteTracks: decoded.remoteTracks.filter((row) => rootOf.get(row.recordingId) === root.id),
+        segments: decoded.segments.filter((row) => inGroup.has(row.sourceId)),
       });
     });
   });

@@ -54,6 +54,10 @@ export const stateKey = <T, E>(key: string, schema: Schema.Codec<T, E>) => ({
         .values({ key, value: encoded })
         .onConflictDoUpdate({ target: clientState.key, set: { value: encoded } });
     }).pipe(Effect.orDie),
+  clear: Effect.gen(function* () {
+    const db = yield* ClientDatabase;
+    yield* db.delete(clientState).where(eq(clientState.key, key));
+  }).pipe(Effect.orDie),
 });
 
 // Recordings that the server does not have. Each stays its own root without sources.

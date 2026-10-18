@@ -138,6 +138,16 @@ export class SourceVariantRow extends Schema.Class<SourceVariantRow>("SourceVari
   encrypted: Schema.Boolean,
 }) {}
 
+export class SourceSegmentRow extends Schema.Class<SourceSegmentRow>("SourceSegmentRow")({
+  sourceId: Uuid,
+  position: Schema.Int,
+  recordingId: Schema.NullOr(RecordingId),
+  rawArtist: Schema.NullOr(Schema.String),
+  rawTitle: Schema.NullOr(Schema.String),
+  startMs: Schema.NullOr(Schema.Int),
+  endMs: Schema.NullOr(Schema.Int),
+}) {}
+
 /** The library keys of a local file on the server, for the page refs of its source */
 export class SourceKeyRow extends Schema.Class<SourceKeyRow>("SourceKeyRow")({
   sourceId: Uuid,
@@ -163,8 +173,8 @@ export class LibraryRemoteTrackRow extends Schema.Class<LibraryRemoteTrackRow>(
 }) {}
 
 /**
- * A root recording, the recordings merged into it, their sources and variants, and the remote
- * tracks of the requesting user. A client replaces its rows of the group with these.
+ * A root recording, the recordings merged into it, their sources, variants and segments, and the
+ * remote tracks of the requesting user. A client replaces its rows of the group with these.
  */
 export class CatalogGroup extends Schema.Class<CatalogGroup>("CatalogGroup")({
   rootId: RecordingId,
@@ -174,6 +184,7 @@ export class CatalogGroup extends Schema.Class<CatalogGroup>("CatalogGroup")({
   variants: Schema.Array(SourceVariantRow),
   sourceKeys: Schema.Array(SourceKeyRow),
   remoteTracks: Schema.Array(LibraryRemoteTrackRow),
+  segments: Schema.Array(SourceSegmentRow).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 }) {}
 
 export class CatalogCursor extends Schema.Class<CatalogCursor>("CatalogCursor")({

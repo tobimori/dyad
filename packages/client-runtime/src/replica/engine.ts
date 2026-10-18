@@ -54,7 +54,7 @@ const replicaIdState = stateKey("replicaId", ReplicaId);
 // The user and device of the device token, for the rows of own mutations
 const principalState = stateKey("principal", Principal);
 const epochState = stateKey("epoch", Schema.String);
-const catalogCursorState = stateKey("catalogCursor", Schema.NullOr(CatalogCursor));
+const catalogCursorState = stateKey("catalogCursor", CatalogCursor);
 const nextMutationIdState = stateKey("nextMutationId", Schema.Int);
 
 /** The replica learns its user and device at its first connection, and needs them for own rows */
@@ -263,7 +263,10 @@ const makeReplica = Effect.gen(function* () {
       yield* missingRecordingsState.set(
         [...new Set([...missing, ...catalog.missing])].filter((id) => !arrived.has(id)),
       );
-      yield* catalogCursorState.set(catalog.cursor);
+      // The value column cannot hold `null`, which the server sends while the catalog is empty
+      yield* catalog.cursor === null
+        ? catalogCursorState.clear
+        : catalogCursorState.set(catalog.cursor);
       yield* epochState.set(response.epoch);
       return tables;
     }).pipe(Effect.orDie);

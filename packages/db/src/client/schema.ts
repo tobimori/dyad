@@ -5,7 +5,7 @@ export { recording } from "../schema/catalog.ts";
 export { playEvent } from "../schema/history.ts";
 export { libraryRemoteTrack } from "../schema/library-sync.ts";
 export { libraryItem, playlist, playlistEntry } from "../schema/library.ts";
-export { source, sourceVariant } from "../schema/source.ts";
+export { source, sourceSegment, sourceVariant } from "../schema/source.ts";
 
 /** Own mutations that the server has not acknowledged */
 export const syncQueue = sqliteTable("sync_queue", {

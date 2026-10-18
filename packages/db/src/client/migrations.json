@@ -33,5 +33,16 @@
       "\nCREATE INDEX `source_track_idx` ON `source` (`track_id`);",
       "\nCREATE INDEX `source_variant_source_idx` ON `source_variant` (`source_id`);"
     ]
+  },
+  {
+    "name": "20261018131627_add_source_segment",
+    "folderMillis": 1792329387000,
+    "hash": "1798c429be63cc64c2b0e5b3b6cd445d7e65831c566f4e208437739642018d13",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `source_segment` (\n\t`source_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`recording_id` text,\n\t`raw_artist` text,\n\t`raw_title` text,\n\t`start_ms` integer,\n\t`end_ms` integer,\n\tCONSTRAINT `source_segment_pk` PRIMARY KEY(`source_id`, `position`)\n);\n",
+      "\nCREATE INDEX `source_segment_recording_idx` ON `source_segment` (`recording_id`);",
+      "\n-- Groups that the client has already synced come again with their segments\nDELETE FROM `client_state` WHERE `key` = 'catalogCursor';\n"
+    ]
   }
 ]

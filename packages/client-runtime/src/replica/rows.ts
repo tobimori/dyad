@@ -7,6 +7,7 @@ import {
   recording,
   source,
   sourceKey,
+  sourceSegment,
   sourceVariant,
 } from "@dyad/db/client";
 import { SyncRow } from "@dyad/domain";
@@ -165,6 +166,7 @@ export const replaceGroup = (group: CatalogGroup) =>
     ];
 
     yield* deleteWhereIn(sourceVariant, sourceVariant.sourceId, sourceIds);
+    yield* deleteWhereIn(sourceSegment, sourceSegment.sourceId, sourceIds);
     yield* deleteWhereIn(sourceKey, sourceKey.sourceId, sourceIds);
     yield* deleteWhereIn(source, source.id, sourceIds);
     yield* deleteWhereIn(libraryRemoteTrack, libraryRemoteTrack.recordingId, recordingIds);
@@ -173,6 +175,7 @@ export const replaceGroup = (group: CatalogGroup) =>
     yield* insertAll(recording, group.recordings);
     yield* insertAll(source, group.sources);
     yield* insertAll(sourceVariant, group.variants);
+    yield* insertAll(sourceSegment, group.segments);
     yield* insertAll(sourceKey, group.sourceKeys);
     yield* insertAll(libraryRemoteTrack, group.remoteTracks);
   }).pipe(Effect.orDie);
@@ -192,6 +195,7 @@ export const catalogTables = [
   "recording",
   "source",
   "source_variant",
+  "source_segment",
   "source_key",
   "library_remote_track",
 ] as const;

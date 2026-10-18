@@ -7,6 +7,7 @@ import {
   recording,
   source,
   sourceKey,
+  sourceSegment,
   sourceVariant,
   syncScope,
 } from "@dyad/db/client";
@@ -14,6 +15,8 @@ import {
   LibraryEntry,
   PlaylistEntry,
   PlaylistNotFound,
+  RecordingId,
+  SourceSegment,
   SourceSummary,
   libraryAlbumRef,
   libraryArtistRef,
@@ -219,6 +222,30 @@ export const localRecentPlays = Effect.gen(function* () {
   const summaries = new Map(rows.map((row) => [row.summary.id, row.summary]));
   return plays.flatMap((play) => summaries.get(play.sourceId) ?? []);
 }).pipe(Effect.orDie);
+
+/** The raw tracklist of a DJ set source: the replica rarely has its matched recordings */
+export const localSourceSegments = (sourceId: string) =>
+  Effect.gen(function* () {
+    const db = yield* ClientDatabase;
+    const rows = yield* db
+      .select()
+      .from(sourceSegment)
+      .where(eq(sourceSegment.sourceId, sourceId))
+      .orderBy(asc(sourceSegment.position));
+    return rows.map(
+      (row) =>
+        new SourceSegment({
+          startMs: row.startMs,
+          endMs: row.endMs,
+          title: row.rawTitle ?? "",
+          artist: row.rawArtist,
+          album: null,
+          artistRef: null,
+          albumRef: null,
+          recordingId: row.recordingId === null ? null : RecordingId.make(row.recordingId),
+        }),
+    );
+  }).pipe(Effect.orDie);
 
 /** Which scopes have ended their first load. Until then, views show them as "Syncing". */
 export class SyncProgress extends Data.Class<{
