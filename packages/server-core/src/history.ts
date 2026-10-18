@@ -6,6 +6,7 @@ import { desc, eq, inArray, sql } from "drizzle-orm";
 import { Crypto, Effect } from "effect";
 
 import { playableSources, sourceSummary } from "./sources.ts";
+import { nextChangeSeq } from "./sync-counter.ts";
 
 const recentPlayLimit = 100;
 
@@ -24,10 +25,15 @@ export const insertPlay = (play: {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
     const id = play.id ?? (yield* crypto.randomUUIDv7().pipe(Effect.orDie));
-    yield* db
-      .insert(playEvent)
-      .values({ ...play, id })
-      .onConflictDoNothing();
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        const changeSeq = yield* nextChangeSeq;
+        yield* db
+          .insert(playEvent)
+          .values({ ...play, id, changeSeq })
+          .onConflictDoNothing();
+      }),
+    );
   });
 
 /** The plays that the current device recorded while it was offline */

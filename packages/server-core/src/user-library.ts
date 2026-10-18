@@ -16,14 +16,15 @@ import { generateNKeysBetween } from "fractional-indexing";
 
 import { uuidV5 } from "./ids.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
+import { nextChangeSeq } from "./sync-counter.ts";
 
 const accountPrefix = "account:";
 
 export const accountOrigin = (provider: string) => `${accountPrefix}${provider}`;
 
 /**
- * All writes of library items and playlists go through this module, so that a later operation log
- * has one place. With `complete`, the other items of `origin` are removed.
+ * All writes of library items and playlists go through this module, so that each changed row gets
+ * an HLC and a `change_seq`. With `complete`, the other items of `origin` are removed.
  */
 export const setMembership = (
   userId: string,
@@ -43,12 +44,18 @@ export const setMembership = (
     const live = new Set(rows.filter((row) => !row.deleted).map((row) => row.entityId));
 
     const added = [...recordingIds].filter((id) => !live.has(id));
+    const removed = complete
+      ? rows.filter((row) => !row.deleted && !recordingIds.has(row.entityId))
+      : [];
+    if (added.length === 0 && removed.length === 0) return { added: 0, removed: 0 };
+
+    const changeSeq = yield* nextChangeSeq;
     yield* Effect.forEach(
       added,
       (entityId) =>
         Effect.gen(function* () {
           const id = yield* uuidV5(`library_item:${userId}:recording:${entityId}:${origin}`);
-          const change = { addedAt: now, hlc: yield* clock.next, deleted: false };
+          const change = { addedAt: now, hlc: yield* clock.next, deleted: false, changeSeq };
 
           yield* db
             .insert(libraryItem)
@@ -58,14 +65,11 @@ export const setMembership = (
       { discard: true },
     );
 
-    const removed = complete
-      ? rows.filter((row) => !row.deleted && !recordingIds.has(row.entityId))
-      : [];
     if (removed.length > 0) {
       const ids = removed.map((row) => row.id);
       yield* db
         .update(libraryItem)
-        .set({ deleted: true, hlc: yield* clock.next })
+        .set({ deleted: true, hlc: yield* clock.next, changeSeq })
         .where(inArray(libraryItem.id, ids));
     }
 
@@ -81,7 +85,12 @@ export const mirrorPlaylist = (ownerId: string, origin: string, id: string, name
     const [row] = yield* db.select().from(playlist).where(eq(playlist.id, id));
     if (row !== undefined && !row.deleted && row.name === name) return false;
 
-    const change = { name, hlc: yield* clock.next, deleted: false };
+    const change = {
+      name,
+      hlc: yield* clock.next,
+      deleted: false,
+      changeSeq: yield* nextChangeSeq,
+    };
     yield* db
       .insert(playlist)
       .values({ id, ownerId, origin, createdAt: yield* Clock.currentTimeMillis, ...change })
@@ -123,6 +132,11 @@ export const replaceEntries = (playlistId: string, recordingIds: ReadonlyArray<s
       const row = known.get(entry.id);
       return row === undefined || row.deleted || row.position !== entry.position;
     });
+    const kept = new Set(entries.map((entry) => entry.id));
+    const removed = rows.filter((row) => !row.deleted && !kept.has(row.id));
+    if (changed.length === 0 && removed.length === 0) return 0;
+
+    const changeSeq = yield* nextChangeSeq;
     yield* Effect.forEach(
       changed,
       (entry) =>
@@ -131,11 +145,11 @@ export const replaceEntries = (playlistId: string, recordingIds: ReadonlyArray<s
           if (known.get(entry.id)?.deleted === false) {
             return yield* db
               .update(playlistEntry)
-              .set({ position: entry.position, hlc })
+              .set({ position: entry.position, hlc, changeSeq })
               .where(eq(playlistEntry.id, entry.id));
           }
 
-          const row = { ...entry, playlistId, addedAt: now, hlc, deleted: false };
+          const row = { ...entry, playlistId, addedAt: now, hlc, deleted: false, changeSeq };
           yield* db
             .insert(playlistEntry)
             .values(row)
@@ -144,12 +158,10 @@ export const replaceEntries = (playlistId: string, recordingIds: ReadonlyArray<s
       { discard: true },
     );
 
-    const kept = new Set(entries.map((entry) => entry.id));
-    const removed = rows.filter((row) => !row.deleted && !kept.has(row.id));
     if (removed.length > 0) {
       yield* db
         .update(playlistEntry)
-        .set({ deleted: true, hlc: yield* clock.next })
+        .set({ deleted: true, hlc: yield* clock.next, changeSeq })
         .where(
           inArray(
             playlistEntry.id,
@@ -179,11 +191,11 @@ export const removePlaylists = (ownerId: string, origin: string, keep: ReadonlyS
     const removed = rows.map((row) => row.id).filter((id) => !keep.has(id));
     if (removed.length === 0) return 0;
 
-    const hlc = yield* clock.next;
-    yield* db.update(playlist).set({ deleted: true, hlc }).where(inArray(playlist.id, removed));
+    const change = { deleted: true, hlc: yield* clock.next, changeSeq: yield* nextChangeSeq };
+    yield* db.update(playlist).set(change).where(inArray(playlist.id, removed));
     yield* db
       .update(playlistEntry)
-      .set({ deleted: true, hlc })
+      .set(change)
       .where(and(inArray(playlistEntry.playlistId, removed), eq(playlistEntry.deleted, false)));
     return removed.length;
   });
