@@ -44,22 +44,28 @@ const pixelSize = (columns: number, rows: number, cellAspect: number) => {
   return [width, Math.max(1, Math.round(width / aspect))] as const;
 };
 
-// Tracks without a cover still get their own colors
-const fallbackPalette = (key: string) => {
+/** Tracks without a cover still get their own colors */
+export const fallbackPalette = (key: string) => {
   let hash = 0;
   for (const char of key) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
   return defaultPalettes[hash % defaultPalettes.length] ?? [];
 };
 
-const coverPalette = (artwork: Artwork) => {
-  const small = artwork.image.resize({ width: 48, height: 48 });
+/** The cover as packed RGBA of `size` by `size` pixels */
+export const coverRgba = (artwork: Artwork, size: number) => {
+  const small = artwork.image.resize({ width: size, height: size });
   const raw = small.raw("rgba8");
   const rgba = new Uint8Array(raw.width * raw.height * 4);
   for (let y = 0; y < raw.height; y++) {
     rgba.set(raw.data.subarray(y * raw.stride, y * raw.stride + raw.width * 4), y * raw.width * 4);
   }
   small.dispose();
-  return paletteFromImage(rgba, raw.width, raw.height);
+  return { rgba, width: raw.width, height: raw.height };
+};
+
+export const coverPalette = (artwork: Artwork) => {
+  const { rgba, width, height } = coverRgba(artwork, 48);
+  return paletteFromImage(rgba, width, height);
 };
 
 const copyCells = (grid: CellGrid, target: FrameBufferRenderable) => {

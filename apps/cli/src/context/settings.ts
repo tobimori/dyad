@@ -1,6 +1,11 @@
 import { DownloadQuality } from "@dyad/domain";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import envPaths from "env-paths";
+import { useEffect, useState } from "react";
+
+/** The effect behind the now playing view; the names are the keys of `backdrops` */
+export const Backdrop = Schema.Literals(["artwork", "aura", "pulse", "embers", "horizon", "off"]);
 
 /** Not synced, because a setting such as a plugin can concern only this device */
 export class Settings extends Schema.Class<Settings>("Settings")({
@@ -20,6 +25,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   ),
   /** `false` shows the cover instead of the muted video of the source. Missing means on. */
   coverVideo: Schema.optionalKey(Schema.Boolean),
+  backdrop: Schema.optionalKey(Backdrop),
 }) {}
 
 export const defaultSettings = new Settings({ enabledPlugins: [], disabledPlugins: [] });
@@ -53,3 +59,21 @@ export const updateSettings = (change: (settings: Settings) => Settings) =>
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(file, yield* Schema.encodeEffect(SettingsJson)(change(settings)));
   });
+
+/** `null` until the file loads. It loads on each mount, so that a change elsewhere applies. */
+export const useSettings = () => {
+  const [settings, setSettings] = useState<Settings | null>(null);
+  useEffect(() => {
+    const loading = Effect.runFork(
+      loadSettings.pipe(
+        Effect.orElseSucceed(() => defaultSettings),
+        Effect.tap((loaded) => Effect.sync(() => setSettings(loaded))),
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(loading));
+    };
+  }, []);
+  return [settings, setSettings] as const;
+};

@@ -14,7 +14,7 @@ import { Cover } from "../component/cover.tsx";
 import type { Artwork } from "../component/use-artwork.ts";
 import { commands, keyLabel, useCommands } from "../context/keymap.ts";
 import type { Command } from "../context/keymap.ts";
-import { Settings, defaultSettings, loadSettings, updateSettings } from "../context/settings.ts";
+import { Settings, defaultSettings, updateSettings, useSettings } from "../context/settings.ts";
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
 import { VideoStream } from "./video-stream.ts";
@@ -48,53 +48,12 @@ const copyCells = (grid: CellGrid, target: FrameBufferRenderable) => {
   target.requestRender();
 };
 
-// Loads on each mount, so that a delay that the full view changed applies to the cover
-const useSettings = () => {
-  const [settings, setSettings] = useState<Settings | null>(null);
-  useEffect(() => {
-    const loading = Effect.runFork(
-      loadSettings.pipe(
-        Effect.orElseSucceed(() => defaultSettings),
-        Effect.tap((loaded) => Effect.sync(() => setSettings(loaded))),
-        Effect.provide(NodeServices.layer),
-      ),
-    );
-    return () => {
-      Effect.runFork(Fiber.interrupt(loading));
-    };
-  }, []);
-  return [settings, setSettings] as const;
-};
-
-/** The video of a source, timed by its audio, in the largest box of its aspect in the cells */
-function VideoPicture(props: {
-  readonly sourceId: string;
-  readonly playing: boolean;
-  readonly positionMs: () => number;
-  /** Shows the video this much later than `positionMs` */
-  readonly delayMs: number;
-  readonly connection: typeof ServerConnection.Service;
-  readonly serverUrl: string;
-  readonly columns: number;
-  readonly rows: number;
-  /** The `maxHeight` of `prepareVideo` for a picture of `pixelHeight` */
-  readonly maxHeight: (pixelHeight: number) => number;
-  readonly visible: boolean;
-  readonly onFrame?: () => void;
-  readonly onFailure: (reason: string) => void;
-}) {
+/** `true` when the terminal reads Kitty frames from temporary files, `undefined` until it answers */
+export function useKittyFiles() {
   const renderer = useRenderer();
-  const host = useRef<BoxRenderable | null>(null);
-  const stream = useRef<VideoStream | null>(null);
-  // The frame callback lives longer than one render, so it reads the newest values here
-  const latest = useRef(props);
-  latest.current = props;
-  const [aspect, setAspect] = useState(16 / 9);
   const [files, setFiles] = useState(fileFrames);
-  // A paused clock brings no frame, so the renders go on until the frame after a seek shows
-  const [waiting, setWaiting] = useState(true);
 
-  // The terminal answers whether it reads temporary files only on the same host
+  // The terminal answers only on the same host
   useEffect(() => {
     if (mode !== "kitty" || files !== undefined) return;
     const probe = new KittyImage(imageId, 1, 1);
@@ -121,6 +80,37 @@ function VideoPicture(props: {
       Effect.runFork(Fiber.interrupt(timeout));
     };
   }, []);
+
+  return files;
+}
+
+/** The video of a source, timed by its audio, in the largest box of its aspect in the cells */
+function VideoPicture(props: {
+  readonly sourceId: string;
+  readonly playing: boolean;
+  readonly positionMs: () => number;
+  /** Shows the video this much later than `positionMs` */
+  readonly delayMs: number;
+  readonly connection: typeof ServerConnection.Service;
+  readonly serverUrl: string;
+  readonly columns: number;
+  readonly rows: number;
+  /** The `maxHeight` of `prepareVideo` for a picture of `pixelHeight` */
+  readonly maxHeight: (pixelHeight: number) => number;
+  readonly visible: boolean;
+  readonly onFrame?: () => void;
+  readonly onFailure: (reason: string) => void;
+}) {
+  const renderer = useRenderer();
+  const host = useRef<BoxRenderable | null>(null);
+  const stream = useRef<VideoStream | null>(null);
+  // The frame callback lives longer than one render, so it reads the newest values here
+  const latest = useRef(props);
+  latest.current = props;
+  const [aspect, setAspect] = useState(16 / 9);
+  const files = useKittyFiles();
+  // A paused clock brings no frame, so the renders go on until the frame after a seek shows
+  const [waiting, setWaiting] = useState(true);
 
   const resolution = renderer.resolution;
   const cellWidth = resolution === null ? 10 : resolution.width / renderer.terminalWidth;

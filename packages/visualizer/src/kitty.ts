@@ -51,9 +51,9 @@ const chunkBytes = 3072;
 const frameFiles = 4;
 
 /**
- * One Kitty graphics image that shows through Unicode placeholders. Each `encode` replaces the
- * image and its virtual placement with one command, so the placeholders show the new frame without
- * a blank frame between.
+ * One Kitty graphics image that shows through Unicode placeholders, or at the cursor under the
+ * text. Each `encode` replaces the image and its placement with one command, so the new frame
+ * shows without a blank frame between.
  */
 export class KittyImage {
   readonly id: number;
@@ -63,14 +63,19 @@ export class KittyImage {
   readonly placeholderRows: ReadonlyArray<string>;
   /** The 24-bit foreground color that holds the image ID */
   readonly foreground: Rgb;
+  private readonly placement: string;
   private rgb = new Uint8Array(0);
   private output = new Uint8Array(0);
   private header = new Uint8Array(0);
   private frame = 0;
 
-  /** `id` is 1 to 0xffffff; `columns` and `rows` are at most 297 */
-  constructor(id: number, columns: number, rows: number) {
+  /**
+   * `id` is 1 to 0xffffff; `columns` and `rows` are at most 297. With `z`, the image shows at the
+   * cursor instead of through placeholders: below -1073741824 it is under cell backgrounds.
+   */
+  constructor(id: number, columns: number, rows: number, z: number | null = null) {
     this.id = id;
+    this.placement = z === null ? "U=1" : `p=1,z=${z}`;
     this.columns = Math.min(columns, diacritics.length);
     this.rows = Math.min(rows, diacritics.length);
     this.foreground = new Rgb({ r: (id >> 16) & 255, g: (id >> 8) & 255, b: id & 255 });
@@ -85,7 +90,7 @@ export class KittyImage {
   }
 
   /**
-   * The escape that transmits `rgba` as compressed RGB in chunks and creates the virtual placement.
+   * The escape that transmits `rgba` as compressed RGB in chunks and creates the placement.
    * The result is a view of an internal buffer that the next call overwrites.
    */
   encode(rgba: Uint8Array, width: number, height: number) {
@@ -93,7 +98,7 @@ export class KittyImage {
     if (this.rgb.length !== pixels * 3) {
       this.rgb = new Uint8Array(pixels * 3);
       this.header = ascii.encode(
-        `\x1b_Ga=T,U=1,q=2,C=1,i=${this.id},f=24,s=${width},v=${height},c=${this.columns},r=${this.rows},o=z,`,
+        `\x1b_Ga=T,${this.placement},q=2,C=1,i=${this.id},f=24,s=${width},v=${height},c=${this.columns},r=${this.rows},o=z,`,
       );
     }
     const rgb = this.rgb;
@@ -141,7 +146,7 @@ export class KittyImage {
     const path = this.framePath(this.frame++ % frameFiles);
     writeFileSync(path, rgba);
     return this.fileCommand(
-      `a=T,U=1,q=2,C=1,f=32,s=${width},v=${height},c=${this.columns},r=${this.rows}`,
+      `a=T,${this.placement},q=2,C=1,f=32,s=${width},v=${height},c=${this.columns},r=${this.rows}`,
       path,
     );
   }

@@ -1,7 +1,7 @@
 import { AudioFrame } from "./analysis.ts";
 import { Canvas } from "./canvas.ts";
 import { Palette, type Rgb } from "./palette.ts";
-import { Frame, type Preset, Random } from "./preset.ts";
+import { Frame, type Picture, type Preset, Random } from "./preset.ts";
 import { presets as defaultPresets } from "./presets/index.ts";
 
 class Layer {
@@ -104,6 +104,10 @@ export class Visualizer {
   /** Fades to new colors, for example from the cover art of the next track */
   setPalette(colors: ReadonlyArray<Rgb>) {
     this.palette.set(colors);
+  }
+
+  setPicture(picture: Picture | null) {
+    for (const layer of this.layers) layer.frame.picture = picture;
   }
 
   next() {

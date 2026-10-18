@@ -27,12 +27,33 @@ export class Random {
   }
 }
 
+/** A small image, such as cover art, with 3 floats per pixel from 0 to 1 */
+export class Picture extends Data.Class<{
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: Float32Array;
+}> {
+  /** Makes a picture from RGBA bytes; transparent pixels count as black */
+  static fromRgba(rgba: Uint8Array, width: number, height: number) {
+    const pixels = new Float32Array(width * height * 3);
+    for (let p = 0; p < width * height; p++) {
+      const alpha = (rgba[p * 4 + 3] ?? 255) / 255;
+      for (let channel = 0; channel < 3; channel++) {
+        pixels[p * 3 + channel] = ((rgba[p * 4 + channel] ?? 0) / 255) * alpha;
+      }
+    }
+    return new Picture({ width, height, pixels });
+  }
+}
+
 /** The input of one preset frame. The visualizer reuses the instance. */
 export class Frame {
   readonly canvas: Canvas;
   audio: AudioFrame;
   readonly palette: Palette;
   readonly motion = new Motion();
+  /** Cover art for presets that draw it, `null` without one */
+  picture: Picture | null = null;
   /** Seconds since the preset started */
   time = 0;
   dt = 1 / 30;

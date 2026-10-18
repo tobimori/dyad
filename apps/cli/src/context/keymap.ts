@@ -53,6 +53,7 @@ export const commands = {
   nextPreset: command("visualizer.next", "Next visual", "Playback", ["]"]),
   previousPreset: command("visualizer.previous", "Previous visual", "Playback", ["["]),
   watchVideo: command("view.video", "Watch the video", "Playback", ["shift+v"]),
+  backdrop: command("view.backdrop", "Change the background effect", "Playback", ["f"], "effect"),
   videoEarlier: command("video.earlier", "Show the video earlier", "Playback", ["["]),
   videoLater: command("video.later", "Show the video later", "Playback", ["]"]),
 
