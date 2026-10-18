@@ -10,6 +10,8 @@ export class Loudness extends Data.Class<{
 
 const targetLufs = -18;
 const truePeakCeiling = -1;
+// Near-silent sources, such as a hidden track, would otherwise get up to +52 dB
+const maxGainDb = 12;
 
 // A typical modern master is about -10 LUFS
 const unanalyzedGainDb = -8;
@@ -26,6 +28,6 @@ export const entryLevel = (loudness: Loudness | undefined) => {
   const db =
     loudness === undefined
       ? unanalyzedGainDb
-      : Math.min(targetLufs - loudness.integrated, truePeakCeiling - truePeak);
+      : Math.min(targetLufs - loudness.integrated, truePeakCeiling - truePeak, maxGainDb);
   return { gain: 10 ** (db / 20), peak: 10 ** ((truePeak + db) / 20) };
 };
