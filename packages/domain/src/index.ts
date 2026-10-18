@@ -9,6 +9,15 @@ import {
   UserId,
   WorkspaceId,
 } from "./primitives.ts";
+import {
+  ReplicaMismatch,
+  SyncHint,
+  SyncPullRequest,
+  SyncPullResponse,
+  SyncPushRequest,
+  SyncPushResponse,
+  UpgradeRequired,
+} from "./sync.ts";
 
 export * from "./library-view.ts";
 export * from "./primitives.ts";
@@ -696,6 +705,19 @@ const UserRpc = RpcGroup.make(
   Rpc.make("recordPlays", {
     payload: { plays: Schema.Array(OfflinePlay).check(Schema.isMaxLength(1000)) },
   }),
+  // The changed rows after the cursors of the client replica. Pull again while `more` is true.
+  Rpc.make("syncPull", {
+    payload: SyncPullRequest,
+    success: SyncPullResponse,
+    error: Schema.Union([UpgradeRequired, ReplicaMismatch]),
+  }),
+  Rpc.make("syncPush", {
+    payload: SyncPushRequest,
+    success: SyncPushResponse,
+    error: Schema.Union([UpgradeRequired, ReplicaMismatch]),
+  }),
+  // Subscribe, then pull after each hint. The first hint comes when the subscription is ready.
+  Rpc.make("syncWatch", { success: SyncHint, stream: true }),
   // A file that this device keeps, in one of the `capabilities` formats. The server records it
   // for the device until a check-in leaves it out.
   Rpc.make("prepareDownload", {

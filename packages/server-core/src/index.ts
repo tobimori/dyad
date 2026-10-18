@@ -30,6 +30,7 @@ import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { listSources } from "./sources.ts";
+import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
 export { catalogLayer } from "./catalog-backfill.ts";
@@ -55,6 +56,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       mediaCacheLayer,
       musicbrainzLookupsLayer,
       outputsLayer,
+      syncHubLayer,
     ),
   ),
   Layer.provideMerge(jobsLayer),
@@ -95,6 +97,9 @@ export const serverRoutes = Layer.unwrap(
         controlSession(payload).pipe(orDieOnDatabaseError("controlSession")),
       reportPlayback: (payload) => reportPlayback(payload),
       recordPlays: ({ plays }) => recordPlays(plays).pipe(orDieOnDatabaseError("recordPlays")),
+      syncPull: (request) => syncPull(request).pipe(orDieOnDatabaseError("syncPull")),
+      syncPush: (request) => syncPush(request).pipe(orDieOnDatabaseError("syncPush")),
+      syncWatch: () => syncWatch,
       prepareDownload: ({ sourceId, quality, capabilities }) =>
         prepareDownload(sourceId, quality, capabilities).pipe(
           orDieOnDatabaseError("prepareDownload"),
