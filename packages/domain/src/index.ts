@@ -593,17 +593,6 @@ export class PlayerResume extends Schema.Class<PlayerResume>("PlayerResume")({
   ),
 }) {}
 
-/** A play that a device recorded while it was offline. The server records each `id` once. */
-export class OfflinePlay extends Schema.Class<OfflinePlay>("OfflinePlay")({
-  id: Schema.String.check(Schema.isUUID()),
-  sourceId: Schema.String.check(Schema.isUUID()),
-  context: PlayContext,
-  /** Server time */
-  startedAt: Schema.Number,
-  playedMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
-  completed: Schema.Boolean,
-}) {}
-
 const PublicRpc = RpcGroup.make(
   Rpc.make("describe", { success: ServerDescriptor }),
   // Creates the first admin with the setup code from the server log
@@ -723,9 +712,6 @@ const UserRpc = RpcGroup.make(
       failure: Schema.NullOr(PlaybackUnavailable.fields.reason),
       volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
     },
-  }),
-  Rpc.make("recordPlays", {
-    payload: { plays: Schema.Array(OfflinePlay).check(Schema.isMaxLength(1000)) },
   }),
   // The changed rows after the cursors of the client replica. Pull again while `more` is true.
   Rpc.make("syncPull", {

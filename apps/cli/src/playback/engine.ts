@@ -1,14 +1,13 @@
 import { ServerConnection, deviceOutputId, positionOf, titleOf } from "@dyad/client-runtime";
 import type { Downloads, SessionClient, SessionView } from "@dyad/client-runtime";
 import {
-  OfflinePlay,
   Playback,
   PlaybackUnavailable,
   PlayerResume,
   SessionCommand,
   nextEntry,
 } from "@dyad/domain";
-import type { EntryId, QueueEntry, RepeatMode } from "@dyad/domain";
+import type { EntryId, PlayContext, QueueEntry, RepeatMode } from "@dyad/domain";
 import type { Audio } from "@opentui/core";
 import {
   Cause,
@@ -129,7 +128,14 @@ const makeEngine = (options: {
   readonly volume: number;
   readonly saveVolume: (volume: number) => Effect.Effect<void>;
   /** Keeps a play of offline time until the server has it */
-  readonly recordPlay: (play: OfflinePlay) => Effect.Effect<void>;
+  readonly recordPlay: (play: {
+    readonly id: string;
+    readonly sourceId: string;
+    readonly context: typeof PlayContext.Type;
+    readonly startedAt: number;
+    readonly playedMs: number;
+    readonly completed: boolean;
+  }) => Effect.Effect<void>;
   /** A downloaded file plays first, also without the server */
   readonly downloads: typeof Downloads.Service | null;
 }) =>
@@ -199,16 +205,14 @@ const makeEngine = (options: {
         listen = null;
 
         const now = yield* Clock.currentTimeMillis;
-        yield* options.recordPlay(
-          new OfflinePlay({
-            id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
-            sourceId: closing.entry.source.id,
-            context: closing.entry.context,
-            startedAt: closing.startedAt,
-            playedMs: playedMsOf(closing, now),
-            completed,
-          }),
-        );
+        yield* options.recordPlay({
+          id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
+          sourceId: closing.entry.source.id,
+          context: closing.entry.context,
+          startedAt: closing.startedAt,
+          playedMs: playedMsOf(closing, now),
+          completed,
+        });
       });
 
     // A quit while offline keeps the play of the current entry
@@ -563,7 +567,6 @@ const makeEngine = (options: {
             // The server continues the play that `resume` sent
             if (adopted) listen = null;
             yield* closeListen(false);
-            yield* session.sendPlays;
           });
 
         const reconcile = (view: SessionView) =>

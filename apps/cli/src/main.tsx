@@ -3,6 +3,7 @@ import "./sea-assets.ts";
 
 import {
   Downloads,
+  Replica,
   SessionClient,
   downloadsLayer,
   serverAtoms,
@@ -32,7 +33,7 @@ import {
 import { pluginCommands } from "./commands/plugins.ts";
 import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
-import { openPlayLog } from "./context/play-log.ts";
+import { movePlayLog } from "./context/play-log.ts";
 import { cliReplicaLayer } from "./context/replica.ts";
 import { importSavedSession, savedVolume } from "./context/session.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
@@ -62,12 +63,24 @@ const player = (controller: boolean) =>
     const connection = yield* Layer.build(
       serverConnectionLayer(serverUrl, Option.some(token)).pipe(Layer.provide(logging)),
     );
-    const replica = yield* Layer.build(
+    const replicaServices = yield* Layer.build(
       cliReplicaLayer(serverUrl, token).pipe(
         Layer.provide(Layer.succeedContext(connection)),
         Layer.provide(logging),
       ),
     );
+    const replica = Context.get(replicaServices, Replica);
+    yield* movePlayLog(serverUrl, replica).pipe(
+      Effect.provideContext(logServices),
+      Effect.forkScoped,
+    );
+    const recordPlay = (play: Parameters<typeof replica.appendPlay>[0]) =>
+      replica.appendPlay(play).pipe(
+        Effect.catchTag("ReplicaUnbound", () =>
+          Effect.logWarning("Cannot record a play before the first connection to the server"),
+        ),
+        Effect.provideContext(logServices),
+      );
 
     const settings = yield* loadSettings.pipe(Effect.orElseSucceed(() => defaultSettings));
     const saveVolume = (value: number) =>
@@ -91,7 +104,6 @@ const player = (controller: boolean) =>
         Effect.ignore,
       );
 
-    const playLog = yield* openPlayLog(serverUrl);
     const path = yield* Path.Path;
     const downloads = controller
       ? null
@@ -129,7 +141,7 @@ const player = (controller: boolean) =>
                 serverUrl,
                 volume,
                 saveVolume,
-                recordPlay: playLog.add,
+                recordPlay,
                 downloads,
               }).pipe(
                 Layer.provide(Layer.succeedContext(connection)),
@@ -143,7 +155,6 @@ const player = (controller: boolean) =>
       sessionClientLayer({
         player:
           engine === null ? null : { capabilities, volume: engine.volume, resume: engine.resume },
-        playLog,
       }).pipe(Layer.provide(Layer.succeedContext(connection)), Layer.provide(logging)),
     );
     const session = Context.get(sessionServices, SessionClient);
@@ -154,7 +165,7 @@ const player = (controller: boolean) =>
       Effect.forkScoped,
     );
 
-    const atoms = serverAtoms(Context.merge(connection, replica), logging);
+    const atoms = serverAtoms(Context.merge(connection, replicaServices), logging);
     const plugins = yield* startPluginHost(
       new ClientPluginContext({
         serverOrigin: serverUrl,

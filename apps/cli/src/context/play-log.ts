@@ -1,46 +1,44 @@
-import { OfflinePlay } from "@dyad/domain";
-import { Effect, FileSystem, Path, Schema, Semaphore } from "effect";
+import type { Replica } from "@dyad/client-runtime";
+import { PlayContext } from "@dyad/domain";
+import { Effect, FileSystem, Path, Schema, Stream, SubscriptionRef } from "effect";
 import envPaths from "env-paths";
 
-// `recordPlays` takes at most this many plays, so the log drops the oldest
-const maxPlays = 1000;
+// A play of offline time that CLI versions before the client replica kept in `plays.json`
+class LoggedPlay extends Schema.Class<LoggedPlay>("LoggedPlay")({
+  id: Schema.String,
+  sourceId: Schema.String,
+  context: PlayContext,
+  startedAt: Schema.Number,
+  playedMs: Schema.Number,
+  completed: Schema.Boolean,
+}) {}
 
-// The plays of offline time for each server origin, until the server has them
-const PlayLogs = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Array(OfflinePlay)));
+// For each server origin
+const PlayLogs = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Array(LoggedPlay)));
 
-const noLogs: typeof PlayLogs.Type = {};
-
-/** A file, so that plays of offline time survive a quit before the server comes back */
-export const openPlayLog = (origin: string) =>
+/**
+ * Moves the plays of `origin` from `plays.json` into the mutation queue once, then removes them
+ * from the file. A play that moves twice after a crash is still one row.
+ */
+export const movePlayLog = (origin: string, replica: typeof Replica.Service) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const file = path.join(envPaths("dyad", { suffix: "" }).data, "plays.json");
-    const writing = yield* Semaphore.make(1);
+    if (!(yield* fs.exists(file))) return;
 
-    // A broken file gives an empty log. The next write replaces it.
-    const read = Effect.gen(function* () {
-      if (!(yield* fs.exists(file))) return noLogs;
-      return yield* Schema.decodeEffect(PlayLogs)(yield* fs.readFileString(file));
-    }).pipe(Effect.orElseSucceed(() => noLogs));
+    const logs = yield* Schema.decodeEffect(PlayLogs)(yield* fs.readFileString(file));
+    const plays = logs[origin];
+    if (plays === undefined) return;
 
-    const change = (update: (plays: ReadonlyArray<OfflinePlay>) => ReadonlyArray<OfflinePlay>) =>
-      writing.withPermits(1)(
-        Effect.gen(function* () {
-          const logs = yield* read;
-          const plays = update(logs[origin] ?? []).slice(-maxPlays);
-          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-          yield* fs.writeFileString(
-            file,
-            yield* Schema.encodeEffect(PlayLogs)({ ...logs, [origin]: plays }),
-          );
-        }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot save the play log", cause))),
-      );
+    // A replica gets its user and device at the first connection
+    yield* SubscriptionRef.changes(replica.status).pipe(
+      Stream.filter((status) => status === "live"),
+      Stream.runHead,
+    );
+    yield* Effect.forEach(plays, replica.appendPlay, { discard: true });
 
-    return {
-      pending: Effect.map(read, (logs) => logs[origin] ?? []),
-      add: (play: OfflinePlay) => change((plays) => [...plays, play]),
-      remove: (sent: ReadonlyArray<OfflinePlay>) =>
-        change((plays) => plays.filter((play) => !sent.some((done) => done.id === play.id))),
-    };
-  });
+    const others = Object.fromEntries(Object.entries(logs).filter(([key]) => key !== origin));
+    if (Object.keys(others).length === 0) return yield* fs.remove(file);
+    yield* fs.writeFileString(file, yield* Schema.encodeEffect(PlayLogs)(others));
+  }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot move the play log", cause)));

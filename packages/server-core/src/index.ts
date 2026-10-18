@@ -17,7 +17,7 @@ import {
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
-import { listRecentPlays, recordPlays } from "./history.ts";
+import { listRecentPlays } from "./history.ts";
 import { homePage } from "./home.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
@@ -96,7 +96,6 @@ export const serverRoutes = Layer.unwrap(
       controlSession: (payload) =>
         controlSession(payload).pipe(orDieOnDatabaseError("controlSession")),
       reportPlayback: (payload) => reportPlayback(payload),
-      recordPlays: ({ plays }) => recordPlays(plays).pipe(orDieOnDatabaseError("recordPlays")),
       syncPull: (request) => syncPull(request).pipe(orDieOnDatabaseError("syncPull")),
       syncPush: (request) => syncPush(request).pipe(orDieOnDatabaseError("syncPush")),
       syncWatch: () => syncWatch,

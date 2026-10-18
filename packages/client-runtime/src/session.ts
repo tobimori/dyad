@@ -8,13 +8,7 @@ import {
   nextEntry,
   positionAt,
 } from "@dyad/domain";
-import type {
-  DeviceId,
-  OfflinePlay,
-  PlaybackCapabilities,
-  PlayerResume,
-  QueueEntry,
-} from "@dyad/domain";
+import type { DeviceId, PlaybackCapabilities, PlayerResume, QueueEntry } from "@dyad/domain";
 import { NowPlaying } from "@dyad/plugin/client";
 import {
   Clock,
@@ -214,20 +208,13 @@ const makeSessionClient = (options: {
     /** What the device plays now, sent when it connects again */
     readonly resume: Effect.Effect<PlayerResume | null>;
   } | null;
-  /** The plays of offline time that the server does not have yet */
-  readonly playLog: {
-    readonly pending: Effect.Effect<ReadonlyArray<OfflinePlay>>;
-    readonly remove: (plays: ReadonlyArray<OfflinePlay>) => Effect.Effect<void>;
-  } | null;
 }) =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
     const crypto = yield* Crypto.Crypto;
     const view = yield* SubscriptionRef.make(initialView);
-    const scope = yield* Effect.scope;
     // Commands reach the server in the order of the user's keys
     const sending = yield* Semaphore.make(1);
-    const sendingPlays = yield* Semaphore.make(1);
     const state = {
       // Counts the snapshots, so that a retry stops when a new connection replaces the old one
       epoch: 0,
@@ -294,7 +281,7 @@ const makeSessionClient = (options: {
                     confirmed: snapshot.playback,
                     outputs: snapshot.outputs,
                     clockOffset: snapshot.serverTime - receivedAt,
-                  })).pipe(Effect.andThen(Effect.forkIn(sendPlays, scope)));
+                  }));
                 }),
 
               QueueChanged: (change) =>
@@ -329,20 +316,6 @@ const makeSessionClient = (options: {
     );
 
     yield* Effect.forkScoped(Effect.repeat(follow, Schedule.spaced("1 second")));
-
-    // A retry after a lost reply records nothing twice, because the server knows each play ID
-    const sendPlays = sendingPlays.withPermits(1)(
-      Effect.gen(function* () {
-        if (options.playLog === null || !SubscriptionRef.getUnsafe(view).connected) return;
-        const plays = yield* options.playLog.pending;
-        if (plays.length === 0) return;
-
-        yield* connection.recordPlays({ plays });
-        yield* options.playLog.remove(plays);
-      }).pipe(
-        Effect.catchCause((cause) => Effect.logDebug("Cannot send the offline plays", cause)),
-      ),
-    );
 
     /**
      * A transport command shows in the view at once. A retry sends the same request ID, so that
@@ -435,8 +408,6 @@ const makeSessionClient = (options: {
       send,
       nowPlaying,
       showLocal,
-      /** Sends the play log while connected. A snapshot also sends it. */
-      sendPlays: Effect.asVoid(Effect.forkIn(sendPlays, scope)),
     };
   });
 

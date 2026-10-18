@@ -21,6 +21,7 @@ import {
   Clock,
   Context,
   Crypto,
+  Data,
   Effect,
   Layer,
   Option,
@@ -48,6 +49,9 @@ const principalState = stateKey("principal", Principal);
 const epochState = stateKey("epoch", Schema.String);
 const catalogCursorState = stateKey("catalogCursor", Schema.NullOr(CatalogCursor));
 const nextMutationIdState = stateKey("nextMutationId", Schema.Int);
+
+/** The replica learns its user and device at its first connection, and needs them for own rows */
+export class ReplicaUnbound extends Data.TaggedError("ReplicaUnbound")<{}> {}
 
 const pushLimit = 500;
 const wantLimit = 1000;
@@ -348,7 +352,7 @@ const makeReplica = Effect.gen(function* () {
   return {
     /** `live` while the server sends hints */
     status,
-    /** Records a play of this device. It needs a first connection, which gives the user. */
+    /** Records a play of this device */
     appendPlay: (play: {
       readonly id: string;
       readonly sourceId: string;
@@ -359,9 +363,7 @@ const makeReplica = Effect.gen(function* () {
     }) =>
       Effect.gen(function* () {
         const principal = yield* principalState.get;
-        if (Option.isNone(principal)) {
-          return yield* Effect.logWarning("Cannot record a play before the first connection");
-        }
+        if (Option.isNone(principal)) return yield* new ReplicaUnbound();
 
         yield* commit(
           Effect.gen(function* () {

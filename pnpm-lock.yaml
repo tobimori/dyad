@@ -260,9 +260,6 @@ importers:
       '@dyad/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
-      '@dyad/sync':
-        specifier: workspace:*
-        version: link:../../packages/sync
       '@dyad/web':
         specifier: workspace:*
         version: link:../web
