@@ -1,22 +1,31 @@
-import { localFile, providerItem, recording, source, sourceVariant } from "@dyad/db";
+import {
+  artist,
+  artistLookup,
+  localFile,
+  providerItem,
+  recording,
+  source,
+  sourceVariant,
+} from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import type { ProviderSource } from "@dyad/plugin";
-import { and, eq, getColumns, inArray, isNotNull, or, sql } from "drizzle-orm";
+import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
+import { and, eq, getColumns, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
-import { RecordingMetadata, assertRecording } from "./assertions.ts";
-import { boundRecordingId, sourceId, variantId } from "./ids.ts";
+import { ParseEvidence, assertRecording } from "./assertions.ts";
+import { boundRecordingId, musicbrainzArtistId, sourceId, variantId } from "./ids.ts";
 import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
-import { usableProviders } from "./providers.ts";
+import { Providers, usableProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
 import { touchGroups } from "./sync-counter.ts";
+import { parseVersionTitle, parserRevision, versionedTitle } from "./version-titles.ts";
 
 // Projection columns before replication assigns revisions
 const projection = { policyVersion: 1, revision: 0 };
@@ -29,6 +38,97 @@ const differs = (table: SQLiteTable, keys: ReadonlyArray<string>) => {
     .map(([, column]) => sql`${column} IS NOT excluded.${sql.identifier(column.name)}`);
   return sql`(${sql.join(changes, sql` OR `)})`;
 };
+
+// Artists with each name key, in the catalog and in the MusicBrainz searches of this replica
+const artistCounts = (keys: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const catalog = yield* db
+      .select({ id: artist.id, nameKey: artist.nameKey })
+      .from(artist)
+      .where(and(inArray(artist.nameKey, keys), isNull(artist.mergedIntoId)));
+    const lookups = yield* db
+      .select()
+      .from(artistLookup)
+      .where(inArray(artistLookup.nameKey, keys));
+    const searched = yield* Effect.forEach(lookups, (lookup) =>
+      Effect.forEach(lookup.artists, (found) =>
+        musicbrainzArtistId(found.mbid).pipe(Effect.map((id) => ({ id, nameKey: lookup.nameKey }))),
+      ),
+    );
+
+    const ids = new Map(keys.map((key) => [key, new Set<string>()]));
+    for (const row of [...catalog, ...searched.flat()]) ids.get(row.nameKey ?? "")?.add(row.id);
+    return new Map([...ids].map(([key, found]) => [key, found.size]));
+  });
+
+// `A, B & C feat. D`. No name has an artist ID until a resolver links it.
+const parsedCredit = (main: ReadonlyArray<string>, guests: ReadonlyArray<string>) => {
+  const joined = (names: ReadonlyArray<string>, last: string) =>
+    names.map((name, index) => {
+      if (index === names.length - 1) return { id: null, name, joinPhrase: last };
+      return { id: null, name, joinPhrase: index === names.length - 2 ? " & " : ", " };
+    });
+  const artists = [...joined(main, guests.length > 0 ? " feat. " : ""), ...joined(guests, "")];
+  return { name: artists.map((name) => name.name + name.joinPhrase).join(""), artists };
+};
+
+const assertParsedTitle = (
+  recordingId: string,
+  item: {
+    readonly provider: string;
+    readonly externalId: string;
+    readonly title: string;
+    readonly artist: string | null;
+    readonly uploader: CreditedArtist | null;
+  },
+) =>
+  Effect.gen(function* () {
+    const counts = new Map<string, number>();
+    // The parser has no I/O, so it runs again with the counts of the name keys that it asked for
+    const parsed = yield* Effect.gen(function* () {
+      while (true) {
+        const missing = new Set<string>();
+        const result = parseVersionTitle({
+          title: item.title,
+          uploader: item.uploader?.name ?? null,
+          // An uploader without an artist field gives its own name as the artist
+          artists: item.artist === null || item.artist === item.uploader?.name ? [] : [item.artist],
+          artistCount: (key) => counts.get(key) ?? (missing.add(key), 0),
+        });
+        if (missing.size === 0) return result;
+
+        const found = yield* artistCounts([...missing]);
+        for (const key of missing) counts.set(key, found.get(key) ?? 0);
+      }
+    });
+
+    return yield* assertRecording(
+      recordingId,
+      "parse",
+      `${item.provider}:${item.externalId}`,
+      {
+        title: versionedTitle(parsed),
+        artist_credit:
+          parsed.artists.length === 0 ? null : parsedCredit(parsed.artists, parsed.featured),
+        versions: parsed.versions,
+        mashup_parts: parsed.parts,
+        uploader_role: item.uploader === null ? null : parsed.uploaderRole,
+        set: parsed.set,
+      },
+      {
+        confidence: parsed.confidence,
+        originRevision: parserRevision,
+        evidence: new ParseEvidence({
+          title: item.title,
+          artist: item.artist,
+          uploader: item.uploader,
+          artistSource: parsed.artistSource,
+          removed: parsed.removed,
+        }),
+      },
+    );
+  });
 
 /**
  * Writes a source, its variant and recording, then asserts and matches the metadata. All writes
@@ -51,6 +151,8 @@ export const writeSource = (
     readonly mbid: string | null;
     readonly artworkUrl: string | null;
     readonly explicit: boolean | null;
+    /** The account that uploaded the source, for providers with `uploads` */
+    readonly uploader: CreditedArtist | null;
   },
   variant: Omit<typeof sourceVariant.$inferInsert, "id" | "sourceId">,
 ) =>
@@ -106,26 +208,30 @@ export const writeSource = (
 
         // A file asserts as its source, so that copies of the same audio on two replicas agree
         const local = item.provider === "local";
+        // Uploaders type titles and artists as free text, so only the parse asserts them
+        const uploads = (yield* Providers).get(item.provider)?.uploads === true;
+        const metadata = {
+          title: uploads ? null : item.title,
+          artist_credit:
+            uploads || item.artist === null
+              ? null
+              : {
+                  name: item.artist,
+                  artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
+                },
+          album: item.album,
+          duration_ms: item.durationMs,
+          isrc: item.isrc === null ? null : normalizeIsrc(item.isrc),
+          artwork_url: item.artworkUrl,
+          explicit: item.explicit,
+        };
         yield* assertRecording(
           recordingId,
           local ? "local" : "provider",
           local ? id : `${item.provider}:${item.externalId}`,
-          new RecordingMetadata({
-            title: item.title,
-            artistCredit:
-              item.artist === null
-                ? null
-                : {
-                    name: item.artist,
-                    artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
-                  },
-            album: item.album,
-            durationMs: item.durationMs,
-            isrc: item.isrc === null ? null : normalizeIsrc(item.isrc),
-            artworkUrl: item.artworkUrl,
-            explicit: item.explicit,
-          }),
+          uploads ? { ...metadata, uploader: item.uploader } : metadata,
         );
+        yield* assertParsedTitle(recordingId, item);
         yield* updateRecording(recordingId, item.mbid);
         if (written.some((rows) => rows.length > 0)) yield* touchGroups([recordingId]);
       }),
@@ -149,6 +255,7 @@ export const writeProviderSource = (provider: string, item: ProviderSource) =>
       mbid: null,
       artworkUrl: item.artworkUrl,
       explicit: item.explicit,
+      uploader: item.uploader,
     },
     {
       codec: item.codec,

@@ -50,6 +50,8 @@ export const isrcRecordingId = (isrc: string) => uuidV5(`isrc:recording:${isrc}`
 
 export const musicbrainzRecordingId = (mbid: string) => uuidV5(`mb:recording:${mbid}`);
 
+export const musicbrainzArtistId = (mbid: string) => uuidV5(`mb:artist:${mbid}`);
+
 /** An import from the same origin replaces its earlier assertion */
 export const assertionId = (assertion: {
   readonly entityType: string;

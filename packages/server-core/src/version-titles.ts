@@ -68,6 +68,42 @@ export const artistNameKey = (name: string) =>
     .toLowerCase()
     .replaceAll(/[^\p{L}\p{N}]+/gu, "");
 
+/** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
+export const parserRevision = "parse:v1";
+
+const kindLabels = {
+  remix: "Remix",
+  edit: "Edit",
+  flip: "Flip",
+  bootleg: "Bootleg",
+  mashup: "Mashup",
+  cover: "Cover",
+  live: "Live",
+  acoustic: "Acoustic",
+  sped_up: "Sped Up",
+  slowed: "Slowed",
+  nightcore: "Nightcore",
+  vip: "VIP",
+  instrumental: "Instrumental",
+  acapella: "Acapella",
+  extended: "Extended Mix",
+  radio_edit: "Radio Edit",
+  demo: "Demo",
+  rework: "Rework",
+} satisfies Record<typeof VersionKind.Type, string>;
+
+/** The base title and one group for each version, for example `Rote Flaggen (Fatekkt Remix)` */
+export const versionedTitle = (parsed: ParsedTitle) =>
+  [
+    parsed.title,
+    ...parsed.versions.map((version) => {
+      const by = version.by.join(" & ");
+      if (by === "") return `(${kindLabels[version.kind]})`;
+      // `(X Cover)` reads as a cover of a song by X
+      return version.kind === "cover" ? `(Cover by ${by})` : `(${by} ${kindLabels[version.kind]})`;
+    }),
+  ].join(" ");
+
 /** Key to compare base titles: `Drugs.` and `drugs` give `drugs` */
 export const titleKey = (title: string) =>
   title

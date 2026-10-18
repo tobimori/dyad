@@ -1,11 +1,11 @@
-import { job, localFile, providerItem, source, sourceVariant } from "@dyad/db";
+import { catalogAssertion, job, localFile, providerItem, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { ProviderSource } from "@dyad/plugin";
 import { and, asc, eq, gt } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
 
-import { projectRecordings } from "./assertions.ts";
-import { boundRecordingId } from "./ids.ts";
+import { ParseEvidence, projectRecordings } from "./assertions.ts";
+import { assertionId, boundRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { matchingLayer, resolveRoots } from "./matching.ts";
 import { Tags, tagIdentifiers, writeProviderSource, writeSource } from "./sources.ts";
@@ -18,7 +18,8 @@ const BackfillPayload = Schema.Struct({ after: Schema.NullOr(Schema.String) });
 
 /**
  * Writes each source again, also sources without a bound recording, and resolves their merge
- * groups. Unchanged data writes nothing. Other jobs run between batches.
+ * groups. This also runs a new title parser over old sources. Unchanged data writes nothing. Other
+ * jobs run between batches.
  */
 const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
   Effect.gen(function* () {
@@ -42,34 +43,48 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
       .limit(batchSize);
 
     // The cached provider data has the ISRC, the artwork and the artist IDs. Without it, only the
-    // raw fields of `source` remain.
+    // raw fields of `source` and the uploader from the earlier parse remain.
     yield* Effect.forEach(
       rows,
-      (row) => {
-        const cached = Schema.decodeUnknownOption(ProviderSource)(row.cached);
-        if (row.source.provider !== "local" && Option.isSome(cached)) {
-          return writeProviderSource(row.source.provider, cached.value);
-        }
+      (row) =>
+        Effect.gen(function* () {
+          const cached = Schema.decodeUnknownOption(ProviderSource)(row.cached);
+          if (row.source.provider !== "local" && Option.isSome(cached)) {
+            return yield* writeProviderSource(row.source.provider, cached.value);
+          }
 
-        const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
-        const { id: _id, sourceId: _sourceId, ...variant } = row.variant;
-        return writeSource(
-          {
-            provider: row.source.provider,
-            externalId: row.source.externalId,
-            kind: row.source.kind === "file" ? "file" : "stream",
-            title: row.source.rawTitle ?? "",
-            artist: row.source.rawArtist,
-            artists: [],
-            album: row.source.rawAlbum,
-            durationMs: row.source.rawDurationMs,
-            ...tagIdentifiers(tags),
-            artworkUrl: null,
-            explicit: null,
-          },
-          variant,
-        );
-      },
+          const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
+          const { id: _id, sourceId: _sourceId, ...variant } = row.variant;
+          const parseId = yield* assertionId({
+            entityType: "recording",
+            entityId: yield* boundRecordingId(row.source.provider, row.source.externalId),
+            field: "title",
+            origin: "parse",
+            originRef: `${row.source.provider}:${row.source.externalId}`,
+          });
+          const [parse] = yield* db
+            .select({ evidence: catalogAssertion.evidence })
+            .from(catalogAssertion)
+            .where(eq(catalogAssertion.id, parseId));
+          const evidence = Schema.decodeUnknownOption(ParseEvidence)(parse?.evidence);
+          return yield* writeSource(
+            {
+              provider: row.source.provider,
+              externalId: row.source.externalId,
+              kind: row.source.kind === "file" ? "file" : "stream",
+              title: row.source.rawTitle ?? "",
+              artist: row.source.rawArtist,
+              artists: [],
+              album: row.source.rawAlbum,
+              durationMs: row.source.rawDurationMs,
+              ...tagIdentifiers(tags),
+              artworkUrl: null,
+              explicit: null,
+              uploader: Option.isSome(evidence) ? evidence.value.uploader : null,
+            },
+            variant,
+          );
+        }),
       { discard: true },
     );
 

@@ -1,32 +1,30 @@
 import { catalogAssertion, recording } from "@dyad/db";
 import { Database, ReplicaDatabase } from "@dyad/db/node";
+import { CreditedArtist } from "@dyad/plugin";
 import type { Provider } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
 import { and, eq, inArray } from "drizzle-orm";
-import { Data, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
 import { touchGroups } from "./sync-counter.ts";
+import { MashupPart, ParsedTitle, TitleVersion } from "./version-titles.ts";
 
 const schemaVersion = 1;
 
 const ArtistCredit = Schema.Struct({
   name: Schema.String,
-  artists: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String })),
+  artists: Schema.Array(
+    Schema.Struct({
+      // Null for a name that no evidence links to an artist
+      id: Schema.NullOr(Schema.String),
+      name: Schema.String,
+      // Text after the name, for example ` feat. `. Origins that give only `name` omit it.
+      joinPhrase: Schema.optionalKey(Schema.String),
+    }),
+  ),
 });
-
-/** The recording fields that sources and MusicBrainz assert. `null` states that the origin has no value. */
-export class RecordingMetadata extends Data.Class<{
-  readonly title: string | null;
-  readonly artistCredit: typeof ArtistCredit.Type | null;
-  readonly album: string | null;
-  readonly durationMs: number | null;
-  /** Normalized with `normalizeIsrc` */
-  readonly isrc: string | null;
-  readonly artworkUrl: string | null;
-  readonly explicit: boolean | null;
-}> {}
 
 // Stored field names, and the schema of their values
 export const fields = {
@@ -37,46 +35,65 @@ export const fields = {
   isrc: Schema.String,
   artwork_url: Schema.String,
   explicit: Schema.Boolean,
+  uploader: CreditedArtist,
+  versions: Schema.Array(TitleVersion),
+  mashup_parts: Schema.Array(MashupPart),
+  uploader_role: ParsedTitle.fields.uploaderRole,
+  set: Schema.Boolean,
 };
 
-const fieldValues = (metadata: RecordingMetadata) => ({
-  title: metadata.title,
-  artist_credit: metadata.artistCredit,
-  album: metadata.album,
-  duration_ms: metadata.durationMs,
-  isrc: metadata.isrc,
-  artwork_url: metadata.artworkUrl,
-  explicit: metadata.explicit,
-});
+/** The input of a parse, so that a new parser version can run without the provider cache */
+export class ParseEvidence extends Schema.Class<ParseEvidence>("ParseEvidence")({
+  title: Schema.String,
+  /** The provider's free-text artist field */
+  artist: Schema.NullOr(Schema.String),
+  uploader: Schema.NullOr(CreditedArtist),
+  artistSource: ParsedTitle.fields.artistSource,
+  removed: Schema.Array(Schema.String),
+}) {}
 
-/** One assertion per field from one origin. Unchanged values write nothing */
+const parseVersion = (revision: string | null) => Number(revision?.replace("parse:v", "") ?? 0);
+
+/**
+ * One assertion for each field of `values` from one origin. `null` states that the origin has no
+ * value. Unchanged assertions write nothing.
+ */
 export const assertRecording = (
   recordingId: string,
-  origin: "local" | "musicbrainz" | "provider",
+  origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
   originRef: string,
-  metadata: RecordingMetadata,
+  values: { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null },
+  details: {
+    readonly confidence?: number;
+    readonly originRevision?: string;
+    readonly evidence?: ParseEvidence;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const clock = yield* HlcClock;
     const identity = yield* ReplicaDatabase;
+    const confidence = details.confidence ?? 1;
+    const originRevision = details.originRevision ?? null;
+    const evidence = details.evidence ?? null;
 
-    const assertions = yield* Effect.forEach(
-      Object.entries(fieldValues(metadata)),
-      ([field, value]) =>
-        assertionId({
-          entityType: "recording",
-          entityId: recordingId,
-          field,
-          origin,
-          originRef,
-        }).pipe(Effect.map((id) => ({ id, field, value }))),
+    const assertions = yield* Effect.forEach(Object.entries(values), ([field, value]) =>
+      assertionId({
+        entityType: "recording",
+        entityId: recordingId,
+        field,
+        origin,
+        originRef,
+      }).pipe(Effect.map((id) => ({ id, field, value }))),
     );
     const known = new Map(
       (yield* db
         .select({
           id: catalogAssertion.id,
           value: catalogAssertion.value,
+          confidence: catalogAssertion.confidence,
+          originRevision: catalogAssertion.originRevision,
+          evidence: catalogAssertion.evidence,
           retracted: catalogAssertion.retracted,
         })
         .from(catalogAssertion)
@@ -90,10 +107,15 @@ export const assertRecording = (
 
     const changed = assertions.filter((assertion) => {
       const row = known.get(assertion.id);
+      if (row === undefined) return true;
+      // A replica with an older parser must not overwrite the parse of a newer one
+      if (origin === "parse" && parseVersion(row.originRevision) > parseVersion(originRevision)) {
+        return false;
+      }
       return (
-        row === undefined ||
         row.retracted ||
-        JSON.stringify(row.value) !== JSON.stringify(assertion.value)
+        JSON.stringify([row.value, row.confidence, row.originRevision, row.evidence]) !==
+          JSON.stringify([assertion.value, confidence, originRevision, evidence])
       );
     });
 
@@ -110,7 +132,9 @@ export const assertRecording = (
             value: assertion.value,
             origin,
             originRef,
-            confidence: 1,
+            originRevision,
+            evidence,
+            confidence,
             authorReplicaId: identity.replicaId,
             hlc: yield* clock.next,
             retracted: false,
@@ -127,9 +151,9 @@ export const assertRecording = (
     return changed.length > 0;
   });
 
-// Resolution policy v1. Local tags rank first, because users curate them. MusicBrainz only fills
-// fields that no provider has: its titles are in the original script, where providers localize.
-const originRank = ["admin", "local", "provider", "musicbrainz"];
+// Resolution policy v1. Users curate local tags. MusicBrainz titles are in the original script, where
+// providers localize. `match` and `parse` are guesses, so they only fill fields that others leave.
+const originRank = ["admin", "local", "provider", "musicbrainz", "match", "parse"];
 
 type Assertion = typeof catalogAssertion.$inferSelect;
 

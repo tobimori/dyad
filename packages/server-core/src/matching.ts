@@ -6,13 +6,7 @@ import { HlcClock } from "@dyad/sync";
 import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
 import { Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
 
-import {
-  RecordingMetadata,
-  assertRecording,
-  fields,
-  projectRecordings,
-  resolvedValues,
-} from "./assertions.ts";
+import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
 import { isrcRecordingId, mergeId, musicbrainzRecordingId } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
 import { touchGroups } from "./sync-counter.ts";
@@ -481,26 +475,21 @@ const writeLookup = (isrc: string, recordings: ReadonlyArray<MusicBrainzRecordin
       (item) =>
         Effect.gen(function* () {
           const id = yield* musicbrainzRecordingId(item.mbid);
-          yield* assertRecording(
-            id,
-            "musicbrainz",
-            item.mbid,
-            new RecordingMetadata({
-              title: item.title,
-              artistCredit:
-                item.artist === null
-                  ? null
-                  : {
-                      name: item.artist,
-                      artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
-                    },
-              album: null,
-              durationMs: item.durationMs,
-              isrc: null,
-              artworkUrl: null,
-              explicit: null,
-            }),
-          );
+          yield* assertRecording(id, "musicbrainz", item.mbid, {
+            title: item.title,
+            artist_credit:
+              item.artist === null
+                ? null
+                : {
+                    name: item.artist,
+                    artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
+                  },
+            album: null,
+            duration_ms: item.durationMs,
+            isrc: null,
+            artwork_url: null,
+            explicit: null,
+          });
           return id;
         }),
     );

@@ -26,7 +26,8 @@ export const catalogAssertion = sqliteTable(
     // Null for imports and matching, which no user starts
     authorUserId: text("author_user_id"),
     authorReplicaId: text("author_replica_id").notNull(),
-    // Newer assertion with the same ID wins
+    // Newer assertion with the same ID wins. Between `parse` assertions, a higher `origin_revision`
+    // (`parse:v2` over `parse:v1`) wins first.
     hlc: text("hlc").notNull(),
     // Withdrawn, and ignored by resolution. A null value instead states that there is no value.
     retracted: integer("retracted", { mode: "boolean" }).notNull().default(false),

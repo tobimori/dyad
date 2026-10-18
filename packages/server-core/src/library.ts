@@ -49,6 +49,7 @@ const importFile = (rootId: string, relativePath: string, file: AudioFile, stat:
             ...tagIdentifiers(tags),
             artworkUrl: null,
             explicit: null,
+            uploader: null,
           },
           {
             codec: file.codec,
