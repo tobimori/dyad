@@ -5,6 +5,7 @@ import * as assertion from "./schema/assertion.ts";
 import * as audioAnalysis from "./schema/audio-analysis.ts";
 import * as auth from "./schema/auth.ts";
 import * as catalog from "./schema/catalog.ts";
+import * as download from "./schema/download.ts";
 import * as history from "./schema/history.ts";
 import * as job from "./schema/job.ts";
 import * as librarySync from "./schema/library-sync.ts";
@@ -19,6 +20,7 @@ import * as source from "./schema/source.ts";
 export const schema = {
   ...replica,
   ...auth,
+  ...download,
   ...session,
   ...account,
   ...catalog,

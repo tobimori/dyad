@@ -16,6 +16,7 @@ import {
   setup,
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
+import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
 import { listRecentPlays, recordPlays } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
@@ -93,6 +94,12 @@ export const serverRoutes = Layer.unwrap(
         controlSession(payload).pipe(orDieOnDatabaseError("controlSession")),
       reportPlayback: (payload) => reportPlayback(payload),
       recordPlays: ({ plays }) => recordPlays(plays).pipe(orDieOnDatabaseError("recordPlays")),
+      prepareDownload: ({ sourceId, quality, capabilities }) =>
+        prepareDownload(sourceId, quality, capabilities).pipe(
+          orDieOnDatabaseError("prepareDownload"),
+        ),
+      checkInDownloads: ({ sourceIds }) =>
+        checkInDownloads(sourceIds).pipe(orDieOnDatabaseError("checkInDownloads")),
       createPairingCode: () => createPairingCode,
       listDevices: () => listDevices.pipe(orDieOnDatabaseError("listDevices")),
       removeDevice: ({ deviceId }) =>
@@ -117,6 +124,7 @@ export const serverRoutes = Layer.unwrap(
       ),
       HttpRouter.add("GET", "/health", HttpServerResponse.text("ok")),
       streamRoute,
+      downloadRoute,
       RpcServer.layerHttp({ group: ServerRpc, path: "/rpc" }).pipe(
         Layer.provide(handlers),
         Layer.provide(authenticationLayer),

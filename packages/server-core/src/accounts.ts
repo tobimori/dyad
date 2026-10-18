@@ -9,6 +9,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { Clock, Crypto, Effect, Schema } from "effect";
 
+import { forgetDownloads } from "./downloads.ts";
 import { forgetLibrary, queueLibrarySync } from "./library-sync.ts";
 import { Providers, toCredentials } from "./providers.ts";
 
@@ -94,6 +95,7 @@ export const unlinkAccount = (provider: string) =>
             ),
           );
         yield* forgetLibrary(principal.userId, provider);
+        yield* forgetDownloads(principal.userId, provider);
       }),
     );
 

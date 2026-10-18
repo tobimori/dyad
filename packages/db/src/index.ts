@@ -3,6 +3,7 @@ export * from "./schema/assertion.ts";
 export * from "./schema/audio-analysis.ts";
 export * from "./schema/auth.ts";
 export * from "./schema/catalog.ts";
+export * from "./schema/download.ts";
 export * from "./schema/history.ts";
 export * from "./schema/job.ts";
 export * from "./schema/library-sync.ts";

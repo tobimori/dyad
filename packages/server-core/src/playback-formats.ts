@@ -12,7 +12,7 @@ export const contentTypes = {
 } satisfies Record<typeof AudioContainer.Type, string>;
 
 // These muxers can write sequentially, without seeking or buffering the complete track
-const streamingCodecs = {
+export const streamingCodecs = {
   mp4: ["aac", "alac"],
   adts: ["aac"],
   ogg: ["opus", "vorbis", "flac"],

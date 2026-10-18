@@ -103,12 +103,12 @@ const verifyGrant = (grant: StreamGrant, signature: string) =>
     );
   });
 
-class FilePlayback extends Data.Class<{
+export class FilePlayback extends Data.Class<{
   readonly format: SourceFormat;
   readonly path: string;
 }> {}
 
-class ProviderPlayback extends Data.Class<{
+export class ProviderPlayback extends Data.Class<{
   readonly format: SourceFormat;
   /** FFmpeg demuxer for the resolved bytes */
   readonly demuxer: string;
@@ -173,7 +173,7 @@ const providerPlayback = (
 
 // How the user can play the source. A search result is not in the catalog yet, so it comes with
 // its cached search result.
-const findPlayableSource = (sourceId: string, userId: UserId) =>
+export const findPlayableSource = (sourceId: string, userId: UserId) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
 
@@ -313,7 +313,7 @@ const cachedAudio = (playable: ProviderPlayback) =>
 const prerollMs = 1000;
 
 // The provider resolves before the response starts, so that a failure gives an error status
-const providerStream = <E>(
+export const providerStream = <E>(
   playable: ProviderPlayback,
   sourceId: string,
   startMs: number,

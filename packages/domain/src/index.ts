@@ -297,6 +297,42 @@ export class PlaybackUnavailable extends Schema.TaggedError<PlaybackUnavailable>
 ) {}
 
 /**
+ * `lossless` is 16-bit FLAC; `high`, `normal` and `data_saver` are lossy targets of about 256, 128
+ * and 64 kbps. A lossy source never becomes lossless, and a source at or below the target stays as
+ * it is.
+ */
+export const DownloadQuality = Schema.Literals([
+  "original",
+  "lossless",
+  "high",
+  "normal",
+  "data_saver",
+]);
+
+export class DownloadPlan extends Schema.Class<DownloadPlan>("DownloadPlan")({
+  format: AudioFormat,
+  /** In bit/s. `null` when the file keeps the audio of the source or is lossless. */
+  bitrate: Schema.NullOr(Schema.Int),
+  /** Relative URL of the file */
+  path: Schema.String,
+  /** Server time when the device deletes the file unless a check-in renews it. `null`: no lease. */
+  leaseExpiresAt: Schema.NullOr(Schema.Number),
+}) {}
+
+export class DownloadLease extends Schema.Class<DownloadLease>("DownloadLease")({
+  sourceId: Schema.String,
+  leaseExpiresAt: Schema.NullOr(Schema.Number),
+}) {}
+
+/** `not_allowed`: the provider does not let devices keep its audio */
+export class DownloadUnavailable extends Schema.TaggedError<DownloadUnavailable>()(
+  "DownloadUnavailable",
+  {
+    reason: Schema.Literals(["not_found", "unsupported_format", "account_required", "not_allowed"]),
+  },
+) {}
+
+/**
  * The client opens `url` in a browser where the user signs in on the provider's own page. When
  * the browser has all `cookies` of `domain`, the client gives their values to `linkAccount`.
  */
@@ -421,7 +457,7 @@ export class Playback extends Schema.Class<Playback>("Playback")({
   /** Changes at each command that changes the transport, but not at the natural end of an entry */
   revision: Schema.Int,
   outputId: Schema.NullOr(OutputId),
-  /** The output stopped reporting. It can still play from its buffer. */
+  /** The output stopped reporting and can still play from its buffer, or it did not start to play */
   lost: Schema.Boolean,
   shuffle: Schema.Boolean,
   repeat: RepeatMode,
@@ -673,6 +709,27 @@ const UserRpc = RpcGroup.make(
   Rpc.make("recordPlays", {
     payload: { plays: Schema.Array(OfflinePlay).check(Schema.isMaxLength(1000)) },
   }),
+  // A file that this device keeps, in one of the `capabilities` formats. The server records it
+  // for the device until a check-in leaves it out.
+  Rpc.make("prepareDownload", {
+    payload: {
+      sourceId: Schema.String.check(Schema.isUUID()),
+      quality: DownloadQuality,
+      capabilities: PlaybackCapabilities,
+    },
+    success: DownloadPlan,
+    error: DownloadUnavailable,
+  }),
+  // All files that the device keeps or downloads. The device deletes the files that the answer
+  // leaves out, for example after an unlink; the server forgets them too.
+  Rpc.make("checkInDownloads", {
+    payload: {
+      sourceIds: Schema.Array(Schema.String.check(Schema.isUUID())).check(
+        Schema.isMaxLength(100_000),
+      ),
+    },
+    success: Schema.Array(DownloadLease),
+  }),
   Rpc.make("createPairingCode", { success: PairingCode }),
   Rpc.make("listDevices", { success: Schema.Array(DeviceSummary) }),
   // Removes a device of the current user, also the current device. Its stream URLs stop working.
@@ -688,8 +745,8 @@ const UserRpc = RpcGroup.make(
     success: ProviderAccountSummary,
     error: AccountLinkFailed,
   }),
-  // Removes the account and its stored credentials from this server, and the songs and playlists
-  // that it imported from the user's library
+  // Removes the account and its stored credentials from this server, the songs and playlists that
+  // it imported from the user's library, and the provider's downloads on the user's devices
   Rpc.make("unlinkAccount", { payload: { provider: Schema.String } }),
   // Admin only. Takes `fromId` out of the group of `intoId`. After this, the matcher never merges
   // `fromId` again; only `mergeRecordings` does.
