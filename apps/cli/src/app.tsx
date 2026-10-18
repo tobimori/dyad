@@ -64,7 +64,7 @@ import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
 import { useToast } from "./ui/toast.tsx";
 import { VideoView, useCoverVideo } from "./video/video-view.tsx";
-import { Backdrop } from "./visualizer/backdrop.tsx";
+import { Backdrop, useBackdropStyle } from "./visualizer/backdrop.tsx";
 import { VisualizerView } from "./visualizer/visualizer-view.tsx";
 
 const sidebarMinWidth = 100;
@@ -863,6 +863,7 @@ export function App(props: {
         ]
       : [];
 
+  const backdrop = useBackdropStyle();
   const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
     view === "browse"
       ? [...sectionCommands, ...entryCommands, ...listCommands]
@@ -870,6 +871,7 @@ export function App(props: {
           ...segmentCommands,
           [commands.close, () => setView("browse")],
           [commands.actions, openActions],
+          ...(view === "nowPlaying" ? backdrop.commands : []),
         ];
 
   // The footer shows the hints in this order
@@ -984,12 +986,12 @@ export function App(props: {
       )}
       {view === "nowPlaying" && (
         <Backdrop
+          style={backdrop.style}
           source={player.current?.source}
           artwork={artwork}
           playing={player.state === "playing"}
           tap={player.tap}
           positionMs={player.position}
-          target={main}
         >
           <NowPlayingView
             entry={player.current}

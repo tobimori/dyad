@@ -10,14 +10,15 @@ import {
 import type { Rgb } from "@dyad/visualizer";
 import { KittyImage } from "@dyad/visualizer/kitty";
 import { NodeServices } from "@effect/platform-node";
-import type { OptimizedBuffer, Renderable } from "@opentui/core";
+import type { OptimizedBuffer } from "@opentui/core";
 import { useRenderer } from "@opentui/react";
 import { Effect, Random } from "effect";
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { ReactNode } from "react";
 
 import type { Artwork } from "../component/use-artwork.ts";
-import { commands, useCommands } from "../context/keymap.ts";
+import { commands } from "../context/keymap.ts";
+import type { Command } from "../context/keymap.ts";
 import {
   Backdrop as BackdropStyle,
   Settings,
@@ -47,24 +48,51 @@ const brightness = 0.55;
 const shadow = { columns: 3, rows: 1, depth: 0.85 };
 
 /**
+ * The saved effect style, `null` while the settings load or without Kitty graphics, and the key
+ * that changes it. The view lists the key with its own keys, so that the hint shows before the
+ * general ones.
+ */
+export function useBackdropStyle() {
+  const toast = useToast();
+  const files = useKittyFiles();
+  const [settings, setSettings] = useSettings();
+  const supported = mode === "kitty" && files === true;
+  const style = settings === null || !supported ? null : (settings.backdrop ?? defaultStyle);
+
+  const cycle = () => {
+    if (settings === null || style === null) return;
+    const next = styles[(styles.indexOf(style) + 1) % styles.length];
+    if (next === undefined) return;
+    setSettings(new Settings({ ...settings, backdrop: next }));
+    toast("notice", next === "off" ? "Effect off" : `Effect: ${backdrops[next].name}`);
+    Effect.runFork(
+      updateSettings((current) => new Settings({ ...current, backdrop: next })).pipe(
+        Effect.ignore,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+  };
+  const keys: ReadonlyArray<readonly [Command, () => void]> =
+    style === null ? [] : [[commands.backdrop, cycle]];
+  return { style, commands: keys };
+}
+
+/**
  * An effect from the audio and the cover under `children`, in the Kitty graphics layer below the
- * text. Cells with a background of their own, such as panels and dialogs, hide it.
+ * text. Cells with a background of their own, such as panels, hide it; a dialog veil dims it.
  */
 export function Backdrop(props: {
+  /** `null` shows no effect */
+  readonly style: typeof BackdropStyle.Type | null;
   readonly source: SourceSummary | undefined;
   readonly artwork: Artwork | null;
   readonly playing: boolean;
   readonly tap: () => AudioTap | null;
   readonly positionMs: () => number;
-  /** The renderable that has the focus while the keys of the view work */
-  readonly target: RefObject<Renderable | null>;
   readonly children: ReactNode;
 }) {
   const renderer = useRenderer();
   const theme = useTheme();
-  const toast = useToast();
-  const files = useKittyFiles();
-  const [settings, setSettings] = useSettings();
   const latest = useRef(props);
   latest.current = props;
   const shown = useRef<Visualizer | null>(null);
@@ -72,34 +100,9 @@ export function Backdrop(props: {
   const picture = useRef<Picture | null>(null);
   const [size, setSize] = useState({ x: 0, y: 0, width: 0, height: 0 });
 
-  const style = settings?.backdrop ?? defaultStyle;
   // `off` is the last style, so the other styles have the index of their preset
-  const preset = style === "off" ? -1 : styles.indexOf(style);
-  const supported = mode === "kitty" && files === true;
-  const active = supported && settings !== null && preset >= 0;
-
-  useCommands(
-    settings === null || !supported
-      ? []
-      : [
-          [
-            commands.backdrop,
-            () => {
-              const next = styles[(styles.indexOf(style) + 1) % styles.length];
-              if (next === undefined) return;
-              setSettings(new Settings({ ...settings, backdrop: next }));
-              toast("notice", next === "off" ? "Effect off" : `Effect: ${backdrops[next].name}`);
-              Effect.runFork(
-                updateSettings((current) => new Settings({ ...current, backdrop: next })).pipe(
-                  Effect.ignore,
-                  Effect.provide(NodeServices.layer),
-                ),
-              );
-            },
-          ],
-        ],
-    { target: props.target, targetMode: "focus" },
-  );
+  const preset = props.style === null || props.style === "off" ? -1 : styles.indexOf(props.style);
+  const active = preset >= 0;
 
   const sourceId = props.source?.id ?? "";
   useEffect(() => {
@@ -139,13 +142,20 @@ export function Backdrop(props: {
     const feed = new AudioFeed();
     const analyzer = new Analyzer();
     const silence = new SampleRing(1);
-    const background = [1, 3, 5].map((start) =>
-      Number.parseInt(theme.background.slice(start, start + 2), 16),
+    const channels = (hex: string) =>
+      [1, 3, 5, 7].map((start) => Number.parseInt(hex.slice(start, start + 2) || "ff", 16));
+    const background = channels(theme.background);
+    // A dialog blends this color over the screen; the effect under it gets the same blend
+    const [veilR = 0, veilG = 0, veilB = 0, veilA = 255] = channels(theme.backdrop);
+    const veilAlpha = veilA / 255;
+    const veiled = [veilR, veilG, veilB].map(
+      (value, i) => (background[i] ?? 0) * (1 - veilAlpha) + value * veilAlpha,
     );
     // Per cell: 1 for text, 2 for a background of its own, else 0
     const kinds = new Uint8Array(columns * rows).fill(255);
     const gains = new Float32Array(columns * rows);
     const output = new Uint8Array(width * height * 4);
+    let veil = false;
     let sinceFrame = frameMs;
     let rendered = false;
 
@@ -168,21 +178,27 @@ export function Backdrop(props: {
     const readCells = (buffer: OptimizedBuffer) => {
       const { char, bg } = buffer.buffers;
       const stride = buffer.width;
+      const near = (cell: number, color: ReadonlyArray<number>) =>
+        Math.abs((bg[cell * 4] ?? 0) - (color[0] ?? 0)) <= 2 &&
+        Math.abs((bg[cell * 4 + 1] ?? 0) - (color[1] ?? 0)) <= 2 &&
+        Math.abs((bg[cell * 4 + 2] ?? 0) - (color[2] ?? 0)) <= 2;
       let changed = false;
+      let veiledCells = 0;
       for (let row = 0; row < rows; row++) {
         for (let column = 0; column < columns; column++) {
           const cell = (y + row) * stride + x + column;
           const code = char[cell] ?? 0;
-          const own =
-            Math.abs((bg[cell * 4] ?? 0) - (background[0] ?? 0)) > 1 ||
-            Math.abs((bg[cell * 4 + 1] ?? 0) - (background[1] ?? 0)) > 1 ||
-            Math.abs((bg[cell * 4 + 2] ?? 0) - (background[2] ?? 0)) > 1;
+          const open = near(cell, background);
+          const under = !open && near(cell, veiled);
+          if (under) veiledCells++;
           const blank = code === 0 || code === 0x20;
-          const kind = own ? 2 : Number(!blank);
+          const kind = open || under ? Number(!blank) : 2;
           if (kinds[row * columns + column] !== kind) changed = true;
           kinds[row * columns + column] = kind;
         }
       }
+      if (veil !== veiledCells > 0) changed = true;
+      veil = veiledCells > 0;
       if (!changed) return false;
       for (let row = 0; row < rows; row++) {
         for (let column = 0; column < columns; column++) {
@@ -236,9 +252,10 @@ export function Backdrop(props: {
               (1 - ty) +
             ((gains[r1 * columns + c0] ?? 0) * (1 - tx) + (gains[r1 * columns + c1] ?? 0) * tx) *
               ty;
-          output[o] = (rgba[o] ?? 0) * value;
-          output[o + 1] = (rgba[o + 1] ?? 0) * value;
-          output[o + 2] = (rgba[o + 2] ?? 0) * value;
+          const keep = veil ? value * (1 - veilAlpha) : value;
+          output[o] = (rgba[o] ?? 0) * keep + (veil ? veilR * veilAlpha : 0);
+          output[o + 1] = (rgba[o + 1] ?? 0) * keep + (veil ? veilG * veilAlpha : 0);
+          output[o + 2] = (rgba[o + 2] ?? 0) * keep + (veil ? veilB * veilAlpha : 0);
           output[o + 3] = 255;
         }
       }
@@ -257,7 +274,7 @@ export function Backdrop(props: {
       feed.close();
       shown.current = null;
     };
-  }, [active, size, theme.background]);
+  }, [active, size, theme.background, theme.backdrop]);
 
   return (
     <box
