@@ -1,6 +1,6 @@
 import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
 import type { Downloads, ServerAtoms, SessionClient } from "@dyad/client-runtime";
-import { segmentIndexAt, segmentSkipTarget } from "@dyad/domain";
+import { segmentIndexAt } from "@dyad/domain";
 import type {
   AlbumCard,
   AlbumRef,
@@ -53,7 +53,7 @@ import type { Section } from "./context/routes.ts";
 import { useCoverAccent } from "./context/theme-provider.tsx";
 import { useSearch } from "./context/use-search.ts";
 import type { Engine } from "./playback/engine.ts";
-import { restartAfterMs, usePlayer } from "./playback/use-player.ts";
+import { usePlayer } from "./playback/use-player.ts";
 import { useSegments } from "./playback/use-segments.ts";
 import { NowPlayingPanel, NowPlayingView, segmentLine } from "./routes/now-playing.tsx";
 import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
@@ -523,14 +523,6 @@ export function App(props: {
     else player.seekTo(segment.startMs);
   };
 
-  // Like `n` and `b` on an album, but inside the source. At the ends they go to the next entry.
-  const skip = (direction: 1 | -1) => {
-    const target = segmentSkipTarget(segments, player.position(), direction, restartAfterMs);
-    if (target !== undefined) player.seekTo(target);
-    else if (direction === 1) player.next();
-    else player.previous();
-  };
-
   const segmentActions = (segment: SourceSegment) => {
     const list = [
       new Action({
@@ -665,8 +657,8 @@ export function App(props: {
     [commands.visualizer, () => setView(view === "visualizer" ? "browse" : "visualizer")],
     [commands.reload, reload],
     [commands.togglePause, player.togglePause],
-    [commands.next, () => skip(1)],
-    [commands.previous, () => skip(-1)],
+    [commands.next, () => player.skip(1, segments)],
+    [commands.previous, () => player.skip(-1, segments)],
     [commands.seekBack, () => player.seekBy(-player.seekStepMs)],
     [commands.seekForward, () => player.seekBy(player.seekStepMs)],
     [commands.volumeUp, () => player.changeVolume(1)],

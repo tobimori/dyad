@@ -24,8 +24,9 @@ export class ClientPluginContext extends Data.Class<{
     readonly play: Effect.Effect<void>;
     readonly pause: Effect.Effect<void>;
     readonly togglePause: Effect.Effect<void>;
+    /** In a DJ set, goes to the next track of the set first */
     readonly next: Effect.Effect<void>;
-    /** Goes back to the start of the source first, like most players */
+    /** Goes back to the start of the source or the track of a DJ set first, like most players */
     readonly previous: Effect.Effect<void>;
     readonly seekTo: (positionMs: number) => Effect.Effect<void>;
     readonly seekBy: (offsetMs: number) => Effect.Effect<void>;

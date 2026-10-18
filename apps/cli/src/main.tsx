@@ -12,7 +12,7 @@ import {
 } from "@dyad/client-runtime";
 import type { DownloadQuality } from "@dyad/domain";
 import { ClientPluginContext } from "@dyad/plugin/client";
-import { RegistryProvider } from "@effect/atom-react";
+import { RegistryContext, scheduleTask } from "@effect/atom-react";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { createCliRenderer, setupAudio } from "@opentui/core";
 import { KeymapProvider } from "@opentui/keymap/react";
@@ -20,6 +20,7 @@ import { createRoot } from "@opentui/react";
 import { Cause, Context, Data, Effect, FileSystem, Layer, Option, Path } from "effect";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
+import { AsyncResult, AtomRegistry } from "effect/reactivity";
 import envPaths from "env-paths";
 
 import { App } from "./app.tsx";
@@ -166,10 +167,22 @@ const player = (controller: boolean) =>
     );
 
     const atoms = serverAtoms(Context.merge(connection, replicaServices), logging);
+    // Plugin commands read the tracklist that the app shows, so that media keys act like its keys
+    const registry = yield* Effect.acquireRelease(
+      Effect.sync(() => AtomRegistry.make({ scheduleTask })),
+      (registry) => Effect.sync(() => registry.dispose()),
+    );
+    const segmentsOf = (sourceId: string) => {
+      const result = registry.get(atoms.sourceSegments(sourceId));
+      return AsyncResult.isSuccess(result) ? result.value : [];
+    };
     const plugins = yield* startPluginHost(
       new ClientPluginContext({
         serverOrigin: serverUrl,
-        playback: { nowPlaying: session.nowPlaying, ...pluginTransport(session, engine) },
+        playback: {
+          nowPlaying: session.nowPlaying,
+          ...pluginTransport(session, engine, segmentsOf),
+        },
       }),
     ).pipe(Effect.provideContext(logServices));
 
@@ -202,7 +215,7 @@ const player = (controller: boolean) =>
       renderer.once("destroy", () => resume(Effect.void));
       createRoot(renderer).render(
         <KeymapProvider keymap={keymap}>
-          <RegistryProvider>
+          <RegistryContext.Provider value={registry}>
             <ThemeProvider mode={mode ?? "dark"}>
               <ErrorBoundary onError={logCrash} onQuit={() => renderer.destroy()}>
                 <ToastProvider>
@@ -222,7 +235,7 @@ const player = (controller: boolean) =>
                 </ToastProvider>
               </ErrorBoundary>
             </ThemeProvider>
-          </RegistryProvider>
+          </RegistryContext.Provider>
         </KeymapProvider>,
       );
     });

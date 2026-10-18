@@ -5,8 +5,8 @@ import {
   positionOf,
 } from "@dyad/client-runtime";
 import type { SessionClient } from "@dyad/client-runtime";
-import { SessionCommand } from "@dyad/domain";
-import type { OutputId, PlayContext, SourceSummary } from "@dyad/domain";
+import { SessionCommand, skipSeekTarget } from "@dyad/domain";
+import type { OutputId, PlayContext, SourceSegment, SourceSummary } from "@dyad/domain";
 import { Clock, Effect, Fiber, Random, Schedule, Stream, SubscriptionRef } from "effect";
 import { useEffect, useState } from "react";
 
@@ -16,8 +16,6 @@ const now = () => Effect.runSync(Clock.currentTimeMillis);
 
 const volumeStep = 0.05;
 const seekStepMs = 10_000;
-// Like most players, `b` first goes back to the start of the current source
-export const restartAfterMs = 3000;
 // The most entries that one command can add
 const maxEntries = 10_000;
 
@@ -248,14 +246,12 @@ export function usePlayer(props: {
       if (entry !== undefined) send(SessionCommand.cases.Remove.make({ entryIds: [entry.id] }));
     },
     clear: () => send(SessionCommand.cases.Clear.make({ keepCurrent: true })),
-    next: () => {
+    /** `segments`: of the current source, so that a skip stays inside a DJ set */
+    skip: (direction: 1 | -1, segments: ReadonlyArray<SourceSegment>) => {
       if (current === undefined) return;
-      send(SessionCommand.cases.Skip.make({ fromEntryId: current.id, direction: 1 }));
-    },
-    previous: () => {
-      if (current === undefined) return;
-      if (position() > restartAfterMs) seekTo(0);
-      else send(SessionCommand.cases.Skip.make({ fromEntryId: current.id, direction: -1 }));
+      const target = skipSeekTarget(segments, position(), direction);
+      if (target !== undefined) seekTo(target);
+      else send(SessionCommand.cases.Skip.make({ fromEntryId: current.id, direction }));
     },
     togglePause: () =>
       send(

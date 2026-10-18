@@ -67,20 +67,26 @@ export const segmentIndexAt = (segments: ReadonlyArray<SourceSegment>, positionM
       (segment.endMs === null || positionMs < segment.endMs),
   );
 
+// Like most players, previous first goes back to the start of the current track
+const restartAfterMs = 3000;
+
 /**
- * Where a skip inside a DJ set seeks to: the next segment, or back to the start of the current
- * segment and then to the one before. `undefined` when the skip leaves the source.
+ * Where next and previous seek inside the source: the next segment of a DJ set, or back to the
+ * start of the current segment or source and then to the segment before. `undefined` when they skip
+ * to the next or previous queue entry.
  */
-export const segmentSkipTarget = (
+export const skipSeekTarget = (
   segments: ReadonlyArray<SourceSegment>,
   positionMs: number,
   direction: 1 | -1,
-  restartAfterMs: number,
 ) => {
   const starts = segments.flatMap((segment) => segment.startMs ?? []).toSorted((a, b) => a - b);
   if (direction === 1) return starts.find((start) => start > positionMs);
 
   const current = starts.findLast((start) => start <= positionMs);
-  if (current === undefined || positionMs - current > restartAfterMs) return current;
-  return starts.findLast((start) => start < current);
+  const target =
+    current === undefined || positionMs - current > restartAfterMs
+      ? current
+      : starts.findLast((start) => start < current);
+  return target ?? (positionMs > restartAfterMs ? 0 : undefined);
 };

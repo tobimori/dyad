@@ -1,15 +1,16 @@
 import { currentEntryOf, isTransportCommand, positionOf } from "@dyad/client-runtime";
 import type { SessionClient } from "@dyad/client-runtime";
-import { SessionCommand } from "@dyad/domain";
+import { SessionCommand, skipSeekTarget } from "@dyad/domain";
+import type { SourceSegment } from "@dyad/domain";
 import { Clock, Effect, SubscriptionRef } from "effect";
 
 import type { Engine } from "./engine.ts";
-import { restartAfterMs } from "./use-player.ts";
 
 /** The transport commands for client plugins, with the same rules as the keys of `usePlayer` */
 export const pluginTransport = (
   session: typeof SessionClient.Service,
   engine: typeof Engine.Service | null,
+  segmentsOf: (sourceId: string) => ReadonlyArray<SourceSegment>,
 ) => {
   const send = (command: typeof SessionCommand.Type) =>
     Effect.gen(function* () {
@@ -35,6 +36,7 @@ export const pluginTransport = (
     const now = yield* Clock.currentTimeMillis;
     return {
       id: entry.id,
+      sourceId: entry.source.id,
       positionMs: engine?.position(entry.id) ?? positionOf(view, now),
       durationMs: entry.source.durationMs ?? engine?.durationMs(entry.id) ?? null,
     };
@@ -53,7 +55,8 @@ export const pluginTransport = (
     Effect.gen(function* () {
       const entry = yield* current;
       if (entry === undefined) return;
-      if (direction === -1 && entry.positionMs > restartAfterMs) return yield* seekTo(0);
+      const target = skipSeekTarget(segmentsOf(entry.sourceId), entry.positionMs, direction);
+      if (target !== undefined) return yield* seekTo(target);
       yield* send(SessionCommand.cases.Skip.make({ fromEntryId: entry.id, direction }));
     });
 
