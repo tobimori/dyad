@@ -1,5 +1,5 @@
 import { clientState, migrateClientDatabase } from "@dyad/db/client";
-import { HomePage, RecordingId } from "@dyad/domain";
+import { AlbumCard, AlbumPage, ArtistCard, ArtistPage, HomePage, RecordingId } from "@dyad/domain";
 import { eq } from "drizzle-orm";
 import { EffectCache } from "drizzle-orm/cache/core/cache-effect";
 import { EffectLogger } from "drizzle-orm/effect-core";
@@ -79,3 +79,30 @@ export const accountProvidersState = stateKey("accountProviders", AccountProvide
 
 /** The last home page from the server, for the home while the server cannot answer */
 export const homePageState = stateKey("homePage", HomePage);
+
+export const libraryArtistsState = stateKey("libraryArtists", Schema.Array(ArtistCard));
+export const libraryAlbumsState = stateKey("libraryAlbums", Schema.Array(AlbumCard));
+
+const savedPageLimit = 30;
+
+/** The last answer for each of the pages that the device opened last, for pages offline */
+const pageCache = <T, E>(kind: string, schema: Schema.Codec<T, E>) => {
+  const page = (ref: string) => stateKey(`${kind}:${ref}`, schema);
+  const refs = stateKey(`${kind}s`, Schema.Array(Schema.String));
+  return {
+    get: (ref: string) => page(ref).get,
+    set: (ref: string, value: T) =>
+      Effect.gen(function* () {
+        yield* page(ref).set(value);
+        const known = Option.getOrElse(yield* refs.get, () => []);
+        const next = [ref, ...known.filter((other) => other !== ref)];
+        yield* refs.set(next.slice(0, savedPageLimit));
+        yield* Effect.forEach(next.slice(savedPageLimit), (old) => page(old).clear, {
+          discard: true,
+        });
+      }),
+  };
+};
+
+export const artistPageCache = pageCache("artistPage", ArtistPage);
+export const albumPageCache = pageCache("albumPage", AlbumPage);

@@ -340,6 +340,13 @@ export class Provider extends Data.Class<{
    * in with the server for `leaseDays` (`null`: never). Without it, devices cannot download.
    */
   readonly download?: { readonly leaseDays: number | null };
+  /** The page of a source on the provider's site, without a request. `null` when the ID gives none. */
+  readonly webUrl?: (externalId: string) => string | null;
+  /**
+   * The ID of the artist whose page `url` is, for example from a MusicBrainz URL relation. `null`
+   * for a URL of another site. A plugin sends no request for a URL of another site.
+   */
+  readonly artistFromUrl?: (url: string) => Effect.Effect<string | null, ProviderError>;
 }> {}
 
 /** A song that a recommender suggests. The core finds a playable source for it. */

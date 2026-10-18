@@ -19,18 +19,19 @@ export function ActionsDialog(props: {
   readonly actions: ReadonlyArray<Action>;
 }) {
   const dialog = useDialog();
+  // A track in a DJ set and the set can both have an action with the same command
   const options = props.actions.map(
-    (action) =>
+    (action, index) =>
       new SelectOption({
-        value: action.command.id,
+        value: index,
         title: action.label,
         detail: action.command.keys[0] === undefined ? "" : keyLabel(action.command.keys[0]),
       }),
   );
 
-  const run = (id: string) => {
+  const run = (index: number) => {
     dialog.pop();
-    props.actions.find((action) => action.command.id === id)?.run();
+    props.actions[index]?.run();
   };
 
   return (

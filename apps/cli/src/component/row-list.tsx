@@ -18,6 +18,10 @@ import { scrollOffset, useRowClick, videoMark } from "./track-list.tsx";
 export class HeadingRow extends Data.Class<{
   readonly key: string;
   readonly label: string;
+  /** Dim text after the label, for example the provider of a chart */
+  readonly detail?: string | undefined;
+  /** A heading inside the section of the heading above it */
+  readonly minor?: boolean | undefined;
 }> {}
 
 export class TrackRow extends Data.Class<{
@@ -81,9 +85,15 @@ export const trackRows = (
   );
 };
 
-export const headed = (key: string, label: string, first: boolean, rows: ReadonlyArray<Row>) => [
+export const headed = (
+  key: string,
+  label: string,
+  first: boolean,
+  rows: ReadonlyArray<Row>,
+  heading: { readonly detail?: string; readonly minor?: boolean } = {},
+) => [
   ...(first ? [] : [new HeadingRow({ key: `space:${key}`, label: "" })]),
-  new HeadingRow({ key: `heading:${key}`, label }),
+  new HeadingRow({ key: `heading:${key}`, label, ...heading }),
   ...rows,
 ];
 
@@ -332,8 +342,11 @@ export function RowList(props: {
         if (row instanceof HeadingRow) {
           return (
             <box key={row.key} height={1} paddingX={1}>
-              <text wrapMode="none" fg={theme.accent}>
+              <text wrapMode="none" fg={row.minor === true ? theme.text : theme.accent}>
                 <strong>{row.label}</strong>
+                {row.detail !== undefined && row.detail !== "" && (
+                  <span fg={theme.faint}>{`  ${row.detail}`}</span>
+                )}
               </text>
             </box>
           );

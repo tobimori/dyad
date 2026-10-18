@@ -6,6 +6,7 @@ export * from "./format.ts";
 export * from "./library.ts";
 export * from "./replica/database.ts";
 export * from "./replica/engine.ts";
+export * from "./replica/sets.ts";
 export * from "./session.ts";
 export * from "./timed.ts";
 export * from "./video.ts";

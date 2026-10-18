@@ -93,6 +93,11 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
     Schema.withDecodingDefaultKey(Effect.succeed(false)),
     Schema.withConstructorDefault(Effect.succeed(false)),
   ),
+  /** The series of a DJ set, for example `Boiler Room`. Client replicas do not know it. */
+  series: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 /** `YYYY`, `YYYY-MM` or `YYYY-MM-DD` */
@@ -295,6 +300,19 @@ export class SourceSegment extends Schema.Class<SourceSegment>("SourceSegment")(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
     Schema.withConstructorDefault(Effect.succeed(null)),
   ),
+}) {}
+
+/** A DJ set whose tracklist has a recording */
+export class HeardInSet extends Schema.Class<HeardInSet>("HeardInSet")({
+  set: SourceSummary,
+  /** Where the recording starts in the set. `null` when the tracklist gives no time. */
+  startMs: Schema.NullOr(Schema.Number),
+}) {}
+
+/** The page of a source on the site of its provider */
+export class WebLink extends Schema.Class<WebLink>("WebLink")({
+  providerName: Schema.String,
+  url: Schema.String,
 }) {}
 
 export class TracklistEditFailed extends Schema.TaggedError<TracklistEditFailed>()(
@@ -915,6 +933,16 @@ const UserRpc = RpcGroup.make(
     payload: { sourceId: Schema.String.check(Schema.isUUID()) },
     success: Schema.Array(SourceSegment),
     stream: true,
+  }),
+  // The sets that the user can play whose tracklists have the recording or a merged copy of it
+  Rpc.make("heardInSets", {
+    payload: { recordingId: RecordingId },
+    success: Schema.Array(HeardInSet),
+  }),
+  // The pages of the source and of the other sources of its recording on the providers' sites
+  Rpc.make("webLinks", {
+    payload: { sourceId: Schema.String.check(Schema.isUUID()) },
+    success: Schema.Array(WebLink),
   }),
   // Admin only. Hides the tracklists of the source for all users, or shows them again.
   Rpc.make("hideTracklist", {

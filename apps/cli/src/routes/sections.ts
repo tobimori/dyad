@@ -8,10 +8,11 @@ import { playlists } from "./playlists.tsx";
 import { queue } from "./queue.tsx";
 import { recent } from "./recent.tsx";
 import { search } from "./search.tsx";
+import { sets } from "./sets.tsx";
 import { songs } from "./songs.tsx";
 
 export const sections = Arr.sort(
-  [home, search, songs, artists, albums, playlists, recent, queue],
+  [home, search, songs, artists, albums, sets, playlists, recent, queue],
   Order.mapInput(Order.Number, (section: Section) => section.order),
 );
 

@@ -15,7 +15,7 @@ export class ListItem extends Data.Class<{
   readonly context: typeof PlayContext.Type;
   /** Shown in place of the source */
   readonly label?: string | undefined;
-  /** Why a radio added it, shown dim in place of the album */
+  /** Shown dim in place of the album, for example why a radio added it */
   readonly reason?: string | null | undefined;
 }> {}
 
@@ -168,6 +168,8 @@ export function ListTitle(props: { readonly title: string; readonly detail: stri
 /** A click selects a row; a double click plays it */
 export function TrackList(props: {
   readonly title: string;
+  /** What the title counts, `track` by default */
+  readonly noun?: string;
   /** Shows between the title and the column header */
   readonly header?: ReactNode;
   readonly items: ReadonlyArray<TrackItem>;
@@ -191,7 +193,8 @@ export function TrackList(props: {
   offset.current = scrollOffset(offset.current, props.selected, rows, props.items.length);
   const visible = props.items.slice(offset.current, offset.current + rows);
 
-  const count = props.items.length === 1 ? "1 track" : `${props.items.length} tracks`;
+  const noun = props.noun ?? "track";
+  const count = `${props.items.length} ${noun}${props.items.length === 1 ? "" : "s"}`;
   const rowColor = (played: boolean) => (played ? theme.muted : theme.text);
 
   return (
@@ -259,7 +262,8 @@ export function TrackList(props: {
                 title={titleOf(track)}
                 video={!unavailable && item.source.video}
                 artist={track.artist ?? ""}
-                album={track.album ?? ""}
+                // A DJ set has no album, so its series shows there
+                album={track.album ?? (unavailable ? "" : (item.source.series ?? ""))}
                 reason={unavailable ? null : (item.reason ?? null)}
                 time={formatDuration(track.durationMs)}
                 source={unavailable ? item.label : (item.label ?? sourceLabel(item.source))}

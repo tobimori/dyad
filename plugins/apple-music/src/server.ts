@@ -276,6 +276,8 @@ export const appleMusicPlugin = new Plugin({
           playlists,
           metadataPriority: 30,
           download: { leaseDays: 30 },
+          // Library IDs such as `i.abc` have no public page. The site picks the storefront.
+          webUrl: (id) => (/^\d+$/.test(id) ? `https://music.apple.com/song/${id}` : null),
         }),
       );
 

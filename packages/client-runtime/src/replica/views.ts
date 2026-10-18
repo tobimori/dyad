@@ -45,7 +45,7 @@ const canonical = alias(recording, "canonical");
  * The sources that the user can play, one row per source: a file on the server, or a source of a
  * provider that needs no account or has a linked one. The same rule as the server's `sourceSummary`.
  */
-const playableSources = (match: SQL | undefined) =>
+export const playableSources = (match: SQL | undefined) =>
   Effect.gen(function* () {
     const db = yield* ClientDatabase;
     const providers = Option.getOrElse(

@@ -73,6 +73,7 @@ export const youtubePlugin = new Plugin({
           tracklists: (externalId) => videoTracklists(externalId).pipe(Effect.provide(services)),
           uploads: true,
           download: { leaseDays: 30 },
+          webUrl: (id) => `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,
           account: {
             login: browserLogin,
             link: (credentials) =>

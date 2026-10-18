@@ -32,6 +32,7 @@ import { recommendersLayer } from "./recommenders.ts";
 import { radio } from "./radio.ts";
 import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
+import { heardInSets } from "./sets.ts";
 import { listSources } from "./sources.ts";
 import {
   createServerPairingCode,
@@ -47,6 +48,7 @@ import { timedRoute } from "./timed-route.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
 import { listPlaylistEntries } from "./user-library.ts";
 import { prepareVideo, videoRoute } from "./video.ts";
+import { webLinks } from "./web-links.ts";
 
 export { catalogLayer } from "./catalog-backfill.ts";
 export { hlcClockFromDatabase } from "./clock.ts";
@@ -147,6 +149,9 @@ export const serverRoutes = Layer.unwrap(
         ),
       hideTracklist: ({ sourceId, hidden }) =>
         hideTracklist(sourceId, hidden).pipe(orDieOnDatabaseError("hideTracklist")),
+      heardInSets: ({ recordingId }) =>
+        heardInSets(recordingId).pipe(orDieOnDatabaseError("heardInSets")),
+      webLinks: ({ sourceId }) => webLinks(sourceId).pipe(orDieOnDatabaseError("webLinks")),
       createServerPairingCode: () =>
         createServerPairingCode.pipe(orDieOnDatabaseError("createServerPairingCode")),
       pairServer: (payload) => pairServer(payload).pipe(orDieOnDatabaseError("pairServer")),

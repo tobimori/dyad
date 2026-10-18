@@ -2,7 +2,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { LibraryNotices, useLibraryStatus } from "../component/library-notice.tsx";
+import { LibraryNotices, accountHint, useLibraryStatus } from "../component/library-notice.tsx";
 import {
   ListItem,
   TrackList,
@@ -64,7 +64,8 @@ export const songs = new Section({
         return "Cannot load the library. Press r to try again.";
       }
       return (
-        status.importing ?? "No songs. Link an account with dyad link, or add files to the server."
+        status.importing ??
+        `No songs. ${accountHint(status.accounts)} Files that you add to the server show here too.`
       );
     };
 

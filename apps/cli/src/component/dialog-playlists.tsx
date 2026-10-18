@@ -16,6 +16,7 @@ import { SelectList, SelectOption } from "../ui/select-list.tsx";
 import { useToast } from "../ui/toast.tsx";
 import { Action } from "./dialog-actions.tsx";
 import { useLibraryStatus } from "./library-notice.tsx";
+import { counted } from "./row-list.tsx";
 
 const dialogWidth = 56;
 const newPlaylist = "new";
@@ -179,6 +180,7 @@ export function usePlaylistActions(props: {
 
   const create = (
     entries: ReadonlyArray<{ readonly recordingId: RecordingId; readonly sourceId: string | null }>,
+    initialName = "",
   ) => {
     const save = (name: string, provider: string | null) =>
       props.run(
@@ -197,7 +199,7 @@ export function usePlaylistActions(props: {
     dialog.push(
       <NameDialog
         title="New playlist"
-        initial=""
+        initial={initialName}
         onSubmit={(name) =>
           providers.length === 0
             ? save(name, null)
@@ -211,6 +213,17 @@ export function usePlaylistActions(props: {
 
   return {
     create: () => create([]),
+    /** For a DJ set whose tracklist has matched recordings */
+    saveSet: (title: string, recordingIds: ReadonlyArray<RecordingId>) =>
+      new Action({
+        command: commands.saveSetAsPlaylist,
+        label: `Save ${counted(recordingIds.length, "identified track")} as a playlist…`,
+        run: () =>
+          create(
+            recordingIds.map((recordingId) => ({ recordingId, sourceId: null })),
+            title.slice(0, 200),
+          ),
+      }),
     /** For a track that has a recording */
     add: (
       entries: ReadonlyArray<{

@@ -1,10 +1,20 @@
-import type { AlbumRef, ArtistRef } from "@dyad/domain";
-import { Context, Effect, Layer, Option, Stream } from "effect";
+import { AlbumPage, ArtistPage, PageNotFound, PageState } from "@dyad/domain";
+import type { AlbumRef, ArtistRef, HeardInSet, RecordingId } from "@dyad/domain";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { AsyncResult, Atom, Reactivity } from "effect/reactivity";
 
 import { ConnectionStatus, ServerConnection } from "./connection.ts";
-import { ClientDatabase, accountProvidersState, homePageState } from "./replica/database.ts";
+import {
+  ClientDatabase,
+  accountProvidersState,
+  albumPageCache,
+  artistPageCache,
+  homePageState,
+  libraryAlbumsState,
+  libraryArtistsState,
+} from "./replica/database.ts";
 import { catalogTables } from "./replica/rows.ts";
+import { localHeardInSets, localSets } from "./replica/sets.ts";
 import {
   localLibrary,
   localPlaylistEntries,
@@ -16,6 +26,46 @@ import {
 
 // Idle pages keep their last emission this long, so back navigation is instant
 const pageIdleTime = "5 minutes";
+
+const offline = new PageState({
+  status: "failed",
+  fetchedAt: null,
+  reason: "Cannot reach the server · showing the saved page",
+});
+
+// The saved answer first, then the live answers, which the device saves. When the server cannot
+// answer, the saved answer comes again, through `stale`.
+const savedFirst = <A, E, R>(
+  cache: {
+    readonly get: Effect.Effect<Option.Option<A>, never, ClientDatabase>;
+    readonly set: (value: A) => Effect.Effect<void, never, ClientDatabase>;
+  },
+  live: Stream.Stream<A, E, R>,
+  stale: (value: A) => A,
+) =>
+  Stream.unwrap(
+    Effect.map(cache.get, (saved) =>
+      Stream.concat(
+        Stream.fromIterable(Option.toArray(saved)),
+        live.pipe(
+          Stream.tap(cache.set),
+          // A page that is gone must not show from the cache
+          Stream.catchIf(
+            (error) => !Schema.is(PageNotFound)(error),
+            (error) =>
+              Stream.unwrap(
+                Effect.map(cache.get, (last) =>
+                  Option.match(last, {
+                    onNone: () => Stream.fail(error),
+                    onSome: (value) => Stream.succeed(stale(value)),
+                  }),
+                ),
+              ),
+          ),
+        ),
+      ),
+    ),
+  );
 
 // The server imports provider libraries in the background, so the client polls the cheap status
 const pollSyncStatus = (client: typeof ServerConnection.Service) =>
@@ -96,26 +146,71 @@ export const serverAtoms = (
       ),
     ),
     recentPlays: local(["play_event", ...catalogTables, "client_state"], localRecentPlays),
+    /** The answers are saved on the device, so that the lists show offline */
     libraryArtists: runtime.atom(
-      ServerConnection.use((client) => client.listLibraryArtists()).pipe(
-        Effect.timeout("5 seconds"),
+      savedFirst(
+        libraryArtistsState,
+        Stream.fromEffect(
+          ServerConnection.use((client) => client.listLibraryArtists()).pipe(
+            Effect.timeout("5 seconds"),
+          ),
+        ),
+        (cards) => cards,
       ),
     ),
     libraryAlbums: runtime.atom(
-      ServerConnection.use((client) => client.listLibraryAlbums()).pipe(
-        Effect.timeout("5 seconds"),
+      savedFirst(
+        libraryAlbumsState,
+        Stream.fromEffect(
+          ServerConnection.use((client) => client.listLibraryAlbums()).pipe(
+            Effect.timeout("5 seconds"),
+          ),
+        ),
+        (cards) => cards,
       ),
     ),
+    /** The device saves the last pages that it opened, so that they show offline */
     artistPage: Atom.family((ref: ArtistRef) =>
       runtime
-        .atom(Stream.unwrap(ServerConnection.useSync((client) => client.artistPage({ ref }))))
+        .atom(
+          savedFirst(
+            { get: artistPageCache.get(ref), set: (page) => artistPageCache.set(ref, page) },
+            Stream.unwrap(ServerConnection.useSync((client) => client.artistPage({ ref }))),
+            (page) => new ArtistPage({ ...page, state: offline }),
+          ),
+        )
         .pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
     albumPage: Atom.family((ref: AlbumRef) =>
       runtime
-        .atom(Stream.unwrap(ServerConnection.useSync((client) => client.albumPage({ ref }))))
+        .atom(
+          savedFirst(
+            { get: albumPageCache.get(ref), set: (page) => albumPageCache.set(ref, page) },
+            Stream.unwrap(ServerConnection.useSync((client) => client.albumPage({ ref }))),
+            (page) => new AlbumPage({ ...page, state: offline }),
+          ),
+        )
         .pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
+    /** The DJ sets that the user played or saved, with their tracklists */
+    sets: local(["play_event", "library_item", ...catalogTables, "client_state"], localSets),
+    /** The sets that play a recording, from the server, else from the replica */
+    heardInSets: Atom.family((recordingId: RecordingId) => {
+      const remote = runtime.atom(
+        ServerConnection.use((client) => client.heardInSets({ recordingId })).pipe(
+          Effect.timeout("5 seconds"),
+        ),
+      );
+      const replica = local([...catalogTables, "client_state"], localHeardInSets(recordingId));
+      // Only a failed call falls back to the replica, so that the list does not jump
+      // RETURN TYPE: the two results have different error types
+      return Atom.make((get): AsyncResult.AsyncResult<ReadonlyArray<HeardInSet>, unknown> => {
+        const online = get(remote);
+        return AsyncResult.isFailure(online) ? get(replica) : online;
+      }).pipe(Atom.setIdleTTL(pageIdleTime));
+    }),
+    /** The last answer about the providers and the user's linked accounts */
+    accountProviders: local(["client_state"], accountProvidersState.get),
     /** The page that the device saved last first, so that the home shows offline */
     homePage: runtime.atom(
       Stream.unwrap(

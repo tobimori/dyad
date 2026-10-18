@@ -31,7 +31,9 @@ import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
 import { usePlaylistActions } from "./component/dialog-playlists.tsx";
+import { useHeardInSets } from "./component/dialog-sets.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
+import { useWebLinks } from "./component/dialog-web-links.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
 import {
@@ -147,6 +149,8 @@ export function App(props: {
     edits: props.playlists,
     run: props.run,
   });
+  const heardInSets = useHeardInSets({ atoms: props.atoms, player });
+  const webLinks = useWebLinks({ connection: client, run: props.run });
   const playlistSummaries = useAtomValue(props.atoms.playlists);
   const shownPlaylist =
     route instanceof PlaylistRoute && AsyncResult.isSuccess(playlistSummaries)
@@ -526,11 +530,22 @@ export function App(props: {
       sourceIds: [source.id],
     };
     const recordingId = source.recordingId;
+    // The tracklist is known for the set that plays; a section of sets gives its own action
+    const playingSet = source.id === player.current?.source.id && segments.length > 0;
+    const identified = [...new Set(segments.flatMap((segment) => segment.recordingId ?? []))];
+    const savesSet = target.sectionActions.some(
+      (action) => action.command === commands.saveSetAsPlaylist,
+    );
     return [
       ...list,
       ...(recordingId === null
         ? []
         : [playlistActions.add([{ recordingId, sourceId: source.id }])]),
+      ...(playingSet && identified.length > 0 && !savesSet
+        ? [playlistActions.saveSet(titleOf(source), identified)]
+        : []),
+      ...(playingSet ? [] : heardInSets(recordingId)),
+      webLinks(source),
       ...downloadActions(song, commands.download, commands.removeDownload),
       ...target.sectionActions,
     ];
@@ -662,6 +677,7 @@ export function App(props: {
     if (segment.recordingId !== null) {
       list.push(playlistActions.add([{ recordingId: segment.recordingId, sourceId: null }]));
     }
+    list.push(...heardInSets(segment.recordingId));
     return list;
   };
 

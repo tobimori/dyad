@@ -1,17 +1,18 @@
-import { playEvent, providerItem, source } from "@dyad/db";
+import { catalogAssertion, playEvent, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, SearchResults } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import { PopularityHit } from "@dyad/plugin";
 import type { Credentials, Provider, ProviderError } from "@dyad/plugin";
 import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
-import type { Column } from "drizzle-orm";
-import { Clock, Data, Effect, Option, Stream } from "effect";
+import type { Column, SQL } from "drizzle-orm";
+import { Array as Arr, Clock, Data, Effect, Option, Stream } from "effect";
 
 import { normalizeIsrc } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary } from "./provider-cache.ts";
 import { Popularities, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
+import { withSeries } from "./sets.ts";
 import { playableSources, sourceSummary, tagIdentifiers } from "./sources.ts";
 
 const localResultLimit = 50;
@@ -22,17 +23,30 @@ const answerTimeout = "8 seconds";
 
 const searchLocalSources = (query: string, userId: UserId) =>
   Effect.gen(function* () {
+    const db = yield* Database;
     // `%` and `_` in the query match only themselves
     const pattern = `%${query.replaceAll(/[\\%_]/g, "\\$&")}%`;
-    const contains = (column: Column) => sql`${column} like ${pattern} escape '\\'`;
+    const contains = (column: Column | SQL) => sql`${column} like ${pattern} escape '\\'`;
+    // A series name also finds the episodes whose titles leave it out
+    const episodes = db
+      .select({ id: catalogAssertion.entityId })
+      .from(catalogAssertion)
+      .where(
+        and(
+          eq(catalogAssertion.field, "series"),
+          eq(catalogAssertion.retracted, false),
+          contains(sql`json_extract(${catalogAssertion.value}, '$.name')`),
+        ),
+      );
     const match = or(
       contains(source.rawTitle),
       contains(source.rawArtist),
       contains(source.rawAlbum),
+      inArray(source.recordingId, episodes),
     );
     const rows = yield* playableSources(userId, match, localResultLimit);
 
-    return rows.map((row, position) => {
+    const candidates = rows.map((row, position) => {
       const isrc = row.tags === null ? null : tagIdentifiers(row.tags).isrc;
 
       return new Candidate({
@@ -44,6 +58,12 @@ const searchLocalSources = (query: string, userId: UserId) =>
         upload: false,
       });
     });
+    const summaries = yield* withSeries(candidates.map((candidate) => candidate.summary));
+    return Arr.zipWith(
+      candidates,
+      summaries,
+      (candidate, summary) => new Candidate({ ...candidate, summary }),
+    );
   });
 
 class Answer extends Data.Class<{
