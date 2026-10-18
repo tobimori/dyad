@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build:app": "sh native/build-app.sh"
+    "build:helper": "sh native/build.sh"
   },
   "dependencies": {
     "@dyad/plugin": "workspace:*",

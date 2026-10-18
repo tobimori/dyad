@@ -1,5 +1,7 @@
 use std::io::{self, BufRead, Write};
-use std::{process, thread, time::Duration};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
+use std::{process, thread};
 
 use serde::{Deserialize, Serialize};
 use souvlaki::{
@@ -15,7 +17,7 @@ enum State {
     Stopped,
 }
 
-#[derive(Deserialize, PartialEq, Default)]
+#[derive(Deserialize, PartialEq, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Track {
     title: Option<String>,
@@ -25,7 +27,7 @@ struct Track {
     duration_ms: Option<f64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Update {
     state: State,
@@ -100,8 +102,15 @@ fn apply(controls: &mut MediaControls, shown: &mut Option<Track>, update: Update
     });
 }
 
+// souvlaki 0.8.3 does not advance the MPRIS `Position`, so the helper sets it again
+#[cfg(target_os = "linux")]
+const REFRESH: Duration = Duration::from_secs(1);
+#[cfg(not(target_os = "linux"))]
+const REFRESH: Duration = Duration::MAX;
+
 fn main() {
-    let config = PlatformConfig { display_name: "Dyad", dbus_name: "dyad", hwnd: None };
+    let config =
+        PlatformConfig { display_name: "Dyad", dbus_name: "dyad", hwnd: platform::window() };
     let mut controls = MediaControls::new(config).expect("cannot create the media controls");
     controls
         .attach(|event| {
@@ -113,16 +122,34 @@ fn main() {
         .expect("cannot attach the media controls");
 
     // The helper must not outlive the client, so it exits when its input closes
+    let (sender, updates) = mpsc::channel();
     thread::spawn(move || {
-        let mut shown = None;
         for line in io::stdin().lock().lines() {
             let Ok(line) = line else { break };
             match serde_json::from_str::<Update>(&line) {
-                Ok(update) => platform::on_main(|| apply(&mut controls, &mut shown, update)),
+                Ok(update) => sender.send((update, Instant::now())).expect("the receiver lives"),
                 Err(error) => eprintln!("invalid update: {error}"),
             }
         }
         process::exit(0);
+    });
+
+    thread::spawn(move || {
+        let mut shown = None;
+        let mut last: Option<(Update, Instant)> = None;
+        loop {
+            match updates.recv_timeout(REFRESH) {
+                Ok(received) => last = Some(received),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+            let Some((update, at)) = &last else { continue };
+            let mut update = update.clone();
+            if update.state == State::Playing {
+                update.position_ms += at.elapsed().as_secs_f64() * 1000.0;
+            }
+            platform::on_main(|| apply(&mut controls, &mut shown, update));
+        }
     });
 
     platform::run();
@@ -133,6 +160,10 @@ mod platform {
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         fn CFRunLoopRun();
+    }
+
+    pub fn window() -> Option<*mut std::ffi::c_void> {
+        None
     }
 
     pub fn on_main(work: impl FnOnce() + Send) {
@@ -146,8 +177,69 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 mod platform {
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, RegisterClassW,
+        WINDOW_STYLE, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+    use windows::w;
+
+    extern "system" fn procedure(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        unsafe { DefWindowProcW(window, message, w, l) }
+    }
+
+    // SMTC rejects a message-only window, so this is a top-level window that is never shown
+    pub fn window() -> Option<*mut std::ffi::c_void> {
+        unsafe {
+            let instance = GetModuleHandleW(None).ok()?;
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(procedure),
+                hInstance: instance,
+                lpszClassName: w!("DyadMediaControls"),
+                ..Default::default()
+            };
+            RegisterClassW(&class);
+            let window = CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                w!("DyadMediaControls"),
+                w!("Dyad"),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                HWND::default(),
+                None,
+                instance,
+                None,
+            );
+            (window.0 != 0).then_some(window.0 as _)
+        }
+    }
+
+    pub fn on_main(work: impl FnOnce() + Send) {
+        work();
+    }
+
+    // The window gets its messages on the thread that created it
+    pub fn run() -> ! {
+        let mut message = MSG::default();
+        while unsafe { GetMessageW(&mut message, HWND::default(), 0, 0) }.as_bool() {
+            unsafe { DispatchMessageW(&message) };
+        }
+        std::process::exit(0)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod platform {
+    pub fn window() -> Option<*mut std::ffi::c_void> {
+        None
+    }
+
     pub fn on_main(work: impl FnOnce() + Send) {
         work();
     }

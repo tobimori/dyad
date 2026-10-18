@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vp pack",
-    "dev": "vp pack && DYAD_MEDIA_CONTROLS_APP=../../plugins/media-controls/dist/dyad-media-controls.app node --experimental-ffi --env-file-if-exists=.env.local dist/main.mjs",
+    "dev": "vp pack && DYAD_MEDIA_CONTROLS_DIR=../../plugins/media-controls/dist node --experimental-ffi --env-file-if-exists=.env.local dist/main.mjs",
     "start": "node --experimental-ffi dist/main.mjs",
     "typecheck": "tsc --noEmit",
     "build:linux-x64": "DYAD_EXE_TARGET=linux-x64 vp pack",

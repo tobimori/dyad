@@ -71,32 +71,42 @@ const commandOf = (event: typeof HelperEvent.Type, playback: ClientPluginContext
   return commands[event.event];
 };
 
-/**
- * macOS gives Now Playing only to an app bundle, so the build puts the helper in
- * `dyad-media-controls.app` next to the executable. `DYAD_MEDIA_CONTROLS_APP` replaces that path.
- */
+const supported = ["darwin", "linux", "win32"].includes(process.platform);
+
+// The helper is next to the executable. macOS gives Now Playing only to an app bundle.
+// `DYAD_MEDIA_CONTROLS_DIR` replaces the folder.
 const helperPath = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const configured = yield* Config.option(Config.NonEmptyString("DYAD_MEDIA_CONTROLS_APP"));
-  const app = Option.getOrElse(configured, () =>
-    path.join(path.dirname(process.execPath), "dyad-media-controls.app"),
+  const configured = yield* Config.option(Config.NonEmptyString("DYAD_MEDIA_CONTROLS_DIR"));
+  const directory = Option.getOrElse(configured, () => path.dirname(process.execPath));
+  if (process.platform === "darwin") {
+    return path.join(
+      directory,
+      "dyad-media-controls.app",
+      "Contents",
+      "MacOS",
+      "dyad-media-controls",
+    );
+  }
+  return path.join(
+    directory,
+    process.platform === "win32" ? "dyad-media-controls.exe" : "dyad-media-controls",
   );
-  return path.join(app, "Contents", "MacOS", "dyad-media-controls");
 }).pipe(Effect.orDie);
 
 /**
- * Node cannot receive the media keys itself, because macOS sends them to the AppKit main run loop.
- * A helper process receives them and shows the source in Control Center.
+ * A helper process receives the media keys and shows the source in the system media controls,
+ * because Node cannot run the AppKit main run loop on macOS or own an SMTC window on Windows.
  */
 export const mediaControlsPlugin = new ClientPlugin({
   id: "dyad.media-controls",
   name: "Media keys",
-  notice: "Media keys on. The media keys and Control Center control Dyad on macOS.",
-  enabledByDefault: process.platform === "darwin",
+  notice: "Media keys on. The media keys and the system media controls control Dyad.",
+  enabledByDefault: supported,
   setup: (context) =>
     Effect.gen(function* () {
-      if (process.platform !== "darwin") {
-        return yield* Effect.logWarning("Media keys work only on macOS");
+      if (!supported) {
+        return yield* Effect.logWarning("Media keys work only on macOS, Linux and Windows");
       }
 
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

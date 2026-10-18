@@ -8,10 +8,20 @@ publish = false
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-souvlaki = "0.8.3"
+# `zbus` talks D-Bus in Rust, so Linux needs no `libdbus`
+souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch = "0.2.0"
+
+# The version of `souvlaki`, so that the build has one `windows` crate
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.44.0", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 lto = true
