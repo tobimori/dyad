@@ -34,7 +34,7 @@ import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
 import { openPlayLog } from "./context/play-log.ts";
 import { importSavedSession, savedVolume } from "./context/session.ts";
-import { Settings, loadSettings, updateSettings } from "./context/settings.ts";
+import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
 import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
 import { Engine, engineLayer } from "./playback/engine.ts";
@@ -63,9 +63,7 @@ const player = (controller: boolean) =>
       ),
     );
 
-    const settings = yield* loadSettings.pipe(
-      Effect.orElseSucceed(() => new Settings({ enabledPlugins: [] })),
-    );
+    const settings = yield* loadSettings.pipe(Effect.orElseSucceed(() => defaultSettings));
     const saveVolume = (value: number) =>
       updateSettings((current) => new Settings({ ...current, volume: value })).pipe(
         Effect.provideContext(services),

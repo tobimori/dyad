@@ -92,6 +92,7 @@ export const mediaControlsPlugin = new ClientPlugin({
   id: "dyad.media-controls",
   name: "Media keys",
   notice: "Media keys on. The media keys and Control Center control Dyad on macOS.",
+  enabledByDefault: process.platform === "darwin",
   setup: (context) =>
     Effect.gen(function* () {
       if (process.platform !== "darwin") {

@@ -17,7 +17,7 @@ export function PluginsDialog(props: {
 }) {
   const toast = useToast();
   const [enabled, setEnabled] = useState(() =>
-    props.host.plugins.filter((plugin) => props.host.isEnabled(plugin.id)),
+    props.host.plugins.filter((plugin) => props.host.isEnabled(plugin)),
   );
 
   const options = props.host.plugins.map(

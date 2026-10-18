@@ -4,22 +4,30 @@ import type { ClientPlugin, ClientPluginContext } from "@dyad/plugin/client";
 import { Data, Effect, Exit, Scope } from "effect";
 import type { FileSystem, Path } from "effect";
 
-import { Settings, loadSettings, updateSettings } from "./settings.ts";
+import { Settings, defaultSettings, loadSettings, updateSettings } from "./settings.ts";
 
-// Each plugin is off until the user turns it on for this device
 export const clientPlugins: ReadonlyArray<ClientPlugin> = [
   discordPresencePlugin,
   mediaControlsPlugin,
 ];
 
+export const isPluginEnabled = (settings: Settings, plugin: ClientPlugin) =>
+  settings.enabledPlugins.includes(plugin.id) ||
+  (plugin.enabledByDefault && !settings.disabledPlugins.includes(plugin.id));
+
 export const withEnabled = (settings: Settings, id: string, enabled: boolean) => {
-  const others = settings.enabledPlugins.filter((other) => other !== id);
-  return new Settings({ ...settings, enabledPlugins: enabled ? [...others, id] : others });
+  const enabledPlugins = settings.enabledPlugins.filter((other) => other !== id);
+  const disabledPlugins = settings.disabledPlugins.filter((other) => other !== id);
+  return new Settings({
+    ...settings,
+    enabledPlugins: enabled ? [...enabledPlugins, id] : enabledPlugins,
+    disabledPlugins: enabled ? disabledPlugins : [...disabledPlugins, id],
+  });
 };
 
 export class PluginHost extends Data.Class<{
   readonly plugins: ReadonlyArray<ClientPlugin>;
-  readonly isEnabled: (id: string) => boolean;
+  readonly isEnabled: (plugin: ClientPlugin) => boolean;
   /** Saves the setting, then starts or stops the plugin */
   readonly setEnabled: (id: string, enabled: boolean) => Effect.Effect<void>;
 }> {}
@@ -37,7 +45,7 @@ export const startPluginHost = (context: ClientPluginContext) =>
     // A broken file must not stop the player. The next change writes a new file.
     let settings = yield* loadSettings.pipe(
       Effect.tapCause((cause) => Effect.logWarning("Cannot read the settings", cause)),
-      Effect.orElseSucceed(() => new Settings({ enabledPlugins: [] })),
+      Effect.orElseSucceed(() => defaultSettings),
     );
 
     const start = (plugin: ClientPlugin) =>
@@ -66,7 +74,7 @@ export const startPluginHost = (context: ClientPluginContext) =>
         yield* Scope.close(scope, Exit.void);
       });
 
-    const enabled = clientPlugins.filter((plugin) => settings.enabledPlugins.includes(plugin.id));
+    const enabled = clientPlugins.filter((plugin) => isPluginEnabled(settings, plugin));
     yield* Effect.forEach(enabled, start, { discard: true });
 
     const setEnabled = (id: string, enable: boolean) =>
@@ -90,7 +98,7 @@ export const startPluginHost = (context: ClientPluginContext) =>
 
     return new PluginHost({
       plugins: clientPlugins,
-      isEnabled: (id) => settings.enabledPlugins.includes(id),
+      isEnabled: (plugin) => isPluginEnabled(settings, plugin),
       setEnabled,
     });
   });

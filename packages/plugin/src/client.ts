@@ -41,6 +41,8 @@ export class ClientPlugin extends Data.Class<{
   readonly name: string;
   /** The client shows it when the user turns the plugin on */
   readonly notice: string;
+  /** On for a device until the user turns it off */
+  readonly enabledByDefault: boolean;
   /** Starts the work in the scope and returns. Turning the plugin off closes the scope. */
   readonly setup: (context: ClientPluginContext) => Effect.Effect<void, never, Scope.Scope>;
 }> {}

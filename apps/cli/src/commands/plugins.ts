@@ -1,7 +1,7 @@
 import { Console, Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 
-import { clientPlugins, withEnabled } from "../context/plugin-host.ts";
+import { clientPlugins, isPluginEnabled, withEnabled } from "../context/plugin-host.ts";
 import { loadSettings, updateSettings } from "../context/settings.ts";
 import { fail } from "./auth.ts";
 
@@ -9,7 +9,7 @@ const pluginsCommand = Command.make("plugins", {}, () =>
   Effect.gen(function* () {
     const settings = yield* loadSettings;
     for (const plugin of clientPlugins) {
-      const state = settings.enabledPlugins.includes(plugin.id) ? "on" : "off";
+      const state = isPluginEnabled(settings, plugin) ? "on" : "off";
       yield* Console.log(`${plugin.id}  ${plugin.name}: ${state}`);
     }
   }),

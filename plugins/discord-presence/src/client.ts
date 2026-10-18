@@ -66,6 +66,7 @@ export const discordPresencePlugin = new ClientPlugin({
   id: "dyad.discord-presence",
   name: "Discord presence",
   notice: "Discord presence on. It shows while Discord runs.",
+  enabledByDefault: false,
   setup: (context) =>
     Effect.gen(function* () {
       const activity = yield* SubscriptionRef.make<Activity | null>(null);
