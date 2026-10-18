@@ -336,7 +336,12 @@ const makeSession = (
       }
       if (outputId === null) return;
 
-      const desired = new UrlDesired({ playback: state.playback, entry: currentEntry() });
+      const { entryId, repeat } = state.playback;
+      const desired = new UrlDesired({
+        playback: state.playback,
+        entry: currentEntry(),
+        next: nextEntry(state.entries, entryId, repeat, "end"),
+      });
       if (Option.isSome(state.urlDriver)) return yield* state.urlDriver.value.desire(desired);
       if (!urlOutputs.has(outputId)) return;
 
@@ -358,7 +363,8 @@ const makeSession = (
           const before = state.playback;
           const queueVersion = state.queueVersion;
           const exit = yield* Effect.exit(change(now));
-          if (state.playback !== before || state.queueVersion !== queueVersion) state.dirty = true;
+          const changed = state.playback !== before || state.queueVersion !== queueVersion;
+          if (changed) state.dirty = true;
           yield* trackPlay(now);
 
           const upcoming = upcomingSources();
@@ -372,7 +378,6 @@ const makeSession = (
             if (state.playback.revision !== before.revision) {
               state.reportDeadline = now + lostAfterMs;
             }
-            yield* syncUrlOutput;
             broadcast(
               SessionEvent.cases.PlaybackChanged.make({
                 serverTime: now,
@@ -380,6 +385,8 @@ const makeSession = (
               }),
             );
           }
+          // A queue edit can change the entry that the URL output plays next
+          if (changed) yield* syncUrlOutput;
           return yield* exit;
         }),
       );

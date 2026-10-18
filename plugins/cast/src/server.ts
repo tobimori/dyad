@@ -1,5 +1,6 @@
 import { AudioFormat } from "@dyad/domain";
 import { OutputError, OutputInfo, Plugin, UrlOutput, UrlOutputs, UrlStatus } from "@dyad/plugin";
+import type { UrlMedia } from "@dyad/plugin";
 import { Effect, Equal, Stream } from "effect";
 import type { NonEmptyReadonlyArray } from "effect/Array";
 import type { HttpClient } from "effect/http";
@@ -67,24 +68,28 @@ const openOutput = (device: UpnpDevice) =>
       Effect.mapError((error) => new OutputError({ reason: error.message })),
     );
 
+    const metadataOf = (media: UrlMedia) =>
+      new TrackMetadata({
+        mimeType: media.contentType,
+        title: media.title ?? "",
+        artist: media.artist,
+        album: media.album,
+        artworkUrl: media.artworkUrl,
+        durationMs: media.durationMs,
+      });
+
     return new UrlOutput({
       formats: formatsOf(device),
       localAddress,
       load: (media) =>
-        target
-          .load(
-            media.url,
-            new TrackMetadata({
-              mimeType: media.contentType,
-              title: media.title ?? "",
-              artist: media.artist,
-              album: media.album,
-              artworkUrl: media.artworkUrl,
-              durationMs: media.durationMs,
-            }),
-            0,
-          )
-          .pipe(Effect.mapError(outputError)),
+        target.load(media.url, metadataOf(media), 0).pipe(Effect.mapError(outputError)),
+      // Gapless playback is tested only with the Sonos queue
+      ...(device.kind === "sonos" && {
+        loadNext: (media: UrlMedia | null) =>
+          (media === null ? target.clearNext : target.next(media.url, metadataOf(media))).pipe(
+            Effect.mapError(outputError),
+          ),
+      }),
       play: target.play.pipe(Effect.mapError(outputError)),
       pause: target.pause.pipe(Effect.mapError(outputError)),
       stop: target.stop.pipe(Effect.mapError(outputError)),

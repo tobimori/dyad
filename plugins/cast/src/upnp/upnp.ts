@@ -28,6 +28,9 @@ const PositionInfo = Schema.Struct({
   RelTime: Schema.String,
 });
 
+const QueuePosition = Schema.Struct({ Track: Schema.FiniteFromString });
+const MediaInfo = Schema.Struct({ NrTracks: Schema.FiniteFromString });
+
 const Volume = Schema.Struct({ CurrentVolume: Schema.FiniteFromString });
 const Mute = Schema.Struct({ CurrentMute: Schema.String });
 
@@ -171,7 +174,9 @@ export const openUpnp = (device: UpnpDevice) =>
           new TargetState({
             status: transportState === undefined ? current.status : statusOf(transportState),
             url: trackUri === undefined ? current.url : urlOf(trackUri),
-            positionMs: current.positionMs,
+            // The event of a new track comes before the poll of its position
+            positionMs:
+              trackUri === undefined || urlOf(trackUri) === current.url ? current.positionMs : 0,
             durationMs: trackDuration === undefined ? current.durationMs : parseTime(trackDuration),
             volume: volume === undefined || volume === "" ? current.volume : Number(volume) / 100,
             muted: mute === undefined || mute === "" ? current.muted : isTrue(mute),
@@ -268,16 +273,71 @@ export const openUpnp = (device: UpnpDevice) =>
         ["Target", formatTime(positionMs)],
       ]);
 
+    // Sonos 97.2 stops at once when `SetNextAVTransportURI` removes the next item, but not when a
+    // queue item is removed
+    const sonosQueue =
+      device.kind === "sonos" && avTransport.actions.includes("AddURIToQueue")
+        ? `x-rincon-queue:${transport.id.replace(/^uuid:/, "")}#0`
+        : null;
+
+    const enqueue = (url: string, metadata: TrackMetadata) =>
+      Effect.gen(function* () {
+        const mimeType = yield* protocolMimeType(metadata.mimeType);
+        yield* transportCommand("AddURIToQueue", [
+          ["EnqueuedURI", url],
+          ["EnqueuedURIMetaData", didl(url, metadata, mimeType)],
+          ["DesiredFirstTrackNumberEnqueued", "0"],
+          ["EnqueueAsNext", "0"],
+        ]);
+      });
+
+    // The queue keeps only the current item, so that it does not grow and ends with that item
+    const trimQueue = Effect.gen(function* () {
+      const { Track: track } = yield* soap(
+        name,
+        avTransport,
+        "GetPositionInfo",
+        [instance],
+        QueuePosition,
+      );
+      const { NrTracks: length } = yield* soap(
+        name,
+        avTransport,
+        "GetMediaInfo",
+        [instance],
+        MediaInfo,
+      );
+      const remove = (first: number, count: number) =>
+        count > 0
+          ? transportCommand("RemoveTrackRangeFromQueue", [
+              ["UpdateID", "0"],
+              ["StartingIndex", String(first)],
+              ["NumberOfTracks", String(count)],
+            ])
+          : Effect.void;
+      yield* remove(track + 1, length - track);
+      yield* remove(1, track - 1);
+    }).pipe(Effect.provideContext(context));
+
     const load = (url: string, metadata: TrackMetadata, startMs: number) =>
       Effect.gen(function* () {
         const mimeType = yield* protocolMimeType(metadata.mimeType);
-        // Rygel 45.2 plays a new URI at once when it played before, and then rejects `Play`
-        const { status } = yield* SubscriptionRef.get(state);
-        if (status !== "idle") yield* transportCommand("Stop", []);
-        yield* transportCommand("SetAVTransportURI", [
-          ["CurrentURI", url],
-          ["CurrentURIMetaData", didl(url, metadata, mimeType)],
-        ]);
+        if (sonosQueue === null) {
+          // Rygel 45.2 plays a new URI at once when it played before, and then rejects `Play`
+          const { status } = yield* SubscriptionRef.get(state);
+          if (status !== "idle") yield* transportCommand("Stop", []);
+          yield* transportCommand("SetAVTransportURI", [
+            ["CurrentURI", url],
+            ["CurrentURIMetaData", didl(url, metadata, mimeType)],
+          ]);
+        } else {
+          yield* transportCommand("RemoveAllTracksFromQueue", []);
+          yield* enqueue(url, metadata);
+          yield* transportCommand("SetAVTransportURI", [
+            ["CurrentURI", sonosQueue],
+            ["CurrentURIMetaData", ""],
+          ]);
+        }
         yield* update({ status: "buffering", url, positionMs: startMs, error: null });
         yield* transportCommand("Play", [["Speed", "1"]]);
 
@@ -289,6 +349,10 @@ export const openUpnp = (device: UpnpDevice) =>
 
     const next = (url: string, metadata: TrackMetadata) =>
       Effect.gen(function* () {
+        if (sonosQueue !== null) {
+          yield* trimQueue;
+          return yield* enqueue(url, metadata);
+        }
         if (!device.capabilities.queueNext) {
           return yield* new CommandFailed({
             device: name,
@@ -337,6 +401,12 @@ export const openUpnp = (device: UpnpDevice) =>
       stop: transportCommand("Stop", []),
       setVolume,
       next,
+      clearNext:
+        sonosQueue === null
+          ? Effect.fail(
+              new CommandFailed({ device: name, command: "clearNext", reason: "No queue" }),
+            )
+          : trimQueue,
       state: SubscriptionRef.changes(state).pipe(Stream.interruptWhen(Deferred.await(unreachable))),
     });
   });

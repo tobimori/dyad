@@ -22,6 +22,8 @@ const resumeToleranceMs = 1500;
 export class UrlDesired extends Data.Class<{
   readonly playback: Playback;
   readonly entry: QueueEntry | undefined;
+  /** The entry that starts when `entry` ends */
+  readonly next: QueueEntry | undefined;
 }> {}
 
 export class UrlReport extends Data.Class<{
@@ -86,6 +88,10 @@ export const driveUrlOutput = (options: {
         // Reports carry the revision of the last desired state that the driver applied
         revision: -1,
         loaded: Option.none<Loaded>(),
+        // The entry that the device starts by itself after `loaded`
+        next: Option.none<Loaded>(),
+        // The next entry before the last queue edit. The device can start it before the edit.
+        replaced: Option.none<Loaded>(),
         status: Option.none<UrlStatus>(),
         expected: Option.none<Expected>(),
         played: Option.none<Played>(),
@@ -103,9 +109,9 @@ export const driveUrlOutput = (options: {
           yield* effect;
         });
 
-      const load = (entry: QueueEntry, positionMs: number) =>
+      // The stream of `entry` from `startMs`, or none when the user cannot play it
+      const prepare = (entry: QueueEntry, startMs: number) =>
         Effect.gen(function* () {
-          const startMs = Math.max(0, Math.round(positionMs));
           const plan = yield* streamPlan(
             entry.source.id,
             options.userId,
@@ -116,35 +122,53 @@ export const driveUrlOutput = (options: {
             orDieOnDatabaseError("streamPlan"),
             Effect.option,
           );
-          if (Option.isNone(plan)) return yield* report("failed", entry.id, startMs);
-
-          const url = `${streamOrigin}${plan.value.path}&start=${startMs}`;
-          const durationMs = entry.source.durationMs;
-          local.loaded = Option.some(
-            new Loaded({
-              entryId: entry.id,
-              url,
-              startMs,
-              durationMs,
-              loadedAt: yield* Clock.currentTimeMillis,
-            }),
-          );
-          local.played = Option.none();
-          yield* command(
-            "playing",
-            output.load(
-              new UrlMedia({
+          const loadedAt = yield* Clock.currentTimeMillis;
+          return Option.map(plan, ({ path, format }) => {
+            const url = `${streamOrigin}${path}&start=${startMs}`;
+            const durationMs = entry.source.durationMs;
+            return {
+              loaded: new Loaded({ entryId: entry.id, url, startMs, durationMs, loadedAt }),
+              media: new UrlMedia({
                 url,
-                contentType: contentTypes[plan.value.format.container],
+                contentType: contentTypes[format.container],
                 title: entry.source.title,
                 artist: entry.source.artist,
                 album: entry.source.album,
                 artworkUrl: entry.source.artworkUrl,
                 durationMs: durationMs === null ? null : Math.max(0, durationMs - startMs),
               }),
-            ),
-          );
+            };
+          });
         });
+
+      const load = (entry: QueueEntry, positionMs: number) =>
+        Effect.gen(function* () {
+          const startMs = Math.max(0, Math.round(positionMs));
+          const stream = yield* prepare(entry, startMs);
+          if (Option.isNone(stream)) return yield* report("failed", entry.id, startMs);
+
+          local.loaded = Option.some(stream.value.loaded);
+          local.next = Option.none();
+          local.replaced = Option.none();
+          local.played = Option.none();
+          yield* command("playing", output.load(stream.value.media));
+        });
+
+      // A new `load` between two entries gives a gap, so the device gets the next entry before
+      const loadNext = Effect.gen(function* () {
+        const { entry, next } = yield* SubscriptionRef.get(desired);
+        const handOver = output.loadNext;
+        const queued = Option.getOrUndefined(local.next);
+        const current = Option.getOrUndefined(local.loaded)?.entryId;
+        if (handOver === undefined || current === undefined || current !== entry?.id) return;
+        if (next?.id === queued?.entryId) return;
+
+        const stream = next === undefined ? Option.none() : yield* prepare(next, 0);
+        local.replaced = local.next;
+        local.next = Option.map(stream, (prepared) => prepared.loaded);
+        if (Option.isSome(stream)) return yield* handOver(stream.value.media);
+        if (queued !== undefined) yield* handOver(null);
+      });
 
       // A desired state with the same revision and entry only moves the anchor
       const apply = Effect.gen(function* () {
@@ -157,6 +181,7 @@ export const driveUrlOutput = (options: {
         if (playback.state === "stopped" || entry === undefined) {
           if (loaded === undefined) return;
           local.loaded = Option.none();
+          local.next = Option.none();
           return yield* command("stopped", output.stop);
         }
 
@@ -184,8 +209,24 @@ export const driveUrlOutput = (options: {
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           local.status = Option.some(status);
+          const next = Option.getOrUndefined(local.next);
+          if (next !== undefined && status.url === next.url) {
+            local.loaded = Option.some(new Loaded({ ...next, loadedAt: now }));
+            local.next = Option.none();
+            local.replaced = Option.none();
+            local.played = Option.none();
+            local.expected = Option.none();
+          }
           const loaded = Option.getOrUndefined(local.loaded);
           if (loaded === undefined) return;
+
+          // The loaded entry ended, and the session loads its new next entry
+          if (status.url !== null && status.url === Option.getOrUndefined(local.replaced)?.url) {
+            local.loaded = Option.none();
+            local.next = Option.none();
+            local.replaced = Option.none();
+            return yield* report("ended", loaded.entryId, loaded.durationMs ?? loaded.startMs);
+          }
 
           if (Option.isSome(local.expected)) {
             const expected = local.expected.value;
@@ -201,7 +242,8 @@ export const driveUrlOutput = (options: {
               status.url !== null &&
               !status.url.startsWith(`${streamOrigin}/stream/`);
             if (foreign) yield* options.taken;
-            return;
+            // A Sonos queue that ends goes back to its first item
+            if (foreign || status.state !== "stopped") return;
           }
 
           const positionMs = loaded.startMs + status.positionMs;
@@ -241,7 +283,7 @@ export const driveUrlOutput = (options: {
 
       yield* Stream.mergeAll(
         [
-          SubscriptionRef.changes(desired).pipe(Stream.as(apply)),
+          SubscriptionRef.changes(desired).pipe(Stream.as(Effect.andThen(apply, loadNext))),
           output.status.pipe(Stream.map(observe)),
           Stream.tick("1 second").pipe(Stream.as(recheck)),
         ],

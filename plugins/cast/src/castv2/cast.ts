@@ -338,6 +338,10 @@ export const openCast = (device: CastDevice) =>
       stop: mediaCommand("stop", { type: "STOP" }),
       setVolume,
       next,
+      // `QUEUE_REMOVE` needs the item IDs of the receiver, which this target does not keep
+      clearNext: Effect.fail(
+        new CommandFailed({ device: name, command: "clearNext", reason: "Not supported" }),
+      ),
       state: SubscriptionRef.changes(state),
     });
   });

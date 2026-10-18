@@ -405,8 +405,13 @@ export class UrlOutput extends Data.Class<{
   readonly formats: NonEmptyReadonlyArray<AudioFormat>;
   /** Local address of the connection to the device. The device opens stream URLs at this address. */
   readonly localAddress: string;
-  /** Replaces the current item and plays it */
+  /** Replaces the current item and plays it. The device forgets the next item. */
   readonly load: (media: UrlMedia) => Effect.Effect<void, OutputError>;
+  /**
+   * Sets the item that the device plays without a gap after the current one, or removes it with
+   * `null`. When it starts, `status.url` changes to its URL.
+   */
+  readonly loadNext?: (media: UrlMedia | null) => Effect.Effect<void, OutputError>;
   readonly play: Effect.Effect<void, OutputError>;
   readonly pause: Effect.Effect<void, OutputError>;
   readonly stop: Effect.Effect<void, OutputError>;
