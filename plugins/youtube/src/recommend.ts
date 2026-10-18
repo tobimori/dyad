@@ -2,7 +2,7 @@ import { Suggestion, SuggestionShelf } from "@dyad/plugin";
 import type { Credentials, ProviderSource, RadioSeed } from "@dyad/plugin";
 import { getJson, providerError } from "@dyad/plugin/http";
 import { clockMs } from "@dyad/plugin/tracklist";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import { accountHeaders } from "./login.ts";
@@ -89,6 +89,21 @@ const WatchPlaylist = Schema.Struct({
   }),
 });
 
+// Only the title text: a title can link to a page without the configs of `Run`
+const Shelf = Schema.Struct({
+  header: Schema.optional(
+    Schema.Struct({
+      musicCarouselShelfBasicHeaderRenderer: Schema.Struct({
+        title: Schema.Struct({ runs: Schema.Array(Schema.Struct({ text: Schema.String })) }),
+      }),
+    }),
+  ),
+  contents: Schema.Array(
+    Schema.Struct({ musicResponsiveListItemRenderer: Schema.optional(ListItem) }),
+  ),
+});
+
+// Each shelf decodes alone, so that a shelf in an unknown form drops only itself
 const Home = Schema.Struct({
   contents: Schema.Struct({
     singleColumnBrowseResultsRenderer: Schema.Struct({
@@ -99,24 +114,8 @@ const Home = Schema.Struct({
               Schema.Struct({
                 sectionListRenderer: Schema.Struct({
                   contents: Schema.Array(
-                    Schema.Struct({
-                      musicCarouselShelfRenderer: Schema.optional(
-                        Schema.Struct({
-                          header: Schema.optional(
-                            Schema.Struct({
-                              musicCarouselShelfBasicHeaderRenderer: Schema.Struct({
-                                title: Runs,
-                              }),
-                            }),
-                          ),
-                          contents: Schema.Array(
-                            Schema.Struct({
-                              musicResponsiveListItemRenderer: Schema.optional(ListItem),
-                            }),
-                          ),
-                        }),
-                      ),
-                    }),
+                    // Other sections, for example a mood list, are not carousels
+                    Schema.Struct({ musicCarouselShelfRenderer: Schema.optional(Schema.Unknown) }),
                   ),
                 }),
               }),
@@ -217,20 +216,27 @@ export const youtubeShelves = (credentials: Credentials) =>
       Home,
     ).pipe(Effect.mapError(providerError("YouTube Music")));
 
-    return response.contents.singleColumnBrowseResultsRenderer.tabs
-      .flatMap((tab) => tab.tabRenderer.content?.sectionListRenderer.contents ?? [])
-      .flatMap(({ musicCarouselShelfRenderer: shelf }) => {
-        const title = shelf?.header?.musicCarouselShelfBasicHeaderRenderer.title.runs
-          .map((run) => run.text)
-          .join("");
-        const songs = (shelf?.contents ?? []).flatMap(
-          ({ musicResponsiveListItemRenderer: item }) => {
-            const source = item === undefined ? undefined : listItemSource(item, true);
-            return source === undefined ? [] : [suggest(source)];
-          },
-        );
-        return title === undefined || songs.length === 0
-          ? []
-          : [new SuggestionShelf({ title, songs, releases: [] })];
+    const sections = response.contents.singleColumnBrowseResultsRenderer.tabs.flatMap(
+      (tab) => tab.tabRenderer.content?.sectionListRenderer.contents ?? [],
+    );
+    const decoded = sections.flatMap(({ musicCarouselShelfRenderer: shelf }) =>
+      shelf === undefined ? [] : [Schema.decodeUnknownOption(Shelf)(shelf)],
+    );
+    const shelves = decoded.flatMap(Option.toArray);
+    if (shelves.length < decoded.length) {
+      yield* Effect.logWarning(`Skipped ${decoded.length - shelves.length} home shelves`);
+    }
+
+    return shelves.flatMap((shelf) => {
+      const title = shelf.header?.musicCarouselShelfBasicHeaderRenderer.title.runs
+        .map((run) => run.text)
+        .join("");
+      const songs = shelf.contents.flatMap(({ musicResponsiveListItemRenderer: item }) => {
+        const source = item === undefined ? undefined : listItemSource(item, true);
+        return source === undefined ? [] : [suggest(source)];
       });
+      return title === undefined || songs.length === 0
+        ? []
+        : [new SuggestionShelf({ title, songs, releases: [] })];
+    });
   });
