@@ -16,6 +16,7 @@ import * as providerCache from "./schema/provider-cache.ts";
 import * as replica from "./schema/replica.ts";
 import * as session from "./schema/session.ts";
 import * as source from "./schema/source.ts";
+import * as sync from "./schema/sync.ts";
 
 export const schema = {
   ...replica,
@@ -34,6 +35,7 @@ export const schema = {
   ...library,
   ...librarySync,
   ...matching,
+  ...sync,
 };
 
 export const relations = defineRelations(schema, (r) => ({

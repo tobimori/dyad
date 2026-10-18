@@ -79,6 +79,7 @@ export const recording = sqliteTable(
   (table) => [
     index("recording_artist_credit_idx").on(table.artistCreditId),
     index("recording_merged_into_idx").on(table.mergedIntoId),
+    index("recording_revision_idx").on(table.revision),
   ],
 );
 

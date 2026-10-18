@@ -12,6 +12,7 @@ import { replicaIdentity } from "./schema/replica.ts";
 export class Identity extends Schema.Class<Identity>("Identity")({
   replicaId: Schema.String.check(Schema.isUUID()),
   workspaceId: Schema.String.check(Schema.isUUID()),
+  epoch: Schema.String.check(Schema.isUUID()),
 }) {}
 
 export class ReplicaDatabase extends Context.Service<ReplicaDatabase, Identity>()(
@@ -77,6 +78,7 @@ export const nodeDatabaseLayer = (filename: string) =>
           const identity = {
             replicaId: yield* crypto.randomUUIDv4(),
             workspaceId: yield* crypto.randomUUIDv4(),
+            epoch: yield* crypto.randomUUIDv4(),
           };
           const createdAt = yield* Clock.currentTimeMillis;
           yield* tx.insert(replicaIdentity).values({ slot: 1, ...identity, createdAt });

@@ -1,5 +1,7 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+import { changeSeq } from "./change-seq.ts";
+
 /**
  * User data for later replication: deterministic IDs, an HLC, tombstones and no foreign keys. The
  * user's library is the rows that are not deleted, of any origin.
@@ -20,10 +22,12 @@ export const libraryItem = sqliteTable(
     addedAt: integer("added_at").notNull(),
     hlc: text("hlc").notNull(),
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
+    changeSeq,
   },
   (table) => [
     index("library_item_user_idx").on(table.userId, table.deleted),
     index("library_item_entity_idx").on(table.entityId),
+    index("library_item_change_idx").on(table.userId, table.changeSeq),
   ],
 );
 
@@ -39,6 +43,7 @@ export const playlist = sqliteTable(
     createdAt: integer("created_at").notNull(),
     hlc: text("hlc").notNull(),
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
+    changeSeq,
   },
   (table) => [index("playlist_owner_idx").on(table.ownerId, table.deleted)],
 );
@@ -56,6 +61,10 @@ export const playlistEntry = sqliteTable(
     addedAt: integer("added_at").notNull(),
     hlc: text("hlc").notNull(),
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
+    changeSeq,
   },
-  (table) => [index("playlist_entry_playlist_idx").on(table.playlistId, table.deleted)],
+  (table) => [
+    index("playlist_entry_playlist_idx").on(table.playlistId, table.deleted),
+    index("playlist_entry_change_idx").on(table.playlistId, table.changeSeq),
+  ],
 );

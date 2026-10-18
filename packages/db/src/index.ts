@@ -14,4 +14,5 @@ export * from "./schema/provider-cache.ts";
 export * from "./schema/replica.ts";
 export * from "./schema/session.ts";
 export * from "./schema/source.ts";
+export * from "./schema/sync.ts";
 export { relations, schema } from "./relations.ts";

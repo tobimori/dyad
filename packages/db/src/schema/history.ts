@@ -1,5 +1,7 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+import { changeSeq } from "./change-seq.ts";
+
 /**
  * One play of a source by a user. Append-only user data in the user scope. Rows have UUIDv7 IDs
  * and do not change, so that replicas can merge them by union. `scrobbled` is the only exception;
@@ -23,7 +25,11 @@ export const playEvent = sqliteTable(
     // A `PlayContext` of `@dyad/domain`
     context: text("context").notNull(),
     scrobbled: integer("scrobbled", { mode: "boolean" }).notNull().default(false),
+    changeSeq,
   },
-  // Search ranking reads the recent plays of one user
-  (table) => [index("play_event_user_started_idx").on(table.userId, table.startedAt)],
+  (table) => [
+    // Search ranking reads the recent plays of one user
+    index("play_event_user_started_idx").on(table.userId, table.startedAt),
+    index("play_event_change_idx").on(table.userId, table.changeSeq),
+  ],
 );
