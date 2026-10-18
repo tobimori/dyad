@@ -105,7 +105,7 @@ const assertParsedTitle = (
       `${item.provider}:${item.externalId}`,
       {
         title: versionedTitle(parsed),
-        artist_credit: parsed.artists.length === 0 ? null : parsedCredit(parsed.artists),
+        artist_credit: parsed.artists.length === 0 ? null : parsedCredit(parsed),
         versions: parsed.versions,
         mashup_parts: parsed.parts,
         uploader_role: item.uploader === null ? null : parsed.uploaderRole,

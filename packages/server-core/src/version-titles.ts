@@ -38,6 +38,8 @@ export class MashupPart extends Schema.Class<MashupPart>("MashupPart")({
 export class ParsedTitle extends Schema.Class<ParsedTitle>("ParsedTitle")({
   /** Artists of the original. For a mashup, the artists of all parts */
   artists: Schema.Array(Schema.String),
+  /** The title joins the artists with `b2b`. `A & B b2b C` also shows as `A b2b B b2b C` */
+  b2b: Schema.Boolean,
   featured: Schema.Array(Schema.String),
   /** Title of the original, without versions, guests and decorations */
   title: Schema.String,
@@ -69,7 +71,7 @@ export const artistNameKey = (name: string) =>
     .replaceAll(/[^\p{L}\p{N}]+/gu, "");
 
 /** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
-export const parserRevision = "parse:v3";
+export const parserRevision = "parse:v4";
 
 const kindLabels = {
   remix: "Remix",
@@ -92,23 +94,24 @@ const kindLabels = {
   rework: "Rework",
 } satisfies Record<typeof VersionKind.Type, string>;
 
-const joinedNames = (names: ReadonlyArray<string>) =>
+const joinedNames = (names: ReadonlyArray<string>, b2b = false) =>
   names.map((name, index) => {
     if (index === names.length - 1) return { id: null, name, joinPhrase: "" };
+    if (b2b) return { id: null, name, joinPhrase: " b2b " };
     return { id: null, name, joinPhrase: index === names.length - 2 ? " & " : ", " };
   });
-const joinNames = (names: ReadonlyArray<string>) =>
-  joinedNames(names)
+const joinNames = (names: ReadonlyArray<string>, b2b = false) =>
+  joinedNames(names, b2b)
     .map((name) => name.name + name.joinPhrase)
     .join("");
 
 /**
- * `A, B & C`. Guests go into `versionedTitle`, as in Apple Music. No name has an artist ID until a
- * resolver links it.
+ * `A, B & C` or `A b2b B`. Guests go into `versionedTitle`, as in Apple Music. No name has an
+ * artist ID until a resolver links it.
  */
-export const parsedCredit = (main: ReadonlyArray<string>) => ({
-  name: joinNames(main),
-  artists: joinedNames(main),
+export const parsedCredit = (parsed: ParsedTitle) => ({
+  name: joinNames(parsed.artists, parsed.b2b),
+  artists: joinedNames(parsed.artists, parsed.b2b),
 });
 
 /** The base title, the guests and one group for each version: `Blindflug (feat. Trille) (X Remix)` */
@@ -876,7 +879,10 @@ export const parseVersionTitle = (input: {
     const names = first.replace(trailingGroup, "").replaceAll(/\sb2b\s/giu, " & ");
     const name = !/\bmix\b|[\d()[\]{}【】]/iu.test(names) && names.split(/\s+/u).length <= 4;
     if (setNames.length >= 2 && name && !setWords.test(names)) return first;
-    return title.match(setHost)?.[1] ?? "";
+    // `Peggy Gou - Live At Coachella`, `Anyma [Full Set] at Ultra`, `Anyma [Live at Ultra]`
+    return (title.match(setHost)?.[1] ?? "")
+      .replace(trailingGroup, (group) => (setWords.test(group) ? "" : group))
+      .replace(/(?:\s*[-–—~|_:/]+)?(?:\s*[([{【「«][^)\]}】」»]*)?$/u, "");
   })();
 
   // Mashup parts: `Idfc x Drugs - Blackbear x EDEN Mashup`, `squid game + do it with it`,
@@ -997,6 +1003,7 @@ export const parseVersionTitle = (input: {
 
   return new ParsedTitle({
     artists,
+    b2b: /\sb2b\s/iu.test(chosenText),
     featured: set ? [] : [...new Set(featured)],
     title: set
       ? setTitle
