@@ -15,14 +15,14 @@ import {
   removeDevice,
   setup,
 } from "./auth.ts";
-import { listRecentPlays, recordPlay } from "./history.ts";
+import { listRecentPlays } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
 import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { mediaCacheLayer } from "./media-cache.ts";
 import { outputsLayer } from "./outputs.ts";
-import { prefetch, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
+import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { search } from "./search.ts";
@@ -86,8 +86,6 @@ export const serverRoutes = Layer.unwrap(
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
-      prefetch: ({ sourceIds }) => prefetch(sourceIds).pipe(orDieOnDatabaseError("prefetch")),
-      recordPlay: (payload) => recordPlay(payload).pipe(orDieOnDatabaseError("recordPlay")),
       connectDevice: (payload) =>
         Stream.unwrap(connectDevice(payload).pipe(orDieOnDatabaseError("connectDevice"))),
       controlSession: (payload) =>

@@ -12,9 +12,10 @@ export const queue = new Section({
   command: commands.queue,
   useView: (app) => {
     const player = app.player;
-    const current = player.queue.current;
-    const items = player.queue.entries.map(
-      (entry) => new ListItem({ key: entry.key, source: entry.source, context: entry.context }),
+    const current = player.currentIndex;
+    const items = player.entries.map(
+      (entry) =>
+        new ListItem({ key: String(entry.id), source: entry.source, context: entry.context }),
     );
 
     const remove = (index: number) =>
@@ -46,7 +47,7 @@ export const queue = new Section({
           items={items}
           selected={list.selected}
           // The queue can have the same source twice, so it marks the entry, not the source
-          playing={(item) => item.key === player.current?.key}
+          playing={(item) => item.key === String(player.current?.id)}
           historyRows={current ?? 0}
           empty="The queue is empty. Press a on a track to add it."
           onSelect={list.select}

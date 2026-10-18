@@ -25,18 +25,6 @@ export const insertPlay = (play: {
     yield* db.insert(playEvent).values({ id, ...play });
   });
 
-export const recordPlay = (play: {
-  readonly sourceId: string;
-  readonly startedAt: number;
-  readonly playedMs: number;
-  readonly completed: boolean;
-  readonly context: typeof PlayContext.Type;
-}) =>
-  Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    yield* insertPlay({ userId: principal.userId, deviceId: principal.deviceId, ...play });
-  });
-
 /** The playable sources of the user's last plays, newest play first, one entry per source */
 export const listRecentPlays = Effect.gen(function* () {
   const db = yield* Database;

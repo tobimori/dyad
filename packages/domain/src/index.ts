@@ -598,23 +598,6 @@ const UserRpc = RpcGroup.make(
     success: PlaybackPlan,
     error: PlaybackUnavailable,
   }),
-  // The sources that the device plays next, in play order. The server downloads them into its media
-  // cache. Each call replaces the device's earlier list; an empty list cancels it.
-  Rpc.make("prefetch", {
-    payload: {
-      sourceIds: Schema.Array(Schema.String.check(Schema.isUUID())).check(Schema.isMaxLength(3)),
-    },
-  }),
-  // Records one play when the source ends, or when the user skips it, plays another or quits
-  Rpc.make("recordPlay", {
-    payload: {
-      sourceId: Schema.String.check(Schema.isUUID()),
-      startedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-      playedMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-      completed: Schema.Boolean,
-      context: PlayContext,
-    },
-  }),
   // A `Snapshot` of the user's session, then its changes. A device that can play sends `player`;
   // the newest such connection of a device plays when the device is the output.
   Rpc.make("connectDevice", {

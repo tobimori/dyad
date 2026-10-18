@@ -1,6 +1,5 @@
 import { titleOf } from "@dyad/client-runtime";
-import type { QueueEntry } from "@dyad/client-runtime";
-import type { RepeatMode } from "@dyad/domain";
+import type { QueueEntry, RepeatMode } from "@dyad/domain";
 import { Fragment } from "react";
 
 import { ProgressBar, VolumeBar } from "./bars.tsx";
@@ -16,7 +15,8 @@ export function Footer(props: {
   readonly state: keyof typeof stateIcons;
   readonly positionMs: number;
   readonly durationMs: number | null;
-  readonly volume: number;
+  /** `null` when no output plays the session */
+  readonly volume: number | null;
   readonly shuffle: boolean;
   readonly repeat: typeof RepeatMode.Type;
   readonly message: string | null;
@@ -58,7 +58,7 @@ export function Footer(props: {
             <span fg={modeColor(props.shuffle)}>⤨ shuffle </span>
             <span fg={modeColor(props.repeat !== "off")}>{`↻ ${props.repeat}`}</span>
           </text>
-          <VolumeBar volume={props.volume} onChange={props.onVolume} />
+          {props.volume !== null && <VolumeBar volume={props.volume} onChange={props.onVolume} />}
         </box>
         <ProgressBar
           positionMs={props.positionMs}

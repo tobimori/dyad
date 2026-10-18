@@ -69,7 +69,7 @@ const makeMediaCache = Effect.gen(function* () {
   const writing = new Set<string>();
   // Playback downloads by provider. Prefetch waits until a provider has none.
   const liveDownloads = new Map<string, number>();
-  // By holder: a device ID for the `prefetch` RPC, or a session
+  // By session
   const hints = new Map<string, ReadonlyArray<PrefetchItem>>();
   // One prefetch download at a time for each provider, by provider
   const prefetches = new Map<string, PrefetchRun>();
@@ -362,11 +362,11 @@ const makeMediaCache = Effect.gen(function* () {
       }),
     );
 
-  /** Replaces the hint of `holder`. An empty list removes it. */
-  const hint = (holder: string, items: ReadonlyArray<PrefetchItem>) =>
+  /** Replaces the hint of `session`. An empty list removes it. */
+  const hint = (session: string, items: ReadonlyArray<PrefetchItem>) =>
     Effect.gen(function* () {
-      if (items.length === 0) hints.delete(holder);
-      else hints.set(holder, items);
+      if (items.length === 0) hints.delete(session);
+      else hints.set(session, items);
 
       const wanted = hinted();
       for (const variantId of failed) {

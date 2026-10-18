@@ -1,5 +1,5 @@
 import { formatDuration, songLine, sourceLabel, titleOf } from "@dyad/client-runtime";
-import type { QueueEntry } from "@dyad/client-runtime";
+import type { QueueEntry } from "@dyad/domain";
 
 import { ProgressBar } from "../component/bars.tsx";
 import { Cover } from "../component/cover.tsx";
@@ -22,7 +22,7 @@ function UpNext(props: { readonly entries: ReadonlyArray<QueueEntry>; readonly w
         <strong>Up next</strong>
       </text>
       {props.entries.map((entry) => (
-        <text key={entry.key} fg={theme.muted} wrapMode="none" flexShrink={0}>
+        <text key={entry.id} fg={theme.muted} wrapMode="none" flexShrink={0}>
           {fit(songLine(entry.source), props.width)}
         </text>
       ))}

@@ -2,7 +2,7 @@ import { Console, Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 
 import { clientPlugins, withEnabled } from "../context/plugin-host.ts";
-import { loadSettings, saveSettings } from "../context/settings.ts";
+import { loadSettings, updateSettings } from "../context/settings.ts";
 import { fail } from "./auth.ts";
 
 const pluginsCommand = Command.make("plugins", {}, () =>
@@ -24,8 +24,7 @@ const changePlugin = (id: string, enable: boolean) =>
       );
     }
 
-    const settings = yield* loadSettings;
-    yield* saveSettings(withEnabled(settings, id, enable));
+    yield* updateSettings((settings) => withEnabled(settings, id, enable));
     yield* Console.log(enable ? plugin.notice : `${plugin.name} off`);
   });
 

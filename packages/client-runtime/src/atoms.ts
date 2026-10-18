@@ -1,9 +1,9 @@
 import type { AlbumRef, ArtistRef, LibrarySyncStatus } from "@dyad/domain";
 import { Effect, Layer, Option, Stream } from "effect";
-import type { Redacted } from "effect";
+import type { Context } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 
-import { ConnectionStatus, ServerConnection, serverConnectionLayer } from "./connection.ts";
+import { ConnectionStatus, ServerConnection } from "./connection.ts";
 
 // Idle pages keep their last emission this long, so back navigation is instant
 const pageIdleTime = "5 minutes";
@@ -37,15 +37,15 @@ const syncVersion = (statuses: ReadonlyArray<LibrarySyncStatus>) =>
     )
     .join(" ");
 
-/** `logging` sends the connection logs to the client's logger */
+/**
+ * The atoms use the connection of `services`, which the session client shares. `logging` sends
+ * their logs to the client's logger.
+ */
 export const serverAtoms = (
-  serverUrl: string,
-  deviceToken: Redacted.Redacted<string>,
+  services: Context.Context<ServerConnection | ConnectionStatus>,
   logging: Layer.Layer<never>,
 ) => {
-  const runtime = Atom.runtime(
-    serverConnectionLayer(serverUrl, Option.some(deviceToken)).pipe(Layer.provideMerge(logging)),
-  );
+  const runtime = Atom.runtime(Layer.succeedContext(services).pipe(Layer.provideMerge(logging)));
 
   const librarySyncStatus = runtime.atom(Stream.unwrap(ServerConnection.useSync(pollSyncStatus)));
   const refreshOnSync = Atom.makeRefreshOnSignal(

@@ -1,13 +1,12 @@
 import { songLine, titleOf } from "@dyad/client-runtime";
-import type { SavedSession, ServerAtoms } from "@dyad/client-runtime";
+import type { ServerAtoms, SessionClient } from "@dyad/client-runtime";
 import type { AlbumCard, AlbumRef, ArtistRef, PlayContext, SourceSummary } from "@dyad/domain";
-import type { NowPlaying } from "@dyad/plugin/client";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
-import type { Audio, BoxRenderable, Renderable } from "@opentui/core";
+import type { BoxRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
 import { Data, Effect } from "effect";
-import type { Fiber, Option, SubscriptionRef } from "effect";
+import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -41,6 +40,7 @@ import {
 import type { Section } from "./context/routes.ts";
 import { useCoverAccent } from "./context/theme-provider.tsx";
 import { useSearch } from "./context/use-search.ts";
+import type { Engine } from "./playback/engine.ts";
 import { usePlayer } from "./playback/use-player.ts";
 import { NowPlayingPanel, NowPlayingView } from "./routes/now-playing.tsx";
 import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
@@ -64,12 +64,11 @@ class ActionTarget extends Data.Class<{
 export function App(props: {
   readonly serverUrl: string;
   readonly atoms: ServerAtoms;
-  readonly audio: Audio;
-  readonly restore: () => Option.Option<SavedSession>;
-  readonly save: (session: SavedSession) => Effect.Effect<void>;
+  readonly session: typeof SessionClient.Service;
+  /** `null` when this device only controls */
+  readonly engine: typeof Engine.Service | null;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
-  readonly nowPlaying: SubscriptionRef.SubscriptionRef<NowPlaying | null>;
   readonly plugins: PluginHost;
 }) {
   const renderer = useRenderer();
@@ -86,15 +85,13 @@ export function App(props: {
   const status = AsyncResult.isSuccess(statusResult) ? statusResult.value : "connecting";
 
   const player = usePlayer({
-    audio: props.audio,
-    serverUrl: props.serverUrl,
-    connection: client,
-    restore: props.restore,
-    save: props.save,
+    session: props.session,
+    engine: props.engine,
     run: props.run,
-    onPlayRecorded: refreshRecent,
-    nowPlaying: props.nowPlaying,
+    notify: (message) => toast("error", message),
   });
+  // The server records a play when its entry stops being current
+  useEffect(refreshRecent, [player.current?.id]);
   const search = useSearch({
     connection: client,
     run: props.run,
@@ -507,12 +504,12 @@ export function App(props: {
   );
 
   const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
-    view === "nowPlaying"
-      ? [
+    view === "browse"
+      ? [...sectionCommands, ...listCommands]
+      : [
           [commands.close, () => setView("browse")],
           [commands.actions, openActions],
-        ]
-      : [...sectionCommands, ...listCommands];
+        ];
 
   // The footer shows the hints in this order
   useCommands([...viewCommands, ...playbackCommands], { target: main, targetMode: "focus" });
@@ -522,9 +519,9 @@ export function App(props: {
   const panelWidth = Math.min(50, Math.floor(screen.width * 0.32));
   const bodyHeight = screen.height - 4;
 
-  const current = player.queue.current;
+  const current = player.currentIndex;
   const upNext =
-    current === null ? [] : player.queue.entries.slice(current + 1, current + 1 + upNextRows);
+    current === null ? [] : player.entries.slice(current + 1, current + 1 + upNextRows);
   const openNowPlaying = () => setView("nowPlaying");
 
   const selectRow = (row: SelectableRow) => routes.select(row.key);
@@ -589,7 +586,7 @@ export function App(props: {
         server={showSidebar ? props.serverUrl : null}
         status={status}
       />
-      {view === "nowPlaying" ? (
+      {view === "nowPlaying" && (
         <NowPlayingView
           entry={player.current}
           upNext={upNext}
@@ -600,7 +597,8 @@ export function App(props: {
           height={bodyHeight}
           onSeek={player.seekTo}
         />
-      ) : (
+      )}
+      {view === "browse" && (
         <box flexDirection="row" flexGrow={1}>
           {showSidebar && (
             <Sidebar
@@ -631,9 +629,9 @@ export function App(props: {
         positionMs={player.position()}
         durationMs={player.durationMs()}
         volume={player.volume}
-        shuffle={player.queue.shuffle}
-        repeat={player.queue.repeat}
-        message={player.error}
+        shuffle={player.shuffle}
+        repeat={player.repeat}
+        message={player.error ?? (player.lost ? "The output does not answer" : null)}
         artwork={artwork}
         showCover={view === "browse" && !showPanel}
         onOpen={openNowPlaying}

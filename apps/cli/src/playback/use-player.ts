@@ -1,48 +1,16 @@
 import {
-  PlayQueue,
-  ServerConnection,
-  addToQueue,
-  clearQueue,
-  currentEntry,
-  cycleRepeat,
-  emptyQueue,
-  jumpTo,
-  pausePlay,
-  playList,
-  playNext,
-  queueEntry,
-  queueOf,
-  removeEntry,
-  reportPlay,
-  resumePlay,
-  sessionOf,
-  startPlay,
-  step,
-  titleOf,
-  toggleShuffle,
+  currentEntryOf,
+  deviceOutputId,
+  isTransportCommand,
+  positionOf,
 } from "@dyad/client-runtime";
-import type { CurrentPlay, SavedSession } from "@dyad/client-runtime";
-import { PlaybackUnavailable } from "@dyad/domain";
+import type { SessionClient } from "@dyad/client-runtime";
+import { SessionCommand } from "@dyad/domain";
 import type { PlayContext, SourceSummary } from "@dyad/domain";
-import { NowPlaying } from "@dyad/plugin/client";
-import type { Audio } from "@opentui/core";
-import {
-  Cause,
-  Clock,
-  Effect,
-  Fiber,
-  Option,
-  Random,
-  Schedule,
-  Schema,
-  SubscriptionRef,
-} from "effect";
-import { FetchHttpClient } from "effect/http";
-import { useEffect, useRef, useState } from "react";
+import { Clock, Effect, Fiber, Random, Schedule, Stream, SubscriptionRef } from "effect";
+import { useEffect, useState } from "react";
 
-import { describeFailure } from "../log.ts";
-import { openTrack } from "./player.ts";
-import type { Track } from "./player.ts";
+import type { Engine } from "./engine.ts";
 
 const now = () => Effect.runSync(Clock.currentTimeMillis);
 
@@ -50,66 +18,69 @@ const volumeStep = 0.05;
 const seekStepMs = 10_000;
 // Like most players, `b` first goes back to the start of the current source
 const restartAfterMs = 3000;
+// The most entries that one command can add
+const maxEntries = 10_000;
 
-// The status text stays until the next play, so that the user can read why nothing plays
-const failureText = (cause: Cause.Cause<unknown>, title: string) => {
-  const error = Cause.findErrorOption(cause);
-  if (Option.isNone(error) || !Schema.is(PlaybackUnavailable)(error.value)) {
-    return `Cannot play ${title}`;
-  }
+const nextRepeatMode = { off: "all", all: "one", one: "off" } as const;
 
-  if (error.value.reason === "account_required") return `Link an account to play ${title}`;
-  if (error.value.reason === "not_found") return `${title} is no longer available`;
-  return `Cannot play ${title}`;
+const failureTexts = {
+  nothing_to_play: "Nothing to play",
+  output_unavailable: "No device plays this session",
+  queue_full: "The queue is full",
+  // Another client changed the queue or the transport first
+  entry_not_found: null,
+  stale_queue: null,
 };
 
+// At most `maxEntries` sources around `index`, so that a long list still plays
+const window = (sources: ReadonlyArray<SourceSummary>, index: number) => {
+  const start = Math.max(0, Math.min(index, sources.length - maxEntries));
+  return {
+    sourceIds: sources.slice(start, start + maxEntries).map((source) => source.id),
+    index: index - start,
+  };
+};
+
+/** Shows the server session and sends the user's commands to it */
 export function usePlayer(props: {
-  readonly audio: Audio;
-  readonly serverUrl: string;
-  readonly connection: typeof ServerConnection.Service | null;
-  /** The session to start with. The app can start again after an error, with a newer session. */
-  readonly restore: () => Option.Option<SavedSession>;
-  readonly save: (session: SavedSession) => Effect.Effect<void>;
+  readonly session: typeof SessionClient.Service;
+  /** `null` when this device only controls */
+  readonly engine: typeof Engine.Service | null;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
-  readonly onPlayRecorded: () => void;
-  /** Client plugins, such as the Discord presence, read the playback from it */
-  readonly nowPlaying: SubscriptionRef.SubscriptionRef<NowPlaying | null>;
+  readonly notify: (message: string) => void;
 }) {
-  const [saved] = useState(props.restore);
-  const [queue, setQueue] = useState(() =>
-    Option.match(saved, { onNone: () => emptyQueue, onSome: queueOf }),
-  );
-  const [volume, setVolume] = useState(() =>
-    Option.match(saved, { onNone: () => 1, onSome: (session) => session.volume }),
-  );
-  // A restored session waits for `space`, so it starts as paused
-  const [state, setState] = useState<"stopped" | "loading" | "playing" | "paused">(() =>
-    queue.current === null ? "stopped" : "paused",
-  );
+  const [view, setView] = useState(() => SubscriptionRef.getUnsafe(props.session.view));
+  // A playback failure on this device. It stays until the next entry starts.
   const [error, setError] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
-  // Callbacks of playback fibers run after later renders, so they read the queue from a ref
-  const queueRef = useRef(queue);
-  const fiber = useRef<Fiber.Fiber<void> | null>(null);
-  const track = useRef<Track | null>(null);
-  const currentPlay = useRef<CurrentPlay | null>(null);
-
-  const current = currentEntry(queue);
-
-  const commit = (next: PlayQueue) => {
-    queueRef.current = next;
-    setQueue(next);
-  };
-
   useEffect(() => {
-    props.audio.setMasterVolume(volume);
-  }, [volume]);
+    const following = props.run(
+      Stream.runForEach(SubscriptionRef.changes(props.session.view), (next) =>
+        Effect.sync(() => setView(next)),
+      ),
+    );
+    const engine = props.engine?.run(props.session, setError);
+    const playing = engine === undefined ? null : props.run(engine);
+    return () => {
+      Effect.runFork(Fiber.interrupt(following));
+      if (playing !== null) Effect.runFork(Fiber.interrupt(playing));
+    };
+  }, []);
 
-  // The position comes from the audio stream, so the display polls it
+  const playback = view.playback;
+  const entries = view.entries;
+  const current = currentEntryOf(view);
+  const currentIndex = current === undefined ? null : entries.indexOf(current);
+  const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
+  const volumeTarget =
+    playback.outputId ?? (view.outputs.some((output) => output.id === own) ? own : null);
+  const volume = view.outputs.find((output) => output.id === volumeTarget)?.volume ?? null;
+
+  // The position moves without events, so the display polls it
   useEffect(() => {
-    if (state !== "playing") return;
+    if (playback.state !== "playing") return;
     const ticks = Effect.runFork(
       Effect.sync(() => setTick((tick) => tick + 1)).pipe(
         Effect.repeat(Schedule.spaced("500 millis")),
@@ -118,243 +89,151 @@ export function usePlayer(props: {
     return () => {
       Effect.runFork(Fiber.interrupt(ticks));
     };
-  }, [state]);
+  }, [playback.state]);
 
-  useEffect(() => {
-    const saving = Effect.runFork(
-      Effect.sleep("1 second").pipe(Effect.andThen(props.save(sessionOf(queue, volume)))),
-    );
-    return () => {
-      Effect.runFork(Fiber.interrupt(saving));
-    };
-  }, [queue, volume]);
-
-  // Returns the report, so that quitting can wait for it
-  const finishPlay = (completed: boolean) => {
-    const play = currentPlay.current;
-    currentPlay.current = null;
-    if (play === null || props.connection === null) return Effect.void;
-
-    return reportPlay(play, completed).pipe(
-      Effect.provideService(ServerConnection, props.connection),
-      Effect.tap(() => Effect.sync(props.onPlayRecorded)),
-      Effect.tapCause((cause) => Effect.logWarning("Cannot report a play", describeFailure(cause))),
-      Effect.ignore,
-    );
-  };
-
-  const stop = () => {
-    if (fiber.current !== null) Effect.runFork(Fiber.interrupt(fiber.current));
-    fiber.current = null;
-    track.current = null;
-    return finishPlay(false);
-  };
-
-  // The audio must stop with the player, for example when the error screen replaces the app
-  useEffect(
-    () => () => {
-      props.run(stop());
-      Effect.runSync(SubscriptionRef.set(props.nowPlaying, null));
-    },
-    [],
-  );
-
-  const start = (next: PlayQueue) => {
-    props.run(stop());
-    commit(next);
-
-    const entry = currentEntry(next);
-    const connection = props.connection;
-    if (entry === undefined || connection === null) {
-      setState("stopped");
-      return;
-    }
-
-    props.audio.start();
-    setState("loading");
-    setError(null);
-    currentPlay.current = startPlay(entry, now());
-
-    const play = Effect.gen(function* () {
-      const opened = yield* openTrack(props.audio, props.serverUrl, entry.source.id);
-      track.current = opened;
-      setState((current) => (current === "loading" ? "playing" : current));
-      yield* opened.ended;
-    });
-
-    const ended = Effect.sync(() => {
-      fiber.current = null;
-      track.current = null;
-      props.run(finishPlay(true));
-      advance("end");
-    });
-
-    // A failed play is not a choice of the user, so it must not count as a skip
-    const failed = (cause: Cause.Cause<unknown>) =>
-      Effect.gen(function* () {
-        yield* Effect.logWarning("Cannot play", describeFailure(cause)).pipe(
-          Effect.annotateLogs({ sourceId: entry.source.id, provider: entry.source.provider }),
-        );
-        fiber.current = null;
-        track.current = null;
-        currentPlay.current = null;
-        setState("stopped");
-        setError(failureText(cause, titleOf(entry.source)));
-      });
-
-    fiber.current = props.run(
-      Effect.scoped(play).pipe(
-        Effect.provideService(ServerConnection, connection),
-        Effect.provide(FetchHttpClient.layer),
-        Effect.matchCauseEffect({
-          onSuccess: () => ended,
-          onFailure: (cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : failed(cause)),
+  const send = (command: typeof SessionCommand.Type) =>
+    props.run(
+      props.session.send(command).pipe(
+        Effect.catchTags({
+          // Offline, transport commands change only this device
+          SessionOffline: () =>
+            Effect.sync(() => {
+              if (!isTransportCommand(command)) props.notify("The server is offline");
+            }),
+          SessionCommandFailed: (failure) =>
+            Effect.sync(() => {
+              const text = failureTexts[failure.reason];
+              if (text !== null) props.notify(text);
+            }),
+          Unauthorized: () =>
+            Effect.sync(() => props.notify("The server does not accept this device")),
         }),
       ),
     );
+
+  const position = () => {
+    if (current === undefined) return 0;
+    return props.engine?.position(current.id) ?? positionOf(view, now());
   };
 
-  const advance = (reason: "skip" | "end") => {
-    const next = step(queueRef.current, 1, reason);
-    if (next !== undefined) {
-      start(next);
-      return;
-    }
-    if (reason === "end") setState("stopped");
-  };
+  const durationMs = () =>
+    current === undefined
+      ? null
+      : (current.source.durationMs ?? props.engine?.durationMs(current.id) ?? null);
 
   const seekTo = (ms: number) => {
-    const playing = track.current;
-    if (playing === null) return;
-
-    // Past the received audio, the seek requests the stream again, so it must not pass the end
+    if (current === undefined) return;
     const end = durationMs();
-    const target = Math.max(0, end === null ? ms : Math.min(ms, end));
-
-    Effect.runFork(
-      playing.seek(target).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            setTick((t) => t + 1);
-            publishNowPlaying();
-          }),
-        ),
-      ),
-    );
-  };
-
-  const position = () => track.current?.position() ?? 0;
-
-  // Some providers, such as Bandcamp, give no duration before playback
-  const durationMs = () => current?.source.durationMs ?? track.current?.durationMs() ?? null;
-
-  const publishNowPlaying = () => {
-    const entry = currentEntry(queueRef.current);
-    const nowPlaying =
-      entry === undefined || state === "stopped"
-        ? null
-        : new NowPlaying({
-            source: entry.source,
-            state: state === "paused" ? "paused" : "playing",
-            positionMs: position(),
-            at: now(),
-            durationMs: durationMs(),
-          });
-    Effect.runSync(SubscriptionRef.set(props.nowPlaying, nowPlaying));
-  };
-
-  // While the next source loads, plugins keep the previous one, so that a skip is one change
-  useEffect(() => {
-    if (state !== "loading") publishNowPlaying();
-  }, [state, current?.key]);
-
-  const previous = () => {
-    const next = step(queueRef.current, -1, "skip");
-    if (next === undefined || position() > restartAfterMs) {
-      seekTo(0);
-      return;
-    }
-    start(next);
-  };
-
-  const togglePause = () => {
-    // Nothing is loaded after a restore or at the end of the queue
-    if (fiber.current === null) {
-      const queued = queueRef.current;
-      const next = queued.current === null ? step(queued, 1, "skip") : queued;
-      if (next !== undefined) start(next);
-      return;
-    }
-
-    const play = currentPlay.current;
-    if (state === "paused") {
-      props.audio.start();
-      setState("playing");
-      if (play !== null) currentPlay.current = resumePlay(play, now());
-      return;
-    }
-
-    props.audio.stop();
-    setState("paused");
-    if (play !== null) currentPlay.current = pausePlay(play, now());
+    const positionMs = Math.max(0, end === null ? ms : Math.min(ms, end));
+    send(SessionCommand.cases.Seek.make({ entryId: current.id, positionMs }));
   };
 
   const setVolumeTo = (value: number) => {
+    if (volumeTarget === null) return;
     // Rounding removes the float error of many steps, so that the ends stay reachable
-    setVolume(Math.round(Math.min(1, Math.max(0, value)) * 100) / 100);
+    const rounded = Math.round(Math.min(1, Math.max(0, value)) * 100) / 100;
+    send(SessionCommand.cases.SetVolume.make({ outputId: volumeTarget, volume: rounded }));
   };
 
-  const remove = (index: number) => {
-    const next = removeEntry(queueRef.current, index);
-    const removesCurrent = queueRef.current.current === index;
-    if (!removesCurrent || fiber.current === null) {
-      commit(next);
-      return;
-    }
-    start(next);
+  const playList = (
+    sources: ReadonlyArray<SourceSummary>,
+    index: number,
+    context: typeof PlayContext.Type,
+    shuffle: boolean,
+  ) => {
+    const selected = window(sources, index);
+    const [first, ...others] = selected.sourceIds;
+    if (first === undefined) return;
+    send(
+      SessionCommand.cases.Play.make({
+        sourceIds: [first, ...others],
+        index: selected.index,
+        context,
+        shuffle,
+      }),
+    );
   };
+
+  const enqueue = (
+    sources: ReadonlyArray<SourceSummary>,
+    context: typeof PlayContext.Type,
+    after: "current" | "end",
+  ) => {
+    const [first, ...others] = sources.slice(0, maxEntries).map((source) => source.id);
+    if (first === undefined) return;
+    send(SessionCommand.cases.Enqueue.make({ sourceIds: [first, ...others], context, after }));
+  };
+
+  // A loading state on another output; this device shows its own audio
+  const loading =
+    playback.state === "playing" &&
+    playback.rate === 0 &&
+    (current === undefined || props.engine?.position(current.id) == null);
 
   return {
-    queue,
-    state,
+    entries,
+    currentIndex,
+    current,
+    state: loading ? ("loading" as const) : playback.state,
+    shuffle: playback.shuffle,
+    repeat: playback.repeat,
     volume,
     error,
-    current,
+    /** The output stopped answering */
+    lost: playback.lost && playback.state === "playing",
     position,
     durationMs,
+    /** `null` while the audio plays on another device */
     playList: (
       sources: ReadonlyArray<SourceSummary>,
       index: number,
       context: typeof PlayContext.Type,
-    ) => start(playList(queueRef.current, sources, index, context)),
+    ) => playList(sources, index, context, playback.shuffle),
     shuffleList: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) => {
       const index = Effect.runSync(Random.nextIntBetween(0, sources.length, { halfOpen: true }));
-      const shuffled = new PlayQueue({ ...queueRef.current, shuffle: true });
-      start(playList(shuffled, sources, index, context));
+      playList(sources, index, context, true);
     },
-    playEntry: (index: number) => start(jumpTo(queueRef.current, index)),
+    playEntry: (index: number) => {
+      const entry = entries[index];
+      if (entry !== undefined)
+        send(SessionCommand.cases.JumpTo.make({ entryId: entry.id, positionMs: 0 }));
+    },
     playNext: (source: SourceSummary, context: typeof PlayContext.Type) =>
-      commit(playNext(queueRef.current, queueEntry(source, context))),
+      enqueue([source], context, "current"),
     addToQueue: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) =>
-      commit(
-        addToQueue(
-          queueRef.current,
-          sources.map((source) => queueEntry(source, context)),
-        ),
+      enqueue(sources, context, "end"),
+    remove: (index: number) => {
+      const entry = entries[index];
+      if (entry !== undefined) send(SessionCommand.cases.Remove.make({ entryIds: [entry.id] }));
+    },
+    clear: () => send(SessionCommand.cases.Clear.make({ keepCurrent: true })),
+    next: () => {
+      if (current === undefined) return;
+      send(SessionCommand.cases.Skip.make({ fromEntryId: current.id, direction: 1 }));
+    },
+    previous: () => {
+      if (current === undefined) return;
+      if (position() > restartAfterMs) seekTo(0);
+      else send(SessionCommand.cases.Skip.make({ fromEntryId: current.id, direction: -1 }));
+    },
+    togglePause: () =>
+      send(
+        playback.state === "playing"
+          ? SessionCommand.cases.Pause.make({})
+          : SessionCommand.cases.Resume.make({}),
       ),
-    remove,
-    clear: () => commit(clearQueue(queueRef.current)),
-    next: () => advance("skip"),
-    previous,
-    togglePause,
     seekTo,
     seekBy: (deltaMs: number) => seekTo(position() + deltaMs),
     seekStepMs,
     setVolume: setVolumeTo,
-    changeVolume: (direction: 1 | -1) => setVolumeTo(volume + direction * volumeStep),
-    toggleShuffle: () => commit(toggleShuffle(queueRef.current)),
-    cycleRepeat: () => commit(cycleRepeat(queueRef.current)),
-    /** Reports the current play and saves the session */
-    quit: () => stop().pipe(Effect.andThen(props.save(sessionOf(queueRef.current, volume)))),
+    changeVolume: (direction: 1 | -1) => setVolumeTo((volume ?? 0) + direction * volumeStep),
+    toggleShuffle: () => send(SessionCommand.cases.SetShuffle.make({ on: !playback.shuffle })),
+    cycleRepeat: () =>
+      send(SessionCommand.cases.SetRepeat.make({ mode: nextRepeatMode[playback.repeat] })),
+    /** The session pauses when this device plays it, so that it does not look like it plays on */
+    quit: () =>
+      playback.outputId === own && playback.state === "playing"
+        ? props.session.send(SessionCommand.cases.Pause.make({})).pipe(Effect.ignore)
+        : Effect.void,
   };
 }

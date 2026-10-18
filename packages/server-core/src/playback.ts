@@ -365,10 +365,10 @@ const providerStream = <E>(
   });
 
 /**
- * Replaces the hint of `holder` with the sources that it plays next. The media cache downloads
+ * Replaces the hint of `session` with the sources that it plays next. The media cache downloads
  * them. It skips sources that the user cannot play and sources that it does not keep.
  */
-export const hintPrefetch = (holder: string, userId: UserId, sourceIds: ReadonlyArray<string>) =>
+export const hintPrefetch = (session: string, userId: UserId, sourceIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const cache = yield* MediaCache;
 
@@ -388,13 +388,7 @@ export const hintPrefetch = (holder: string, userId: UserId, sourceIds: Readonly
         Effect.catchTag("PlaybackUnavailable", () => Effect.succeed([])),
       ),
     );
-    yield* cache.hint(holder, items.flat());
-  });
-
-export const prefetch = (sourceIds: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    yield* hintPrefetch(principal.deviceId, principal.userId, sourceIds);
+    yield* cache.hint(session, items.flat());
   });
 
 const unavailableStatus = { not_found: 404, unsupported_format: 406, account_required: 403 };

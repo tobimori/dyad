@@ -6,6 +6,8 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   enabledPlugins: Schema.Array(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed([])),
   ),
+  /** The volume of this device as an output. Missing until it first changes. */
+  volume: Schema.optionalKey(Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
 }) {}
 
 const SettingsJson = Schema.fromJsonString(Settings);
@@ -25,12 +27,17 @@ export const loadSettings = Effect.gen(function* () {
   return yield* Schema.decodeEffect(SettingsJson)(text);
 });
 
-export const saveSettings = (settings: Settings) =>
+/** Reads the file first, so that two writers of different settings do not undo each other */
+export const updateSettings = (change: (settings: Settings) => Settings) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const file = yield* settingsFile;
+    // A broken file must not stop the player. This write replaces it.
+    const settings = yield* loadSettings.pipe(
+      Effect.orElseSucceed(() => new Settings({ enabledPlugins: [] })),
+    );
 
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-    yield* fs.writeFileString(file, yield* Schema.encodeEffect(SettingsJson)(settings));
+    yield* fs.writeFileString(file, yield* Schema.encodeEffect(SettingsJson)(change(settings)));
   });

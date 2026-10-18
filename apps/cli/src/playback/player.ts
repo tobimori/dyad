@@ -25,7 +25,7 @@ const decoders = [
   ["flac", new AudioFormat({ container: "flac", codec: "flac" })],
 ] as const;
 
-const capabilities = new PlaybackCapabilities({
+export const capabilities = new PlaybackCapabilities({
   formats: Arr.map(decoders, ([, format]) => format),
 });
 
@@ -104,8 +104,8 @@ export class Track extends Data.Class<{
   readonly ended: Effect.Effect<void, PlaybackError>;
 }> {}
 
-/** Closing the scope stops the stream and the request */
-export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
+/** Starts at `startMs`. Closing the scope stops the stream and the request. */
+export const openTrack = (audio: Audio, serverUrl: string, sourceId: string, startMs: number) =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
     const plan = yield* connection.preparePlayback({ sourceId, capabilities });
@@ -139,7 +139,7 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
         return new Download({ startMs, received, scope });
       });
 
-    let current = yield* startDownload(0);
+    let current = yield* startDownload(startMs);
 
     const ended = yield* Deferred.make<void, PlaybackError>();
     const seeks = yield* Semaphore.make(1);
@@ -228,5 +228,10 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string) =>
         Effect.catch((error) => Deferred.fail(ended, error)),
       );
 
-    return new Track({ position, durationMs, seek, ended: Deferred.await(ended) });
+    return new Track({
+      position,
+      durationMs,
+      seek,
+      ended: Deferred.await(ended),
+    });
   });
