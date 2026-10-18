@@ -109,7 +109,7 @@ export function VisualizerView(props: {
   }));
   const shown = useRef<Visualizer | null>(null);
   const colors = useRef<ReadonlyArray<Rgb>>([]);
-  const [label, setLabel] = useState(() => presets[state.preset]?.name ?? null);
+  const [label, setLabel] = useState(() => presets[state.preset]?.label ?? null);
   const [heard, setHeard] = useState(true);
 
   const selectPreset = (index: number) => {
@@ -118,7 +118,7 @@ export function VisualizerView(props: {
     state.sincePreset = 0;
     state.sinceLabel = 0;
     shown.current?.select(state.preset);
-    setLabel(presets[state.preset]?.name ?? null);
+    setLabel(presets[state.preset]?.label ?? null);
   };
 
   useCommands([

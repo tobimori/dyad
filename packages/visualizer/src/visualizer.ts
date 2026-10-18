@@ -19,12 +19,13 @@ class Layer {
 const toneSize = 4096;
 const toneRange = 3;
 // Linear up to the knee, then a soft roll-off, so that additive light saturates without hard clipping
-const tone = Uint8Array.from({ length: toneSize + 1 }, (_, i) => {
+const tone = Float32Array.from({ length: toneSize + 1 }, (_, i) => {
   const v = (i / toneSize) * toneRange;
   const knee = 0.7;
   const mapped = v < knee ? v : knee + (1 - knee) * (1 - Math.exp(-(v - knee) / (1 - knee)));
-  return Math.round(Math.min(1, mapped) * 255);
+  return Math.round(Math.min(1, mapped) * 255) / 255;
 });
+const toneScale = toneSize / toneRange;
 
 const transitionSeconds = 2.8;
 const masks = 6;
@@ -97,7 +98,7 @@ export class Visualizer {
   }
 
   get presetName() {
-    return this.layers[this.current]?.preset?.name ?? "";
+    return this.layers[this.current]?.preset?.label ?? "";
   }
 
   /** Fades to new colors, for example from the cover art of the next track */
@@ -129,6 +130,7 @@ export class Visualizer {
     const preset = this.presets[index];
     if (preset === undefined) return;
     layer.canvas.clear();
+    layer.canvas.ramp = undefined;
     layer.preset = preset;
     layer.run = preset.create(layer.canvas, new Random(Math.floor(this.random.next() * 2 ** 32)));
     layer.frame.time = 0;
@@ -155,7 +157,7 @@ export class Visualizer {
       this.progress = Math.min(1, this.progress + step / transitionSeconds);
       if (this.progress >= 1) this.current = 1 - this.current;
     }
-    this.toneMap();
+    this.writeRgba();
     return this.rgba;
   }
 
@@ -173,6 +175,7 @@ export class Visualizer {
     const canvas = layer.canvas;
     const pixels = canvas.pixels;
     const bloom = canvas.bloom;
+    const ramp = canvas.ramp;
     const strength = layer.preset?.bloom ?? 0;
     const display = this.display;
     const mask = this.mask;
@@ -198,24 +201,39 @@ export class Visualizer {
         const w10 = fx * (1 - fy) * strength;
         const w01 = (1 - fx) * fy * strength;
         const w11 = fx * fy * strength;
-        const r =
-          (pixels[o] ?? 0) +
-          (bloom[a] ?? 0) * w00 +
-          (bloom[b] ?? 0) * w10 +
-          (bloom[c] ?? 0) * w01 +
-          (bloom[d] ?? 0) * w11;
-        const g =
-          (pixels[o + 1] ?? 0) +
-          (bloom[a + 1] ?? 0) * w00 +
-          (bloom[b + 1] ?? 0) * w10 +
-          (bloom[c + 1] ?? 0) * w01 +
-          (bloom[d + 1] ?? 0) * w11;
-        const bl =
-          (pixels[o + 2] ?? 0) +
-          (bloom[a + 2] ?? 0) * w00 +
-          (bloom[b + 2] ?? 0) * w10 +
-          (bloom[c + 2] ?? 0) * w01 +
-          (bloom[d + 2] ?? 0) * w11;
+        let r = 0;
+        let g = 0;
+        let bl = 0;
+        if (ramp === undefined) {
+          r =
+            (pixels[o] ?? 0) +
+            (bloom[a] ?? 0) * w00 +
+            (bloom[b] ?? 0) * w10 +
+            (bloom[c] ?? 0) * w01 +
+            (bloom[d] ?? 0) * w11;
+          g =
+            (pixels[o + 1] ?? 0) +
+            (bloom[a + 1] ?? 0) * w00 +
+            (bloom[b + 1] ?? 0) * w10 +
+            (bloom[c + 1] ?? 0) * w01 +
+            (bloom[d + 1] ?? 0) * w11;
+          bl =
+            (pixels[o + 2] ?? 0) +
+            (bloom[a + 2] ?? 0) * w00 +
+            (bloom[b + 2] ?? 0) * w10 +
+            (bloom[c + 2] ?? 0) * w01 +
+            (bloom[d + 2] ?? 0) * w11;
+          // Light above full brightness spills into the other channels and turns white
+          const spill = Math.max(0, Math.max(r, g, bl) - 1) * 0.6;
+          r = tone[Math.min(toneSize, ((r + spill) * toneScale) | 0)] ?? 1;
+          g = tone[Math.min(toneSize, ((g + spill) * toneScale) | 0)] ?? 1;
+          bl = tone[Math.min(toneSize, ((bl + spill) * toneScale) | 0)] ?? 1;
+        } else {
+          const level = Math.min(255, Math.max(0, (pixels[o] ?? 0) * 255) | 0) * 3;
+          r = ramp[level] ?? 0;
+          g = ramp[level + 1] ?? 0;
+          bl = ramp[level + 2] ?? 0;
+        }
         if (mode === 0) {
           display[o] = r;
           display[o + 1] = g;
@@ -232,28 +250,16 @@ export class Visualizer {
     }
   }
 
-  private toneMap() {
+  private writeRgba() {
     const display = this.display;
     const rgba = this.rgba;
-    const scale = toneSize / toneRange;
     const count = this.width * this.height;
     for (let p = 0; p < count; p++) {
       const o = p * 3;
-      let r = display[o] ?? 0;
-      let g = display[o + 1] ?? 0;
-      let b = display[o + 2] ?? 0;
-      // Light above full brightness spills into the other channels and turns white
-      const over = Math.max(r, g, b) - 1;
-      if (over > 0) {
-        const spill = over * 0.6;
-        r += spill;
-        g += spill;
-        b += spill;
-      }
       const q = p * 4;
-      rgba[q] = tone[Math.min(toneSize, (r * scale) | 0)] ?? 255;
-      rgba[q + 1] = tone[Math.min(toneSize, (g * scale) | 0)] ?? 255;
-      rgba[q + 2] = tone[Math.min(toneSize, (b * scale) | 0)] ?? 255;
+      rgba[q] = (display[o] ?? 0) * 255 + 0.5;
+      rgba[q + 1] = (display[o + 1] ?? 0) * 255 + 0.5;
+      rgba[q + 2] = (display[o + 2] ?? 0) * 255 + 0.5;
       rgba[q + 3] = 255;
     }
   }

@@ -91,6 +91,11 @@ export class Canvas {
   /** Blurred bright parts at a quarter of the size */
   readonly bloom: Float32Array;
   private readonly bloomTemp: Float32Array;
+  /**
+   * Makes the canvas a palette image: the red channel from 0 to 1 selects one of 256 sRGB colors.
+   * The visualizer shows them as they are, without tone map and bloom.
+   */
+  ramp: Float32Array | undefined;
 
   constructor(width: number, height: number) {
     this.width = width;

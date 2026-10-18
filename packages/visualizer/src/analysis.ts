@@ -59,6 +59,8 @@ export class AudioFrame {
   readonly peaks: Float32Array;
   /** Latest samples, normalized to about -1 to 1 */
   readonly waveform: Float32Array;
+  /** Unsmoothed level of each FFT bin from 0 Hz up, 0 to 1, on the same scale as `bands` */
+  readonly spectrum: Float32Array;
   /** Bass, mid and treble energy relative to their long average, about 1 on average */
   bass = 1;
   mid = 1;
@@ -76,10 +78,11 @@ export class AudioFrame {
   /** Number of beats so far */
   beats = 0;
 
-  constructor(bandCount: number, waveformLength: number) {
+  constructor(bandCount: number, waveformLength: number, spectrumLength = 0) {
     this.bands = new Float32Array(bandCount);
     this.peaks = new Float32Array(bandCount);
     this.waveform = new Float32Array(waveformLength);
+    this.spectrum = new Float32Array(spectrumLength);
   }
 }
 
@@ -125,7 +128,7 @@ export class Analyzer {
 
   constructor(fftSize = 2048, bandCount = 64, waveformLength = 512) {
     this.fftSize = fftSize;
-    this.frame = new AudioFrame(bandCount, waveformLength);
+    this.frame = new AudioFrame(bandCount, waveformLength, fftSize / 2);
     this.window = new Float32Array(fftSize);
     this.hann = new Float32Array(fftSize);
     this.real = new Float32Array(fftSize);
@@ -248,6 +251,13 @@ export class Analyzer {
     const reference = 10 * Math.log10(this.level);
     const attack = follow(dt, 0.025);
     const release = follow(dt, 0.18);
+
+    const binHz = this.bandSampleRate / this.fftSize;
+    for (let i = 0; i < frame.spectrum.length; i++) {
+      const tilt = 3 * Math.log2(Math.max(30, i * binHz) / 1000);
+      const db = 10 * Math.log10((this.power[i] ?? 0) + 1e-12);
+      frame.spectrum[i] = Math.min(1, Math.max(0, (db + tilt - reference + 54) / 54));
+    }
 
     for (let b = 0; b < count; b++) {
       const db =

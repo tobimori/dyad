@@ -50,7 +50,14 @@ export class Frame {
  */
 export class Preset extends Data.Class<{
   readonly name: string;
+  /** Group of related presets, for example "Ambience" */
+  readonly collection?: string | undefined;
   /** Strength of the glow around bright parts, 0 for none */
   readonly bloom: number;
   readonly create: (canvas: Canvas, random: Random) => (frame: Frame) => void;
-}> {}
+}> {
+  /** The name with the collection in front, for example "Ambience: Water" */
+  get label() {
+    return this.collection === undefined ? this.name : `${this.collection}: ${this.name}`;
+  }
+}
