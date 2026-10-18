@@ -9,6 +9,13 @@ export const videoMaxHeight = (pixelHeight: number | null) =>
     ? defaultHeight
     : Math.min(maxHeight, Math.max(minHeight, Math.round(pixelHeight)));
 
+// Common heights of video streams. `prepareVideo` gives the tallest stream at most `maxHeight`.
+const streamHeights = [minHeight, 360, defaultHeight, maxHeight];
+
+/** The `maxHeight` of `prepareVideo` for the smallest stream at least `pixelHeight` high, at most 720p */
+export const videoFillHeight = (pixelHeight: number) =>
+  streamHeights.find((height) => height >= pixelHeight) ?? maxHeight;
+
 /** The URL of a `VideoPlan` path that starts at the keyframe at or before `startMs` */
 export const videoUrl = (serverUrl: string, path: string, startMs: number) => {
   const url = new URL(path, serverUrl);

@@ -63,7 +63,7 @@ import { sections, startSection } from "./routes/sections.ts";
 import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
 import { useToast } from "./ui/toast.tsx";
-import { CoverVideo, VideoView } from "./video/video-view.tsx";
+import { VideoView, useCoverVideo } from "./video/video-view.tsx";
 import { VisualizerView } from "./visualizer/visualizer-view.tsx";
 
 const sidebarMinWidth = 100;
@@ -873,19 +873,14 @@ export function App(props: {
     );
   };
 
-  const cover = (width: number, height: number) =>
-    player.current !== undefined && (
-      <CoverVideo
-        source={player.current.source}
-        artwork={artwork}
-        playing={player.state === "playing"}
-        positionMs={player.position}
-        connection={client}
-        serverUrl={props.serverUrl}
-        width={width}
-        height={height}
-      />
-    );
+  const cover = useCoverVideo({
+    source: player.current?.source,
+    artwork,
+    playing: player.state === "playing",
+    positionMs: player.position,
+    connection: client,
+    serverUrl: props.serverUrl,
+  });
 
   return (
     <box
@@ -937,7 +932,8 @@ export function App(props: {
           onSelectSegment={setSegmentSelection}
           onPlaySegment={playSegment}
           upNext={upNext}
-          cover={cover}
+          video={cover.video}
+          cover={cover.render}
           positionMs={player.position()}
           durationMs={player.durationMs()}
           width={screen.width}
@@ -963,7 +959,7 @@ export function App(props: {
               entry={player.current}
               segment={segments[currentSegment]}
               upNext={upNext}
-              cover={cover}
+              cover={cover.render}
               width={panelWidth}
               height={bodyHeight}
               onOpen={openNowPlaying}

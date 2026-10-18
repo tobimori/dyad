@@ -1,4 +1,4 @@
-import { formatDuration, titleOf, videoMaxHeight } from "@dyad/client-runtime";
+import { formatDuration, titleOf, videoFillHeight, videoMaxHeight } from "@dyad/client-runtime";
 import type { ServerConnection } from "@dyad/client-runtime";
 import type { SourceSummary } from "@dyad/domain";
 import { CellGrid, encodeHalfBlocks, encodeOctants, graphicsSupport } from "@dyad/visualizer";
@@ -77,6 +77,8 @@ function VideoPicture(props: {
   readonly serverUrl: string;
   readonly columns: number;
   readonly rows: number;
+  /** The `maxHeight` of `prepareVideo` for a picture of `pixelHeight` */
+  readonly maxHeight: (pixelHeight: number) => number;
   readonly visible: boolean;
   readonly onFrame?: () => void;
   readonly onFailure: (reason: string) => void;
@@ -148,8 +150,7 @@ function VideoPicture(props: {
       props.connection
         .prepareVideo({
           sourceId: props.sourceId,
-          // The smallest stream that fills the box costs the least to decode
-          maxHeight: videoMaxHeight(pixelsRef.current.height),
+          maxHeight: latest.current.maxHeight(pixelsRef.current.height),
         })
         .pipe(
           Effect.tap((plan) =>
@@ -340,6 +341,7 @@ export function VideoView(props: {
             serverUrl={props.serverUrl}
             columns={props.width}
             rows={props.height - 1}
+            maxHeight={videoMaxHeight}
             visible
             onFailure={setFailure}
           />
@@ -361,38 +363,29 @@ export function VideoView(props: {
   );
 }
 
-/**
- * The cover, or in its place the muted video of the source. Cells are too coarse for a picture
- * this small, so only terminals with Kitty graphics show the video.
- */
-export function CoverVideo(props: {
+// Loads its own settings on each mount, so that a delay that the full view changed applies
+function CoverVideo(props: {
   readonly source: SourceSummary;
   readonly artwork: Artwork | null;
+  readonly video: boolean;
   readonly playing: boolean;
   readonly positionMs: () => number;
   readonly connection: typeof ServerConnection.Service | null;
   readonly serverUrl: string;
   readonly width: number;
   readonly height: number;
+  readonly onFailure: () => void;
 }) {
   const [settings] = useSettings();
-  // Source IDs, so that the next source starts with its cover and a new try
+  // A source ID, so that the next source starts with its cover
   const [shown, setShown] = useState<string | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
   const id = props.source.id;
-  const video =
-    mode === "kitty" &&
-    props.source.video &&
-    props.connection !== null &&
-    settings !== null &&
-    settings.coverVideo !== false &&
-    failed !== id;
-  const showing = video && shown === id;
+  const showing = props.video && shown === id;
 
   return (
     <box width={props.width} height={props.height}>
       {!showing && <Cover artwork={props.artwork} width={props.width} height={props.height} />}
-      {video && (
+      {props.video && props.connection !== null && settings !== null && (
         <VideoPicture
           sourceId={id}
           playing={props.playing}
@@ -402,11 +395,54 @@ export function CoverVideo(props: {
           serverUrl={props.serverUrl}
           columns={props.width}
           rows={props.height}
+          maxHeight={videoFillHeight}
           visible={showing}
           onFrame={() => setShown(id)}
-          onFailure={() => setFailed(id)}
+          onFailure={props.onFailure}
         />
       )}
     </box>
   );
 }
+
+/**
+ * Whether the cover of the source that plays shows its muted video, and `render` for the cover in
+ * a box of cells. Cells are too coarse for a picture this small, so only Kitty graphics show video.
+ */
+export const useCoverVideo = (props: {
+  readonly source: SourceSummary | undefined;
+  readonly artwork: Artwork | null;
+  readonly playing: boolean;
+  readonly positionMs: () => number;
+  readonly connection: typeof ServerConnection.Service | null;
+  readonly serverUrl: string;
+}) => {
+  const [settings] = useSettings();
+  // A source ID, so that the cover shows for the rest of a source whose video failed
+  const [failed, setFailed] = useState<string | null>(null);
+  const source = props.source;
+  const video =
+    mode === "kitty" &&
+    source?.video === true &&
+    props.connection !== null &&
+    settings !== null &&
+    settings.coverVideo !== false &&
+    failed !== source.id;
+
+  const render = (width: number, height: number) =>
+    source !== undefined && (
+      <CoverVideo
+        source={source}
+        artwork={props.artwork}
+        video={video}
+        playing={props.playing}
+        positionMs={props.positionMs}
+        connection={props.connection}
+        serverUrl={props.serverUrl}
+        width={width}
+        height={height}
+        onFailure={() => setFailed(source.id)}
+      />
+    );
+  return { video, render };
+};

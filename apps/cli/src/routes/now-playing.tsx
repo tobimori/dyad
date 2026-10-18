@@ -187,6 +187,8 @@ export function NowPlayingView(props: {
   readonly onSelectSegment: (index: number) => void;
   readonly onPlaySegment: (index: number) => void;
   readonly upNext: ReadonlyArray<QueueEntry>;
+  /** The cover shows a video, which gets a large 16:9 box above the text */
+  readonly video: boolean;
   /** The cover of the source that plays, in a box of `width` by `height` cells */
   readonly cover: (width: number, height: number) => ReactNode;
   readonly positionMs: number;
@@ -207,14 +209,25 @@ export function NowPlayingView(props: {
 
   const source = props.entry.source;
   const segment = props.segments[props.currentSegment];
-  const sideBySide = props.width >= sideBySideMinWidth;
+  const sideBySide = !props.video && props.width >= sideBySideMinWidth;
   // The padding takes two rows and four columns
   const space = { width: props.width - 4, height: props.height - 2 };
   // Terminal cells are about twice as high as wide
-  const coverHeight = sideBySide
+  const squareHeight = sideBySide
     ? Math.min(space.height, Math.floor((space.width * 0.5) / 2))
     : Math.max(0, Math.min(Math.floor(space.width / 2), space.height - 9));
-  const textWidth = sideBySide ? space.width - coverHeight * 2 - 3 : space.width;
+  // The gap, the four lines of text, the progress bar and the line above it stay visible
+  const videoRows = Math.max(
+    0,
+    Math.min(
+      space.height - 7 - (segment === undefined ? 0 : 1),
+      Math.round((space.width * 9) / 32),
+    ),
+  );
+  const cover = props.video
+    ? { width: Math.min(space.width, Math.floor((videoRows * 32) / 9)), height: videoRows }
+    : { width: squareHeight * 2, height: squareHeight };
+  const textWidth = sideBySide ? space.width - cover.width - 3 : space.width;
   const line = (text: string) => fit(text, textWidth);
 
   return (
@@ -227,8 +240,11 @@ export function NowPlayingView(props: {
       paddingX={2}
       paddingY={1}
     >
-      {coverHeight > 0 && (
-        <box alignItems="center">{props.cover(coverHeight * 2, coverHeight)}</box>
+      {cover.height > 0 && (
+        // The text below shrinks, not the cover
+        <box alignItems="center" flexShrink={0}>
+          {props.cover(cover.width, cover.height)}
+        </box>
       )}
       <box
         flexDirection="column"
