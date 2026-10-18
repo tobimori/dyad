@@ -5,8 +5,8 @@ import {
   ProviderSource,
   ProviderTrack,
 } from "@dyad/plugin";
-import { getJson, getText, HttpStatusError } from "@dyad/plugin/http";
-import type { HttpRequestError, makePacer } from "@dyad/plugin/http";
+import { getJson, getText, providerError } from "@dyad/plugin/http";
+import type { makePacer } from "@dyad/plugin/http";
 import { Effect, Option, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
@@ -60,14 +60,6 @@ const BandcampItem = Schema.fromJsonString(
   Schema.Struct({ item_type: Schema.Literal("t"), item_id: Schema.Int }),
 );
 
-const toProviderError = (error: HttpStatusError | HttpRequestError) =>
-  new ProviderError({
-    reason:
-      error instanceof HttpStatusError
-        ? `Hype Machine answered status ${error.status}`
-        : error.reason,
-  });
-
 // `/go/<kind>/<item>` answers 302 with the track page, or with `/not/found` when it has none
 const linkedPage = (kind: keyof typeof links, itemId: string) =>
   Effect.gen(function* () {
@@ -103,7 +95,7 @@ const readShelf = (
 ) =>
   Effect.gen(function* () {
     const items = yield* getJson(request, Schema.Array(Item)).pipe(
-      Effect.mapError(toProviderError),
+      Effect.mapError(providerError("Hype Machine")),
     );
 
     // Items without a link that a provider plays are left out

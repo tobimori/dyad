@@ -1,6 +1,6 @@
 import { AccountLinkFailed, BrowserLogin } from "@dyad/domain";
 import type { Credentials } from "@dyad/plugin";
-import { HttpStatusError, getJson } from "@dyad/plugin/http";
+import { getJson, providerError } from "@dyad/plugin/http";
 import { Effect, Redacted, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
@@ -32,13 +32,7 @@ export const readFanName = (credentials: Credentials) =>
     );
     const summary = yield* getJson(request, FanSummary).pipe(
       Effect.mapError(
-        (error) =>
-          new AccountLinkFailed({
-            reason:
-              error instanceof HttpStatusError
-                ? `Bandcamp answered status ${error.status}`
-                : error.reason,
-          }),
+        (error) => new AccountLinkFailed({ reason: providerError("Bandcamp")(error).reason }),
       ),
     );
     if ("error" in summary) {

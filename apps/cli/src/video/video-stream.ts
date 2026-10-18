@@ -1,12 +1,11 @@
 import { videoUrl } from "@dyad/client-runtime";
+import { clusterId, readElement, segmentId } from "@dyad/media";
 import { Effect, Fiber, Match, Stream } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/http";
 
 import { VideoDecoder } from "./decoder.ts";
 import type { Frame } from "./messages.ts";
 
-const segmentId = 0x18538067;
-const clusterId = 0x1f43b675;
 const timecodeId = 0xe7;
 // The worker decodes this far ahead, about 160 ms at 25 fps
 const queuedFrames = 4;
@@ -15,30 +14,6 @@ const chunkBytes = 256 * 1024;
 const leadMs = 8;
 // The worker skips the conversion of frames that are already late
 const clockIntervalMs = 100;
-
-const readVint = (bytes: Uint8Array, offset: number, keepMarker: boolean) => {
-  const first = bytes[offset];
-  if (first === undefined) return undefined;
-  const length = Math.clz32(first) - 23;
-  if (length < 1 || length > 8 || offset + length > bytes.length) return undefined;
-
-  let value = keepMarker ? first : first & (0xff >> length);
-  let unknown = value === 0xff >> length;
-  for (let index = 1; index < length; index++) {
-    const byte = bytes[offset + index] ?? 0;
-    value = value * 256 + byte;
-    unknown &&= byte === 0xff;
-  }
-  return { value, length, unknown: unknown && !keepMarker };
-};
-
-const readElement = (bytes: Uint8Array, offset: number) => {
-  const id = readVint(bytes, offset, true);
-  const size = id && readVint(bytes, offset + id.length, false);
-  if (id === undefined || size === undefined) return undefined;
-  const start = offset + id.length + size.length;
-  return { id: id.value, start, end: size.unknown ? null : start + size.value };
-};
 
 /** One HTTP response of the video. A response with `start` begins at a later cluster. */
 class Download {

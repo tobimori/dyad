@@ -178,6 +178,9 @@ importers:
       '@dyad/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@dyad/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
@@ -684,6 +687,9 @@ importers:
       '@dyad/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@dyad/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin

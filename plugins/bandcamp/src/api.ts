@@ -1,6 +1,5 @@
 import { CreditedArtist, ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
-import { getJson, HttpStatusError, send } from "@dyad/plugin/http";
-import type { HttpRequestError } from "@dyad/plugin/http";
+import { getJson, providerError, send } from "@dyad/plugin/http";
 import { Cache, Data, Effect, Exit, Schema, Stream } from "effect";
 import { HttpClientRequest } from "effect/http";
 
@@ -50,12 +49,6 @@ const Details = Schema.Union([
 // The mobile app sends the band ID with each track ID
 const ExternalId = Schema.TemplateLiteralParser([Schema.Int, "-", Schema.Int]);
 
-export const toProviderError = (error: HttpStatusError | HttpRequestError) =>
-  new ProviderError({
-    reason:
-      error instanceof HttpStatusError ? `Bandcamp answered status ${error.status}` : error.reason,
-  });
-
 // The core gives a provider search 8 seconds in total
 const durationTimeout = "4 seconds";
 
@@ -66,7 +59,9 @@ const fetchDetails = ({ bandId, type, id }: Release) =>
     const request = HttpClientRequest.get(detailsUrl).pipe(
       HttpClientRequest.setUrlParams({ band_id: bandId, tralbum_type: type, tralbum_id: id }),
     );
-    const details = yield* getJson(request, Details).pipe(Effect.mapError(toProviderError));
+    const details = yield* getJson(request, Details).pipe(
+      Effect.mapError(providerError("Bandcamp")),
+    );
     if ("error" in details) {
       return yield* new ProviderError({ reason: `Bandcamp: ${details.error_message}` });
     }
@@ -92,7 +87,9 @@ export const searchTracks = (
         fan_id: null,
       }),
     );
-    const response = yield* getJson(request, SearchResults).pipe(Effect.mapError(toProviderError));
+    const response = yield* getJson(request, SearchResults).pipe(
+      Effect.mapError(providerError("Bandcamp")),
+    );
 
     // One request per release gives the durations of all its tracks and the account name. A single
     // has no album.
@@ -184,7 +181,7 @@ export const resolveTrack = (externalId: string) =>
 
     // Open the stream here, so that a failure occurs before the core starts its response
     const response = yield* send(HttpClientRequest.get(streamUrl)).pipe(
-      Effect.mapError(toProviderError),
+      Effect.mapError(providerError("Bandcamp")),
     );
 
     // Errors contain the signed stream URL

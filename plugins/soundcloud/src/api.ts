@@ -1,9 +1,8 @@
 import { CreditedArtist, ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
+import { readSegments, segmentBytes, segmentsFrom } from "@dyad/plugin/hls";
 import { getJson, getText, makeScrapedToken } from "@dyad/plugin/http";
 import { Duration, Effect, Redacted, Schema, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-
-import { readSegments, segmentBytes } from "./hls.ts";
 
 export const provider = "soundcloud";
 
@@ -188,7 +187,6 @@ export const resolveTrack = (
       );
     return new ProviderAudio({
       bytes: read(segments),
-      bytesFrom: (startMs) =>
-        read(segments.filter((segment) => segment.endMs === null || segment.endMs > startMs)),
+      bytesFrom: (startMs) => read(segmentsFrom(segments, startMs)),
     });
   });

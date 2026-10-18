@@ -3,6 +3,8 @@ import type { Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import type { HttpClientRequest } from "effect/http";
 
+import { ProviderError } from "./index.ts";
+
 /** The provider answered a status outside 200 to 299. Plugins decide what the status means. */
 export class HttpStatusError extends Data.TaggedError("HttpStatusError")<{
   readonly status: number;
@@ -17,6 +19,13 @@ export class HttpStatusError extends Data.TaggedError("HttpStatusError")<{
 export class HttpRequestError extends Data.TaggedError("HttpRequestError")<{
   readonly reason: "Request failed" | "Unexpected response";
 }> {}
+
+/** Maps a failed request to `ProviderError`, with the status as `<name> answered status <status>` */
+export const providerError = (name: string) => (error: HttpStatusError | HttpRequestError) =>
+  new ProviderError({
+    reason:
+      error instanceof HttpStatusError ? `${name} answered status ${error.status}` : error.reason,
+  });
 
 const RetryAfter = Schema.FiniteFromString.check(Schema.isGreaterThanOrEqualTo(0));
 

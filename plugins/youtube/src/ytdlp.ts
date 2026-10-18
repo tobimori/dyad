@@ -1,6 +1,5 @@
 import { ProviderAudio, ProviderError, ProviderVideo } from "@dyad/plugin";
 import type { Credentials } from "@dyad/plugin";
-import { HttpStatusError, send } from "@dyad/plugin/http";
 import { NodeChildProcessSpawner } from "@effect/platform-node";
 import {
   Cache,
@@ -18,11 +17,10 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import type { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { readChunks } from "./api.ts";
-import { clusterOffset, findCues } from "./webm.ts";
+import { webmStream } from "./webm.ts";
 
 class Cookies extends Context.Service<Cookies, Credentials>()("@dyad/youtube/Cookies") {}
 
@@ -61,9 +59,6 @@ const Info = Schema.fromJsonString(
 
 const hourMs = 60 * 60 * 1000;
 
-// Enough for the head of most files. A larger `Cues` needs a second read.
-const headBytes = 256 * 1024;
-
 const forbidden = "YouTube answered status 403";
 const signInAgain = "Sign in to YouTube again";
 const blocked = "YouTube blocks this server and the YouTube account for now";
@@ -85,48 +80,6 @@ const cookieFile = (credentials: Credentials) =>
     ),
     "",
   ].join("\n");
-
-const webmStream = (url: string, contentLength: number, kind: "audio" | "video") =>
-  Effect.gen(function* () {
-    const services = yield* Effect.context<HttpClient.HttpClient>();
-    // Errors contain the signed URL
-    const safe = <E>(stream: Stream.Stream<Uint8Array, E, HttpClient.HttpClient>) =>
-      stream.pipe(
-        Stream.mapError(
-          (error) =>
-            new ProviderError({
-              reason:
-                error instanceof HttpStatusError
-                  ? `YouTube answered status ${error.status}`
-                  : `Cannot read the ${kind} stream`,
-            }),
-        ),
-        Stream.provideContext(services),
-      );
-
-    const readHead = (end: number) =>
-      send(HttpClientRequest.get(`${url}&range=0-${end - 1}`)).pipe(
-        Effect.flatMap((response) => response.arrayBuffer),
-        Effect.map((buffer) => new Uint8Array(buffer)),
-      );
-
-    // yt-dlp does not give the `indexRange` of `/player`, so the head shows where `Cues` is
-    const bytesFrom = (startMs: number) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const first = yield* readHead(Math.min(headBytes, contentLength));
-          const cues = yield* Effect.try(() => findCues(first));
-          const head = cues.end <= first.length ? first : yield* readHead(cues.end);
-          const offset = yield* Effect.try(() => clusterOffset(head, cues.start, startMs));
-          return Stream.concat(
-            Stream.succeed(head.subarray(0, cues.start)),
-            readChunks(url, offset, contentLength),
-          );
-        }),
-      ).pipe(safe);
-
-    return { bytes: readChunks(url, 0, contentLength).pipe(safe), bytesFrom };
-  });
 
 /**
  * Reads the formats of a video with yt-dlp and the linked account, for when YouTube asks this
@@ -262,9 +215,10 @@ export const ytdlpResolver = Effect.gen(function* () {
       const context = yield* Effect.context<HttpClient.HttpClient>();
       const open = (answer: Effect.Success<ReturnType<typeof answerOf>>) => {
         const format = formatOf(answer);
+        // yt-dlp 2026.10.10 does not give the `indexRange` of `/player`
         return format === undefined
           ? Effect.fail(new ProviderError({ reason: `The video has no ${kind} stream` }))
-          : webmStream(format.url, format.filesize, kind);
+          : webmStream(format.url, format.filesize, kind, null);
       };
       const first = yield* answerOf(videoId, credentials).pipe(Effect.flatMap(open));
       const fresh = Cache.invalidate(answers, videoId).pipe(

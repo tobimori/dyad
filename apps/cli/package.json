@@ -17,6 +17,7 @@
     "@dyad/audio": "workspace:*",
     "@dyad/client-runtime": "workspace:*",
     "@dyad/domain": "workspace:*",
+    "@dyad/media": "workspace:*",
     "@dyad/plugin": "workspace:*",
     "@dyad/plugin-discord-presence": "workspace:*",
     "@dyad/plugin-media-controls": "workspace:*",

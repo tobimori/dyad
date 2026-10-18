@@ -8,11 +8,11 @@ import {
   ProviderSource,
   ProviderTrack,
 } from "@dyad/plugin";
-import { getJson } from "@dyad/plugin/http";
+import { getJson, providerError } from "@dyad/plugin/http";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
-import { detailsUrl, toProviderError } from "./api.ts";
+import { detailsUrl } from "./api.ts";
 
 const bandUrl = "https://bandcamp.com/api/mobile/25/band_details";
 
@@ -91,7 +91,7 @@ export const readBand = (bandId: string) =>
       HttpClientRequest.bodyJsonUnsafe({ band_id: Number(bandId) }),
     );
     const band = yield* getJson(request, Schema.Union([Band, BandcampError])).pipe(
-      Effect.mapError(toProviderError),
+      Effect.mapError(providerError("Bandcamp")),
     );
     if ("error" in band) return yield* fail(band);
 
@@ -141,7 +141,7 @@ export const readRelease = (externalId: string) =>
       HttpClientRequest.setUrlParams({ band_id: bandId, tralbum_type: type, tralbum_id: id }),
     );
     const release = yield* getJson(request, Schema.Union([Release, BandcampError])).pipe(
-      Effect.mapError(toProviderError),
+      Effect.mapError(providerError("Bandcamp")),
     );
     if ("error" in release) return yield* fail(release);
 

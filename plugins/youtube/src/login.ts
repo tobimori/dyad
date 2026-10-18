@@ -1,6 +1,6 @@
 import { AccountLinkFailed, BrowserLogin } from "@dyad/domain";
 import type { Credentials } from "@dyad/plugin";
-import { HttpStatusError, getJson } from "@dyad/plugin/http";
+import { getJson, providerError } from "@dyad/plugin/http";
 import { NodeCrypto } from "@effect/platform-node";
 import { Clock, Crypto, Effect, Redacted, Schema } from "effect";
 import { Hex } from "effect/encoding";
@@ -106,13 +106,7 @@ export const readAccountName = (credentials: Credentials) =>
     );
     const menu = yield* getJson(request, AccountMenu).pipe(
       Effect.mapError(
-        (error) =>
-          new AccountLinkFailed({
-            reason:
-              error instanceof HttpStatusError
-                ? `YouTube answered status ${error.status}`
-                : error.reason,
-          }),
+        (error) => new AccountLinkFailed({ reason: providerError("YouTube")(error).reason }),
       ),
     );
 

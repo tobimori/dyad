@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@dyad/domain": "workspace:*",
+    "@dyad/media": "workspace:*",
     "@dyad/plugin": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:"

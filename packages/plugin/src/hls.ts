@@ -1,13 +1,13 @@
-import { Data, Effect, Option, Stream } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { Data, Effect, Stream } from "effect";
+import { HttpClientRequest } from "effect/http";
 
-import { AppleMusicError } from "./api.ts";
+import { getText, send } from "./http.ts";
 
 class Segment extends Data.Class<{
   readonly url: string;
-  /** HTTP `Range` header value. None reads the whole resource. */
-  readonly range: Option.Option<string>;
-  /** Where the segment ends in the song. `null` for the init section. */
+  /** HTTP `Range` header value. `null` reads the whole resource. */
+  readonly range: string | null;
+  /** Where the segment ends in the track. `null` for the init section. */
   readonly endMs: number | null;
 }> {}
 
@@ -26,10 +26,10 @@ const byteRange = (value: string, previousEnd: number) => {
 };
 
 // The `EXT-X-MAP` init section comes first. Together with the media segments in playlist order,
-// it is one fragmented MP4 file. DRM tags are read by `widevine.ts`.
+// it is one fragmented MP4 file.
 const parseSegments = (playlistUrl: string, playlist: string) => {
   const segments: Array<Segment> = [];
-  let range = Option.none<string>();
+  let range: string | null = null;
   let previousEnd = 0;
   let durationMs = 0;
   let endMs = 0;
@@ -43,8 +43,7 @@ const parseSegments = (playlistUrl: string, playlist: string) => {
       segments.push(
         new Segment({
           url: new URL(uri, playlistUrl).href,
-          range:
-            initRange === undefined ? Option.none() : Option.some(byteRange(initRange, 0).header),
+          range: initRange === undefined ? null : byteRange(initRange, 0).header,
           endMs: null,
         }),
       );
@@ -54,7 +53,7 @@ const parseSegments = (playlistUrl: string, playlist: string) => {
     if (line.startsWith("#EXT-X-BYTERANGE:")) {
       const parsed = byteRange(line.slice("#EXT-X-BYTERANGE:".length), previousEnd);
       previousEnd = parsed.end;
-      range = Option.some(parsed.header);
+      range = parsed.header;
       continue;
     }
 
@@ -67,48 +66,36 @@ const parseSegments = (playlistUrl: string, playlist: string) => {
 
     endMs += durationMs;
     segments.push(new Segment({ url: new URL(line, playlistUrl).href, range, endMs }));
-    range = Option.none();
+    range = null;
   }
 
   return segments;
 };
 
+/** The init section and the media segments of an HLS media playlist of fragmented MP4 */
 export const readSegments = (playlistUrl: string) =>
-  Effect.gen(function* () {
-    const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient);
-    const playlist = yield* client.get(playlistUrl).pipe(
-      Effect.flatMap((response) => response.text),
-      Effect.mapError(
-        () => new AppleMusicError({ stage: "playlist", reason: "Cannot read the asset playlist" }),
-      ),
-    );
+  Effect.map(getText(HttpClientRequest.get(playlistUrl)), (playlist) =>
+    parseSegments(playlistUrl, playlist),
+  );
 
-    const segments = parseSegments(playlistUrl, playlist);
-    if (segments.length === 0) {
-      return yield* new AppleMusicError({ stage: "playlist", reason: "No media segments" });
-    }
-    return segments;
-  });
-
-/** Downloads the segments one after another, as one continuous stream */
+/** Downloads the segments one after another, as one continuous stream. Errors contain the URL. */
 export const segmentBytes = (segments: ReadonlyArray<Segment>) =>
   Stream.fromIterable(segments).pipe(
-    Stream.flatMap((segment) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const client = HttpClient.filterStatusOk(yield* HttpClient.HttpClient);
-          const request = Option.match(segment.range, {
-            onNone: () => HttpClientRequest.get(segment.url),
-            onSome: (range) =>
-              HttpClientRequest.get(segment.url).pipe(HttpClientRequest.setHeader("Range", range)),
-          });
-          const response = yield* client.execute(request);
-          return response.stream;
-        }),
-      ),
-    ),
-    // Errors contain the signed segment URL
-    Stream.mapError(
-      () => new AppleMusicError({ stage: "segments", reason: "Cannot read an audio segment" }),
-    ),
+    Stream.flatMap((segment) => {
+      const request = HttpClientRequest.get(segment.url);
+      return Stream.unwrap(
+        Effect.map(
+          send(
+            segment.range === null
+              ? request
+              : HttpClientRequest.setHeader(request, "Range", segment.range),
+          ),
+          (response) => response.stream,
+        ),
+      );
+    }),
   );
+
+/** The init section and the segments that end after `startMs` */
+export const segmentsFrom = (segments: ReadonlyArray<Segment>, startMs: number) =>
+  segments.filter((segment) => segment.endMs === null || segment.endMs > startMs);

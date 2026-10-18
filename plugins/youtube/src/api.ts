@@ -6,13 +6,12 @@ import {
   ProviderTracklist,
   ProviderVideo,
 } from "@dyad/plugin";
-import { getJson, HttpStatusError, makeScrapedToken, send } from "@dyad/plugin/http";
-import type { HttpRequestError } from "@dyad/plugin/http";
+import { getJson, makeScrapedToken, providerError } from "@dyad/plugin/http";
 import { clockMs, parseTracklist, tracklistEntry } from "@dyad/plugin/tracklist";
 import { Cache, Duration, Effect, Exit, Option, Redacted, Schema, Stream } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClientRequest } from "effect/http";
 
-import { clusterOffset } from "./webm.ts";
+import { readChunks, streamError, webmStream } from "./webm.ts";
 
 export const provider = "youtube";
 
@@ -260,12 +259,6 @@ const Comments = Schema.Struct({
 
 const ExternalId = Schema.String.check(Schema.isPattern(/^[\w-]{11}$/));
 
-const toProviderError = (error: HttpStatusError | HttpRequestError) =>
-  new ProviderError({
-    reason:
-      error instanceof HttpStatusError ? `YouTube answered status ${error.status}` : error.reason,
-  });
-
 const innertube = <S extends Schema.Constraint>(
   endpoint: string,
   client: typeof web | (typeof visionos & { readonly visitorData: string }),
@@ -294,7 +287,7 @@ const innertube = <S extends Schema.Constraint>(
 export const visitorCache = makeScrapedToken(
   innertube("visitor_id", web, {}, VisitorData).pipe(
     Effect.map((response) => Redacted.make(response.responseContext.visitorData)),
-    Effect.mapError(toProviderError),
+    Effect.mapError(providerError("YouTube")),
   ),
   { timeToLive: "1 hour", rejectedStatuses: [] },
 );
@@ -315,8 +308,8 @@ const readPlayer = (withVisitor: Effect.Success<typeof visitorCache>, videoId: s
       ),
     ).pipe(
       Effect.catchTags({
-        HttpStatusError: (error) => Effect.fail(toProviderError(error)),
-        HttpRequestError: (error) => Effect.fail(toProviderError(error)),
+        HttpStatusError: (error) => Effect.fail(providerError("YouTube")(error)),
+        HttpRequestError: (error) => Effect.fail(providerError("YouTube")(error)),
       }),
     );
 
@@ -367,7 +360,7 @@ export const searchVideos = (query: string) =>
       web,
       { query, params: videosOnly },
       SearchResults,
-    ).pipe(Effect.mapError(toProviderError));
+    ).pipe(Effect.mapError(providerError("YouTube")));
 
     return response.contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents.flatMap(
       (section) =>
@@ -406,25 +399,7 @@ export const searchVideos = (query: string) =>
     );
   });
 
-// A request without a bounded range (October 2026) is throttled to about twice real time
-const chunkBytes = 10 * 1024 * 1024;
-
-export const readChunks = (url: string, start: number, end: number) =>
-  Stream.range(0, Math.ceil((end - start) / chunkBytes) - 1).pipe(
-    Stream.flatMap((index) => {
-      const from = start + index * chunkBytes;
-      const to = Math.min(end, from + chunkBytes) - 1;
-      return Stream.unwrap(
-        Effect.map(
-          send(HttpClientRequest.get(`${url}&range=${from}-${to}`)),
-          (response) => response.stream,
-        ),
-      );
-    }),
-  );
-
-// A WebM file of YouTube: the head has the `Cues` index, so a start skips to the cluster before it
-const webmStream = (
+const playerStream = (
   format: {
     readonly url: string;
     readonly contentLength: number;
@@ -433,44 +408,14 @@ const webmStream = (
   kind: "audio" | "video",
 ) =>
   Effect.gen(function* () {
-    const services = yield* Effect.context<HttpClient.HttpClient>();
-    // Errors contain the signed URL
-    const safe = <E>(stream: Stream.Stream<Uint8Array, E, HttpClient.HttpClient>) =>
-      stream.pipe(
-        Stream.mapError(
-          (error) =>
-            new ProviderError({
-              reason:
-                error instanceof HttpStatusError
-                  ? `YouTube answered status ${error.status}`
-                  : `Cannot read the ${kind} stream`,
-            }),
-        ),
-        Stream.provideContext(services),
-      );
-
     // October 2026: `/player` can give this server URLs that answer 403. One byte shows it before
     // the play starts, so that the plugin can switch to yt-dlp.
-    yield* Stream.runDrain(safe(readChunks(format.url, 0, 1)));
-
-    const bytesFrom = (startMs: number) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const response = yield* send(
-            HttpClientRequest.get(`${format.url}&range=0-${format.indexRange.end}`),
-          );
-          const head = new Uint8Array(yield* response.arrayBuffer);
-          const offset = yield* Effect.try(() =>
-            clusterOffset(head, format.indexRange.start, startMs),
-          );
-          return Stream.concat(
-            Stream.succeed(head.subarray(0, format.indexRange.start)),
-            readChunks(format.url, offset, format.contentLength),
-          );
-        }),
-      ).pipe(safe);
-
-    return { bytes: readChunks(format.url, 0, format.contentLength).pipe(safe), bytesFrom };
+    yield* Stream.runDrain(readChunks(format.url, 0, 1)).pipe(Effect.mapError(streamError(kind)));
+    // `indexRange` includes its end byte
+    return yield* webmStream(format.url, format.contentLength, kind, {
+      start: format.indexRange.start,
+      end: format.indexRange.end + 1,
+    });
   });
 
 /** Streams the Opus audio of a video in its WebM file */
@@ -482,7 +427,7 @@ export const resolveAudio = (players: Players, externalId: string) =>
     if (format === undefined) {
       return yield* new ProviderError({ reason: "The video has no Opus audio" });
     }
-    return new ProviderAudio(yield* webmStream(format, "audio"));
+    return new ProviderAudio(yield* playerStream(format, "audio"));
   });
 
 /** Of streams with equal height, the lowest bitrate wins, which skips 60 fps streams */
@@ -495,7 +440,7 @@ export const resolveVideo = (players: Players, externalId: string, maxHeight: nu
     if (format === undefined) {
       return yield* new ProviderError({ reason: "The video has no VP9 stream" });
     }
-    return new ProviderVideo(yield* webmStream(format, "video"));
+    return new ProviderVideo(yield* playerStream(format, "video"));
   });
 
 // YouTube makes chapters from the description. `AUTO_CHAPTERS` are topics, not tracks.
@@ -529,7 +474,7 @@ const commentTracklist = (next: typeof Next.Type) =>
 
     const pages = yield* Stream.paginate(first, (token) =>
       innertube("next", web, { continuation: token }, Comments).pipe(
-        Effect.mapError(toProviderError),
+        Effect.mapError(providerError("YouTube")),
         Effect.map((page) => {
           const items = (page.onResponseReceivedEndpoints ?? []).flatMap(
             (endpoint) =>
@@ -593,7 +538,7 @@ export const videoTracklists = (externalId: string) =>
   Effect.gen(function* () {
     const videoId = yield* decodeVideoId(externalId);
     const next = yield* innertube("next", web, { videoId }, Next).pipe(
-      Effect.mapError(toProviderError),
+      Effect.mapError(providerError("YouTube")),
     );
 
     const chapters = (

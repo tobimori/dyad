@@ -1,5 +1,5 @@
-import { CreditedArtist, ProviderError, ProviderSource } from "@dyad/plugin";
-import { getJson, HttpStatusError } from "@dyad/plugin/http";
+import { CreditedArtist, ProviderSource } from "@dyad/plugin";
+import { getJson, providerError } from "@dyad/plugin/http";
 import { clockMs } from "@dyad/plugin/tracklist";
 import { Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
@@ -121,17 +121,7 @@ const musicSources = (query: string, song: boolean) =>
         }),
       ),
       MusicSearch,
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new ProviderError({
-            reason:
-              error instanceof HttpStatusError
-                ? `YouTube Music answered status ${error.status}`
-                : error.reason,
-          }),
-      ),
-    );
+    ).pipe(Effect.mapError(providerError("YouTube Music")));
 
     return response.contents.tabbedSearchResultsRenderer.tabs
       .flatMap((tab) => tab.tabRenderer.content.sectionListRenderer.contents)

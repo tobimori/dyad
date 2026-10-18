@@ -9,6 +9,7 @@ import {
   ProviderPlaylists,
 } from "@dyad/plugin";
 import type { Credentials } from "@dyad/plugin";
+import { readSegments, segmentBytes, segmentsFrom } from "@dyad/plugin/hls";
 import { makePacer } from "@dyad/plugin/http";
 import type { HttpStatusError } from "@dyad/plugin/http";
 import { Cache, Data, Effect, Exit, Option, Stream } from "effect";
@@ -25,7 +26,6 @@ import {
   searchCatalog,
 } from "./api.ts";
 import type { AppleSession } from "./api.ts";
-import { readSegments, segmentBytes } from "./hls.ts";
 import {
   addPlaylistSongs,
   createPlaylist,
@@ -124,7 +124,22 @@ export const appleMusicPlugin = new Plugin({
 
             // Neither needs the result of the other
             const [segments, decryptionKeys] = yield* Effect.all(
-              [readSegments(playlistUrl), contentKeys(session, play.songId, playlistUrl)],
+              [
+                readSegments(playlistUrl).pipe(
+                  Effect.mapError(
+                    () =>
+                      new AppleMusicError({
+                        stage: "playlist",
+                        reason: "Cannot read the asset playlist",
+                      }),
+                  ),
+                  Effect.filterOrFail(
+                    (segments) => segments.length > 0,
+                    () => new AppleMusicError({ stage: "playlist", reason: "No media segments" }),
+                  ),
+                ),
+                contentKeys(session, play.songId, playlistUrl),
+              ],
               { concurrency: "unbounded" },
             );
             return { segments, decryptionKeys };
@@ -146,13 +161,20 @@ export const appleMusicPlugin = new Plugin({
 
           const read = (selected: typeof segments) =>
             segmentBytes(selected).pipe(
-              Stream.mapError(toProviderError),
+              // Errors contain the signed segment URL
+              Stream.mapError(() =>
+                toProviderError(
+                  new AppleMusicError({
+                    stage: "segments",
+                    reason: "Cannot read an audio segment",
+                  }),
+                ),
+              ),
               Stream.provideContext(services),
             );
           return new ProviderAudio({
             bytes: read(segments),
-            bytesFrom: (startMs) =>
-              read(segments.filter((segment) => segment.endMs === null || segment.endMs > startMs)),
+            bytesFrom: (startMs) => read(segmentsFrom(segments, startMs)),
             decryptionKeys,
           });
         }).pipe(Effect.mapError(toProviderError), Effect.provide(services));

@@ -1,4 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- GENA uses the `SUBSCRIBE` and `NOTIFY` methods, which `effect/http` does not allow
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- GENA uses the `SUBSCRIBE` and `NOTIFY` methods, which `effect/http` 4.0.5 does not allow
 import { createServer, request, type IncomingMessage } from "node:http";
 
 import { NodeDatagramSocket } from "@effect/platform-node";
