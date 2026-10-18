@@ -15,21 +15,18 @@ export const formatTotalDuration = (milliseconds: number) => {
   return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 };
 
-// Only providers with accounts have a display name in the contract, so the others show their ID
-// in title case
-export const formatProvider = (provider: string) =>
-  provider
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-
-/** `names` comes from `listAccountProviders` */
+/**
+ * `names` comes from `listAccountProviders`, which has all providers of playlists and library
+ * imports
+ */
 export const providerName = (names: ReadonlyMap<string, string>, provider: string) =>
-  names.get(provider) ?? formatProvider(provider);
+  names.get(provider) ?? provider;
 
 /** The provider, or the codec of a local file */
 export const sourceLabel = (source: SourceSummary) =>
-  source.provider === "local" ? source.codec.toUpperCase() : formatProvider(source.provider);
+  source.provider === "local"
+    ? source.codec.toUpperCase()
+    : (source.providerName ?? source.provider);
 
 export const titleOf = (track: { readonly title: string | null }) => track.title ?? "Unknown title";
 

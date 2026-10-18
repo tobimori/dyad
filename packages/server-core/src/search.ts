@@ -96,6 +96,7 @@ const searchProvider = (
             artistRef: null,
             albumRef: null,
             explicit: item.source.explicit ?? false,
+            providerName: name,
           }),
           isrc: item.isrc,
           position,

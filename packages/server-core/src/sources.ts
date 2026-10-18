@@ -216,7 +216,11 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
       .groupBy(source.id)
       .$dynamic();
 
-    return yield* limit === undefined ? query : query.limit(limit);
+    const rows = yield* limit === undefined ? query : query.limit(limit);
+    return rows.map((row) => ({
+      ...row,
+      providerName: providers.get(row.source.provider)?.provider.name ?? null,
+    }));
   });
 
 /** Canonical fields of the source's recording first. The duration is the source's own. */
@@ -233,6 +237,7 @@ export const sourceSummary = (row: {
   readonly albumArtistKey: string | null;
   readonly artistKey: string | null;
   readonly albumKey: string | null;
+  readonly providerName: string | null;
 }) =>
   new SourceSummary({
     id: row.source.id,
@@ -249,6 +254,7 @@ export const sourceSummary = (row: {
         ? null
         : libraryAlbumRef(row.albumArtistKey, row.albumKey),
     explicit: row.canonical?.explicit ?? false,
+    providerName: row.providerName,
   });
 
 /** The disc or track number. Tags such as `3/12` give the position and the total. */

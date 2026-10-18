@@ -57,6 +57,10 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
   artistRef: Schema.NullOr(ArtistRef).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   albumRef: Schema.NullOr(AlbumRef).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   explicit: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  /** Display name of `provider`, for example `Apple Music`. `null` for local files. */
+  providerName: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
 }) {}
 
 /** `YYYY`, `YYYY-MM` or `YYYY-MM-DD` */
