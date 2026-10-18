@@ -92,13 +92,15 @@ export class Resampler {
     return Math.floor((frame * this.down) / this.up) - this.before;
   }
 
-  /** Appends input frames. A mono source plays on both sides. */
-  push(channels: ReadonlyArray<Float32Array>, frames: number) {
+  /** Appends input frames at a gain. A mono source plays on both sides. */
+  push(channels: ReadonlyArray<Float32Array>, frames: number, gain: number) {
     const left = channels[0] ?? new Float32Array(frames);
     const right = channels[1] ?? left;
     this.reserve(frames);
-    this.left.set(left.subarray(0, frames), this.length);
-    this.right.set(right.subarray(0, frames), this.length);
+    for (let i = 0; i < frames; i++) {
+      this.left[this.length + i] = (left[i] ?? 0) * gain;
+      this.right[this.length + i] = (right[i] ?? 0) * gain;
+    }
     this.length += frames;
     this.inputEnd += frames;
   }

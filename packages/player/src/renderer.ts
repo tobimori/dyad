@@ -2,6 +2,8 @@ import { openSource, readSourceInfo } from "@dyad/audio";
 import type { Source, SourceInfo } from "@dyad/audio";
 import { Data, Effect, Exit, Scope, Semaphore } from "effect";
 
+import { loudnessGain } from "./loudness.ts";
+import type { Loudness } from "./loudness.ts";
 import { Resampler } from "./resampler.ts";
 
 /** One queue entry. Its bytes can still arrive while it plays. */
@@ -12,6 +14,8 @@ export class Entry extends Data.Class<{
   /** All bytes received so far */
   readonly bytes: () => Uint8Array;
   readonly complete: () => boolean;
+  /** Without it, the entry plays 8 dB quieter */
+  readonly loudness: Loudness | undefined;
 }> {}
 
 export class EntryError extends Data.TaggedError("EntryError")<{
@@ -56,6 +60,7 @@ class Track extends Data.Class<{
   readonly scope: Scope.Closeable;
   /** Run input frame of the first source frame */
   readonly input: number;
+  readonly gain: number;
 }> {}
 
 // Entries of one sample rate play through one resampler, so that their joins stay gapless
@@ -83,7 +88,7 @@ const openTrack = (entry: Entry, info: SourceInfo, input: number) =>
       Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
       Effect.mapError((cause) => new EntryError({ entry: entry.id, cause })),
     );
-    return new Track({ entry, source, scope, input });
+    return new Track({ entry, source, scope, input, gain: loudnessGain(entry.loudness) });
   });
 
 /** Closing the scope frees all decoders */
@@ -125,7 +130,7 @@ export const openRenderer = Effect.gen(function* () {
         .pipe(Effect.mapError((cause) => new EntryError({ entry: track.entry.id, cause })));
 
       if (pcm !== undefined) {
-        current.resampler.push(pcm.channels, pcm.frames);
+        current.resampler.push(pcm.channels, pcm.frames, track.gain);
         return pcm.frames > 0;
       }
 
