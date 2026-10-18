@@ -6,6 +6,7 @@ import {
   libraryRemoteTrack,
   librarySyncState,
   providerAccount,
+  recording,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, LibrarySyncStatus, UserId } from "@dyad/domain";
@@ -25,6 +26,7 @@ import { Jobs, RetryLater } from "./jobs.ts";
 import { cacheProviderSources } from "./provider-cache.ts";
 import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
+import { touchGroups } from "./sync-counter.ts";
 import {
   accountOrigin,
   mirrorPlaylist,
@@ -139,6 +141,18 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
     const db = yield* Database;
     const seenAt = yield* Clock.currentTimeMillis;
     const provider = account.provider;
+    const known = new Map(
+      (yield* db
+        .select()
+        .from(libraryRemoteTrack)
+        .where(
+          and(
+            eq(libraryRemoteTrack.userId, account.userId),
+            eq(libraryRemoteTrack.provider, provider),
+          ),
+        )).map((row) => [row.recordingId, row]),
+    );
+    const changed: Array<string> = [];
 
     const recordingIds = yield* Effect.forEach(songs, (song) =>
       Effect.gen(function* () {
@@ -147,6 +161,13 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
         // `writeSource` binds the source to the same recording
         const externalId = song.source?.externalId ?? song.catalogId ?? song.remoteId;
         const recordingId = yield* boundRecordingId(provider, externalId);
+        // Clients load catalog data by recording, also for songs without a source
+        if (sourceId === null) {
+          yield* db
+            .insert(recording)
+            .values({ id: recordingId, origin: "provider", policyVersion: 1, revision: 0 })
+            .onConflictDoNothing();
+        }
 
         const row = {
           userId: account.userId,
@@ -161,6 +182,21 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
           rawDurationMs: song.durationMs,
           seenAt,
         };
+        // Clients get the remote tracks with the group of the recording
+        const old = known.get(recordingId);
+        if (
+          old === undefined ||
+          old.remoteId !== row.remoteId ||
+          old.catalogId !== row.catalogId ||
+          old.sourceId !== row.sourceId ||
+          old.rawTitle !== row.rawTitle ||
+          old.rawArtist !== row.rawArtist ||
+          old.rawAlbum !== row.rawAlbum ||
+          old.rawDurationMs !== row.rawDurationMs
+        ) {
+          changed.push(recordingId);
+        }
+
         yield* db
           .insert(libraryRemoteTrack)
           .values(row)
@@ -179,6 +215,7 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
     // `source` has no artwork and no ISRC. Cache rows of sources in `source` do not expire.
     const sources = songs.flatMap((song) => (song.source === null ? [] : [song.source]));
     yield* cacheProviderSources(provider, sources);
+    yield* touchGroups(changed);
 
     return recordingIds;
   });
@@ -468,9 +505,11 @@ export const forgetLibrary = (userId: string, provider: string) =>
     yield* db
       .delete(librarySyncState)
       .where(and(eq(librarySyncState.userId, userId), eq(librarySyncState.provider, provider)));
-    yield* db
+    const removed = yield* db
       .delete(libraryRemoteTrack)
-      .where(and(eq(libraryRemoteTrack.userId, userId), eq(libraryRemoteTrack.provider, provider)));
+      .where(and(eq(libraryRemoteTrack.userId, userId), eq(libraryRemoteTrack.provider, provider)))
+      .returning({ recordingId: libraryRemoteTrack.recordingId });
+    yield* touchGroups(removed.map((row) => row.recordingId));
     yield* db
       .delete(libraryRemotePlaylist)
       .where(

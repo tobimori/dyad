@@ -15,6 +15,7 @@ import {
 } from "./assertions.ts";
 import { isrcRecordingId, mergeId, musicbrainzRecordingId } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
+import { touchGroups } from "./sync-counter.ts";
 
 /** The MusicBrainz lookups that a plugin supplies. One plugin at most. */
 export class MusicBrainzLookups extends Context.Service<
@@ -371,20 +372,23 @@ export const resolveRoots = (recordingIds: Iterable<string>) =>
       .select({ id: recording.id, mergedIntoId: recording.mergedIntoId, status: recording.status })
       .from(recording)
       .where(inArray(recording.id, affected));
-    const roots = yield* Effect.forEach(rows, (row) =>
+    const resolved = yield* Effect.forEach(rows, (row) =>
       Effect.gen(function* () {
         const root = yield* rootOf(row.id);
         const mergedIntoId = root === row.id ? null : root;
         const status = mergedIntoId === null ? "active" : "merged";
 
-        if (row.mergedIntoId !== mergedIntoId || row.status !== status) {
+        const moved = row.mergedIntoId !== mergedIntoId || row.status !== status;
+        if (moved) {
           yield* db.update(recording).set({ mergedIntoId, status }).where(eq(recording.id, row.id));
         }
-        return root;
+        return { root, moved: moved ? [row.id, row.mergedIntoId ?? row.id] : [] };
       }),
     );
 
-    return new Set([...affected, ...roots]);
+    // The earlier and the new group of a moved recording change
+    yield* touchGroups(resolved.flatMap((result) => result.moved));
+    return new Set([...affected, ...resolved.map((result) => result.root)]);
   });
 
 /**

@@ -9,7 +9,6 @@ import {
 } from "@dyad/db";
 import { Database, ReplicaDatabase, orDieOnDatabaseError } from "@dyad/db/node";
 import {
-  CatalogPage,
   CurrentPrincipal,
   PlayEventRow,
   ReplicaId,
@@ -51,6 +50,7 @@ import {
   Stream,
 } from "effect";
 
+import { readCatalog } from "./catalog-sync.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 
 const pageLimit = 1000;
@@ -263,6 +263,12 @@ export const syncPull = (request: SyncPullRequest) =>
           }),
         );
 
+        const catalog = yield* readCatalog(
+          principal.userId,
+          reset ? null : request.catalogCursor,
+          request.wantRecordings,
+        );
+
         return new SyncPullResponse({
           workspaceId: WorkspaceId.make(identity.workspaceId),
           serverReplicaId: ReplicaId.make(identity.replicaId),
@@ -271,9 +277,12 @@ export const syncPull = (request: SyncPullRequest) =>
           readableScopes: readable,
           rows,
           cursors: pages.map((page) => page.cursor),
-          catalog: new CatalogPage({ groups: [], missing: [], cursor: request.catalogCursor }),
+          catalog: catalog.page,
           // A readable scope that the client does not follow yet needs another pull
-          more: pages.some((page) => page.more) || readable.some((scope) => !requested.has(scope)),
+          more:
+            pages.some((page) => page.more) ||
+            readable.some((scope) => !requested.has(scope)) ||
+            catalog.more,
         });
       }),
     );

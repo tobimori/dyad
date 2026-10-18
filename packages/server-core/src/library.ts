@@ -1,14 +1,16 @@
-import { libraryRoot, localFile } from "@dyad/db";
+import { libraryRoot, localFile, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { readAudioFile } from "@dyad/media/node";
 import type { AudioFile } from "@dyad/media/node";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path } from "effect";
 
 import { requestAnalysis } from "./audio-analysis.ts";
+import { boundRecordingId } from "./ids.ts";
 import { normV1 } from "./normalize.ts";
 import { tagIdentifiers, writeSource } from "./sources.ts";
 import type { Tags } from "./sources.ts";
+import { touchGroups } from "./sync-counter.ts";
 
 class Stat extends Data.Class<{ readonly size: number; readonly mtime: number }> {}
 
@@ -75,6 +77,8 @@ const importFile = (rootId: string, relativePath: string, file: AudioFile, stat:
           .insert(localFile)
           .values({ id: fileId, libraryRootId: rootId, path: relativePath, ...fileRow })
           .onConflictDoUpdate({ target: [localFile.libraryRootId, localFile.path], set: fileRow });
+        // Clients get the library keys of the file with the group of its recording
+        yield* touchGroups([yield* boundRecordingId("local", file.audioHash)]);
       }),
     );
   });
@@ -131,6 +135,16 @@ export const syncLibraryRoot = (rootPath: string, paths: ReadonlyArray<string>) 
     yield* Effect.forEach(missing, (row) => db.delete(localFile).where(eq(localFile.id, row.id)), {
       discard: true,
     });
+    const missingSources = yield* db
+      .select({ recordingId: source.recordingId })
+      .from(source)
+      .where(
+        inArray(
+          source.id,
+          missing.map((row) => row.sourceId),
+        ),
+      );
+    yield* touchGroups(missingSources.flatMap((row) => row.recordingId ?? []));
 
     if (results.includes("imported")) yield* requestAnalysis;
 

@@ -16,6 +16,7 @@ import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { usableProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef } from "./refs.ts";
+import { touchGroups } from "./sync-counter.ts";
 
 // Projection columns before replication assigns revisions
 const projection = { policyVersion: 1, revision: 0 };
@@ -73,30 +74,35 @@ export const writeSource = (
 
     yield* db.transaction((tx) =>
       Effect.gen(function* () {
-        yield* tx
-          .insert(recording)
-          .values({
-            id: recordingId,
-            origin: item.provider === "local" ? "local" : "provider",
-            ...projection,
-          })
-          .onConflictDoNothing();
-        yield* tx
-          .insert(source)
-          .values(sourceRow)
-          .onConflictDoUpdate({
-            target: source.id,
-            set: sourceRow,
-            setWhere: differs(source, Object.keys(sourceRow)),
-          });
-        yield* tx
-          .insert(sourceVariant)
-          .values(variantRow)
-          .onConflictDoUpdate({
-            target: sourceVariant.id,
-            set: variantRow,
-            setWhere: differs(sourceVariant, Object.keys(variantRow)),
-          });
+        const written = yield* Effect.all([
+          tx
+            .insert(recording)
+            .values({
+              id: recordingId,
+              origin: item.provider === "local" ? "local" : "provider",
+              ...projection,
+            })
+            .onConflictDoNothing()
+            .returning({ id: recording.id }),
+          tx
+            .insert(source)
+            .values(sourceRow)
+            .onConflictDoUpdate({
+              target: source.id,
+              set: sourceRow,
+              setWhere: differs(source, Object.keys(sourceRow)),
+            })
+            .returning({ id: source.id }),
+          tx
+            .insert(sourceVariant)
+            .values(variantRow)
+            .onConflictDoUpdate({
+              target: sourceVariant.id,
+              set: variantRow,
+              setWhere: differs(sourceVariant, Object.keys(variantRow)),
+            })
+            .returning({ id: sourceVariant.id }),
+        ]);
 
         // A file asserts as its source, so that copies of the same audio on two replicas agree
         const local = item.provider === "local";
@@ -121,6 +127,7 @@ export const writeSource = (
           }),
         );
         yield* updateRecording(recordingId, item.mbid);
+        if (written.some((rows) => rows.length > 0)) yield* touchGroups([recordingId]);
       }),
     );
 

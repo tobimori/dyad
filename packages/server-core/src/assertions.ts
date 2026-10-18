@@ -7,6 +7,7 @@ import { Data, Effect, Option, Schema } from "effect";
 
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
+import { touchGroups } from "./sync-counter.ts";
 
 const schemaVersion = 1;
 
@@ -237,32 +238,33 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
         ),
       );
 
-    yield* Effect.forEach(
-      rows,
-      (row) => {
-        const members = new Set(membersOf.get(row.id));
-        const own = assertions.filter((assertion) => members.has(assertion.entityId));
-        const resolved = {
-          title: resolveField(providers, own, "title", fields.title),
-          artistName:
-            resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
-          album: resolveField(providers, own, "album", fields.album),
-          durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
-          artworkUrl: resolveField(providers, own, "artwork_url", fields.artwork_url),
-          explicit: resolveField(providers, own, "explicit", fields.explicit),
-        };
+    const changed = yield* Effect.forEach(rows, (row) => {
+      const members = new Set(membersOf.get(row.id));
+      const own = assertions.filter((assertion) => members.has(assertion.entityId));
+      const resolved = {
+        title: resolveField(providers, own, "title", fields.title),
+        artistName:
+          resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
+        album: resolveField(providers, own, "album", fields.album),
+        durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
+        artworkUrl: resolveField(providers, own, "artwork_url", fields.artwork_url),
+        explicit: resolveField(providers, own, "explicit", fields.explicit),
+      };
 
-        const unchanged =
-          row.title === resolved.title &&
-          row.artistName === resolved.artistName &&
-          row.album === resolved.album &&
-          row.durationMs === resolved.durationMs &&
-          row.artworkUrl === resolved.artworkUrl &&
-          row.explicit === resolved.explicit;
-        if (unchanged) return Effect.void;
+      const unchanged =
+        row.title === resolved.title &&
+        row.artistName === resolved.artistName &&
+        row.album === resolved.album &&
+        row.durationMs === resolved.durationMs &&
+        row.artworkUrl === resolved.artworkUrl &&
+        row.explicit === resolved.explicit;
+      if (unchanged) return Effect.succeed([]);
 
-        return db.update(recording).set(resolved).where(eq(recording.id, row.id));
-      },
-      { discard: true },
-    );
+      return db
+        .update(recording)
+        .set(resolved)
+        .where(eq(recording.id, row.id))
+        .pipe(Effect.as([row.id]));
+    });
+    yield* touchGroups(changed.flat());
   });
