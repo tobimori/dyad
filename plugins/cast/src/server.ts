@@ -22,11 +22,17 @@ const formatsByMimeType = [
   [["audio/ogg"], new AudioFormat({ container: "ogg", codec: "vorbis" })],
 ] as const;
 
-const formatsOf = (mimeTypes: ReadonlyArray<string>) => {
+// Sonos 97.2 lists them, but plays them only with a `Content-Length`, which a converted stream lacks
+const sonosNeedsLength = new Set(["mp4", "ogg"]);
+
+const formatsOf = (device: UpnpDevice) => {
+  const listed = device.capabilities.mimeTypes;
   // The server can always transcode to FLAC
-  const [first = flac, ...rest] = formatsByMimeType.flatMap(([types, format]) =>
-    mimeTypes.length === 0 || types.some((type) => mimeTypes.includes(type)) ? [format] : [],
-  );
+  const [first = flac, ...rest] = formatsByMimeType.flatMap(([types, format]) => {
+    const lists = listed.length === 0 || types.some((type) => listed.includes(type));
+    const plays = device.kind !== "sonos" || !sonosNeedsLength.has(format.container);
+    return lists && plays ? [format] : [];
+  });
   return [first, ...rest] satisfies NonEmptyReadonlyArray<AudioFormat>;
 };
 
@@ -62,7 +68,7 @@ const openOutput = (device: UpnpDevice) =>
     );
 
     return new UrlOutput({
-      formats: formatsOf(device.capabilities.mimeTypes),
+      formats: formatsOf(device),
       localAddress,
       load: (media) =>
         target

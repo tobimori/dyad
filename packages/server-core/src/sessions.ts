@@ -862,6 +862,17 @@ const makeSession = (
           }
           start(following.id, 0, now, outputId);
         }),
+        // The output fails, not the entry, so the entry stays playable and the session waits
+        Match.when("stalled", () => {
+          if (received.entryId !== current) return;
+          setPlayback({
+            ...anchor,
+            state: "paused",
+            rate: 0,
+            revision: playback.revision + 1,
+            lost: true,
+          });
+        }),
         Match.exhaustive,
       );
     };

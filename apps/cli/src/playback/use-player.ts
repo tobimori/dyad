@@ -213,8 +213,8 @@ export function usePlayer(props: {
     repeat: playback.repeat,
     volume,
     error,
-    /** The output stopped answering */
-    lost: playback.lost && playback.state === "playing",
+    /** The output stopped answering, or a URL output did not start the stream */
+    lost: playback.lost && playback.state !== "stopped",
     /** `null` while connected */
     offline: offlineText(),
     position,

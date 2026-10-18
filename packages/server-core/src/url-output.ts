@@ -27,7 +27,8 @@ export class UrlDesired extends Data.Class<{
 export class UrlReport extends Data.Class<{
   readonly revision: number;
   readonly entryId: EntryId;
-  readonly state: "playing" | "paused" | "buffering" | "ended" | "failed";
+  /** `stalled`: the device did not start this entry nor the entry before it */
+  readonly state: "playing" | "paused" | "buffering" | "ended" | "failed" | "stalled";
   readonly positionMs: number;
 }> {}
 
@@ -88,6 +89,8 @@ export const driveUrlOutput = (options: {
         status: Option.none<UrlStatus>(),
         expected: Option.none<Expected>(),
         played: Option.none<Played>(),
+        // Start timeouts in a row
+        stalls: 0,
       };
 
       const report = (state: UrlReport["state"], entryId: EntryId, positionMs: number) =>
@@ -204,6 +207,7 @@ export const driveUrlOutput = (options: {
           const positionMs = loaded.startMs + status.positionMs;
           if (status.state === "playing") {
             local.played = Option.some(new Played({ positionMs, at: now }));
+            local.stalls = 0;
             return yield* report("playing", loaded.entryId, positionMs);
           }
           if (status.state !== "stopped")
@@ -212,7 +216,9 @@ export const driveUrlOutput = (options: {
           if (Option.isNone(local.played)) {
             if (now - loaded.loadedAt < startTimeoutMs) return;
             local.loaded = Option.none();
-            return yield* report("failed", loaded.entryId, loaded.startMs);
+            local.stalls += 1;
+            const state = local.stalls > 1 ? "stalled" : "failed";
+            return yield* report(state, loaded.entryId, loaded.startMs);
           }
 
           // A device resets its position when it stops, so the end is measured from the last report

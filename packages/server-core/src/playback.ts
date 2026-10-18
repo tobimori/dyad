@@ -32,7 +32,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { sourceAnalysis } from "./audio-analysis.ts";
 import { fromHex, hex, variantId } from "./ids.ts";
@@ -413,10 +413,13 @@ const StreamRequest = Schema.Struct({
   ),
 });
 
+// Not `GET`: the catch-all route of the web application would take `HEAD`, which Sonos sends
 export const streamRoute = HttpRouter.add(
-  "GET",
+  "*",
   "/stream/:sourceId",
   Effect.gen(function* () {
+    const { method } = yield* HttpServerRequest.HttpServerRequest;
+    if (method !== "GET" && method !== "HEAD") return HttpServerResponse.empty({ status: 405 });
     const request = yield* HttpRouter.schemaParams(StreamRequest);
     const grant = new StreamGrant({
       sourceId: request.sourceId,
@@ -452,6 +455,8 @@ export const streamRoute = HttpRouter.add(
     if (playable instanceof FilePlayback && choice.operation === "direct" && startMs === 0) {
       return yield* HttpServerResponse.file(playable.path, { contentType });
     }
+    // The headers of the stream, without a provider request
+    if (method === "HEAD") return HttpServerResponse.stream(Stream.empty, { contentType });
 
     // An MP3 or ADTS remux cannot cut inside a frame. FLAC encodes without loss, so FLAC output
     // with a start always encodes and starts at the exact sample.
