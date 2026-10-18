@@ -14,30 +14,32 @@ import type {
   ProviderError,
   ProviderTracklist,
 } from "@dyad/plugin";
-import { eventWords } from "@dyad/plugin/tracklist";
+import { artistNameKey, eventWords } from "@dyad/plugin/tracklist";
 import { HlcClock } from "@dyad/sync";
 import { and, asc, between, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { Clock, Context, Effect, Layer, Option, PubSub, Result, Schema, Stream } from "effect";
 
-import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
-import { assertionId, musicbrainzRecordingId } from "./ids.ts";
+import { fields, projectRecordings, resolvedValues } from "./assertions.ts";
+import { assertionId } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
-import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
+import {
+  MusicBrainzLookups,
+  assertMusicBrainzRecording,
+  musicbrainzLookupKey,
+  tracklistMatchKind,
+  waitForMusicBrainz,
+} from "./matching.ts";
 import { normalizeArtist, normalizeText } from "./normalize.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { touchGroups } from "./sync-counter.ts";
-import { artistNameKey } from "./version-titles.ts";
 
 const readKind = "tracklist.read";
-const matchKind = "tracklist.match";
 const field = "tracklist";
 const Entries = Schema.Array(TracklistEntry);
 
 // Descriptions and comments change, so a play reads the tracklists again after a day
 const rereadAfterMs = 24 * 60 * 60 * 1000;
-// MusicBrainz can answer 503 with `Retry-After: 0` when the whole server is busy (October 2026)
-const busyWaitSeconds = 60;
 // A tracklist site cannot beat a description or chapters, so the read does not ask it
 const goodConfidence = 0.8;
 // Uploads of one set differ by an intro or an outro
@@ -406,7 +408,12 @@ const queueMatch = (sourceId: string) =>
   Effect.gen(function* () {
     if (!(yield* MusicBrainzLookups).has(musicbrainzLookupKey)) return;
     if ((yield* unmatchedSegments(sourceId)).length === 0) return;
-    yield* (yield* Jobs).enqueue(matchKind, sourceId, { sourceId, after: -1 }, { replace: true });
+    yield* (yield* Jobs).enqueue(
+      tracklistMatchKind,
+      sourceId,
+      { sourceId, after: -1 },
+      { replace: true },
+    );
   });
 
 /**
@@ -493,32 +500,14 @@ const runRead = ({ sourceId, userId }: typeof ReadPayload.Type) =>
     yield* Effect.forEach(new Set([sourceId, ...changed]), queueMatch, { discard: true });
   });
 
-const matchedRecording = (candidate: MusicBrainzRecording) =>
+const writeMatch = (row: typeof sourceSegment.$inferSelect, candidate: MusicBrainzRecording) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const id = yield* musicbrainzRecordingId(candidate.mbid);
+    const id = yield* assertMusicBrainzRecording(candidate);
     yield* db
       .insert(recording)
       .values({ id, origin: "musicbrainz", policyVersion: 1, revision: 0 })
       .onConflictDoNothing();
-    yield* assertRecording(id, "musicbrainz", candidate.mbid, {
-      title: candidate.title,
-      artist_credit:
-        candidate.artist === null
-          ? null
-          : {
-              name: candidate.artist,
-              artists: candidate.artists.map((artist) => ({ id: artist.id, name: artist.name })),
-            },
-      duration_ms: candidate.durationMs,
-    });
-    return id;
-  });
-
-const writeMatch = (row: typeof sourceSegment.$inferSelect, candidate: MusicBrainzRecording) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const id = yield* matchedRecording(candidate);
     // A read during the lookup can have changed the segment
     yield* db
       .update(sourceSegment)
@@ -567,9 +556,9 @@ const runMatch = ({ sourceId, after }: typeof MatchPayload.Type) =>
         const error = found.failure;
         if (error.retryAfterSeconds === null) return yield* error;
 
-        const retryAfterSeconds = Math.max(error.retryAfterSeconds, busyWaitSeconds);
+        const retryAfterSeconds = yield* waitForMusicBrainz(error.retryAfterSeconds);
         yield* jobs.enqueue(
-          matchKind,
+          tracklistMatchKind,
           sourceId,
           { sourceId, after: row.position - 1 },
           { runAt: (yield* Clock.currentTimeMillis) + retryAfterSeconds * 1000 },
@@ -710,6 +699,6 @@ export const tracklistsLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const jobs = yield* Jobs;
     yield* jobs.register(readKind, ReadPayload, runRead);
-    yield* jobs.register(matchKind, MatchPayload, runMatch);
+    yield* jobs.register(tracklistMatchKind, MatchPayload, runMatch);
   }),
 );

@@ -251,17 +251,6 @@ export class ProviderPlaylists extends Data.Class<{
     remoteId: string,
     songs: ReadonlyArray<string>,
   ) => Effect.Effect<void, LibraryError>;
-  /** Makes `songs` all songs of the playlist, in this order */
-  readonly replace?: (
-    credentials: Credentials,
-    remoteId: string,
-    songs: ReadonlyArray<string>,
-  ) => Effect.Effect<void, LibraryError>;
-  /** Called when the user deletes the playlist in Dyad */
-  readonly delete?: (
-    credentials: Credentials,
-    remoteId: string,
-  ) => Effect.Effect<void, LibraryError>;
 }> {}
 
 /**

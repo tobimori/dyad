@@ -1,3 +1,4 @@
+import { artistNameKey, nameSeparator } from "@dyad/plugin/tracklist";
 import { Schema } from "effect";
 
 /** What a version changes. `parse:v1` assertions store these values, so do not rename them */
@@ -67,17 +68,6 @@ export class ParsedTitle extends Schema.Class<ParsedTitle>("ParsedTitle")({
   confidence: Schema.Finite,
 }) {}
 
-/**
- * Key that groups spellings of one name: `A.G. Cook`, `A. G. Cook` and `a.g cook` give `agcook`.
- * Many artists share a name, so a key only proposes candidates and never identifies an artist.
- */
-export const artistNameKey = (name: string) =>
-  name
-    .normalize("NFKD")
-    .replaceAll(/\p{M}/gu, "")
-    .toLowerCase()
-    .replaceAll(/[^\p{L}\p{N}]+/gu, "");
-
 /** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
 export const parserRevision = "parse:v5";
 
@@ -134,15 +124,6 @@ export const versionedTitle = (parsed: ParsedTitle) =>
       return version.kind === "cover" ? `(Cover by ${by})` : `(${by} ${kindLabels[version.kind]})`;
     }),
   ].join(" ");
-
-/** Key to compare base titles: `Drugs.` and `drugs` give `drugs` */
-export const titleKey = (title: string) =>
-  title
-    .normalize("NFKD")
-    .replaceAll(/\p{M}/gu, "")
-    .toLowerCase()
-    .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
 
 // Compound phrases come first. Only `maker` kinds take a credit (`X Remix`, not `katy perry sped
 // up`). Only `loose` words mark a version without brackets: `Money Flip` is a song title.
@@ -411,7 +392,6 @@ const dottedSeries =
 // separates only when nothing else does: `Charli XCX - So I / Party 4 U` is one title.
 const separator = /\s+(?:[-–—~|_:]|\/\/|\|\|)\s+|(?<=\S)[-–—]\s+/u;
 const slashSeparator = new RegExp(`${separator.source}|\\s+/\\s+`, "u");
-const nameSeparator = /\s*(?:,|&|\s(?:x|\u00d7|vs\.?|b2b|\+)\s)\s*/iu;
 const brackets = new Map([
   ["(", ")"],
   ["[", "]"],

@@ -27,6 +27,7 @@ const durationToleranceMs = 3000;
 const durationToleranceShare = 0.02;
 
 const lookupKind = "matching.isrc";
+export const tracklistMatchKind = "tracklist.match";
 // One MusicBrainz search finds 25 ISRCs
 const lookupBatchSize = 25;
 // MusicBrainz grows, so an ISRC without a match gets another chance
@@ -452,6 +453,43 @@ export const decideMerge = (
     );
   });
 
+/** Asserts the fields of a MusicBrainz recording and returns its ID */
+export const assertMusicBrainzRecording = (item: MusicBrainzRecording) =>
+  Effect.gen(function* () {
+    const id = yield* musicbrainzRecordingId(item.mbid);
+    yield* assertRecording(id, "musicbrainz", item.mbid, {
+      title: item.title,
+      artist_credit:
+        item.artist === null
+          ? null
+          : {
+              name: item.artist,
+              artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
+            },
+      album: null,
+      duration_ms: item.durationMs,
+      isrc: null,
+      artwork_url: null,
+      explicit: null,
+    });
+    return id;
+  });
+
+/**
+ * Delays all jobs that ask MusicBrainz, because the limit is per IP. Returns the wait in seconds.
+ */
+export const waitForMusicBrainz = (retryAfterSeconds: number) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const waitSeconds = Math.max(retryAfterSeconds, busyWaitSeconds);
+    const runAt = (yield* Clock.currentTimeMillis) + waitSeconds * 1000;
+    yield* db
+      .update(job)
+      .set({ nextRunAt: runAt })
+      .where(and(inArray(job.kind, [lookupKind, tracklistMatchKind]), lt(job.nextRunAt, runAt)));
+    return waitSeconds;
+  });
+
 const LookupPayload = Schema.Struct({ isrc: Schema.String });
 
 const writeLookup = (isrc: string, recordings: ReadonlyArray<MusicBrainzRecording>) =>
@@ -472,26 +510,7 @@ const writeLookup = (isrc: string, recordings: ReadonlyArray<MusicBrainzRecordin
     // Only an unambiguous recording gets assertions
     const assertedIds = yield* Effect.forEach(
       only === undefined || others.length > 0 ? [] : [only],
-      (item) =>
-        Effect.gen(function* () {
-          const id = yield* musicbrainzRecordingId(item.mbid);
-          yield* assertRecording(id, "musicbrainz", item.mbid, {
-            title: item.title,
-            artist_credit:
-              item.artist === null
-                ? null
-                : {
-                    name: item.artist,
-                    artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
-                  },
-            album: null,
-            duration_ms: item.durationMs,
-            isrc: null,
-            artwork_url: null,
-            explicit: null,
-          });
-          return id;
-        }),
+      assertMusicBrainzRecording,
     );
 
     const changed = yield* matchIsrc(isrc, null);
@@ -521,14 +540,7 @@ const runLookup = ({ isrc }: typeof LookupPayload.Type) =>
         (error) => error.retryAfterSeconds !== null,
         (error) =>
           Effect.gen(function* () {
-            const retryAfterSeconds = Math.max(error.retryAfterSeconds ?? 0, busyWaitSeconds);
-            const runAt = (yield* Clock.currentTimeMillis) + retryAfterSeconds * 1000;
-
-            // All lookups wait, because the limit is per IP
-            yield* db
-              .update(job)
-              .set({ nextRunAt: runAt })
-              .where(and(eq(job.kind, lookupKind), lt(job.nextRunAt, runAt)));
+            const retryAfterSeconds = yield* waitForMusicBrainz(error.retryAfterSeconds ?? 0);
             return yield* new RetryLater({ retryAfterSeconds });
           }),
       ),

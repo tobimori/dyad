@@ -1,7 +1,13 @@
 import { ProviderError, ProviderTracklist, TracklistEntry } from "@dyad/plugin";
 import { getJson, HttpStatusError } from "@dyad/plugin/http";
 import type { HttpRequestError, makePacer } from "@dyad/plugin/http";
-import { clockMs, eventWords, tracklistEntry } from "@dyad/plugin/tracklist";
+import {
+  artistNameKey,
+  clockMs,
+  eventWords,
+  nameSeparator,
+  tracklistEntry,
+} from "@dyad/plugin/tracklist";
 import { Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
@@ -41,19 +47,11 @@ const timedToleranceMs = 10_000;
 
 // `2016-05-01 - Disclosure @ Boiler Room Shanghai`, `201X - Four Tet - Essential Mix`
 const pageTitle = /^[\dX]{4}(?:-[\dX]{2}){0,2} - (.+?)(?: @ | - |$)/;
-const nameSeparator = /\s*(?:,|&|\s(?:x|\u00d7|vs\.?|b2b|\+)\s)\s*/iu;
 // `[05]`, `[105]`, `[61:20]`, `[1:45:50]`, and `[??]` or `[03?]` for an unknown time
 const cue = /^\[([\d?:]+)\]\s*/;
 
-const nameKey = (name: string) =>
-  name
-    .normalize("NFKD")
-    .replaceAll(/\p{M}/gu, "")
-    .toLowerCase()
-    .replaceAll(/[^\p{L}\p{N}]+/gu, "");
-
 const nameKeys = (names: ReadonlyArray<string>) =>
-  new Set(names.flatMap((name) => name.split(nameSeparator)).map(nameKey));
+  new Set(names.flatMap((name) => name.split(nameSeparator)).map(artistNameKey));
 
 const pageArtists = (title: string) => {
   const [, artists] = title.match(pageTitle) ?? [];

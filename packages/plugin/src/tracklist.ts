@@ -8,6 +8,19 @@ const trailing = new RegExp(`[${separators}]+$`);
 // Descriptions list profile links as `Instagram - https://…` or `Instagram - @name`
 const link = /https?:\/\/|www\.|@\w/i;
 
+/**
+ * Key that groups spellings of one name: `A.G. Cook`, `A. G. Cook` and `a.g cook` give `agcook`.
+ * Many artists share a name, so a key only proposes candidates and never identifies an artist.
+ */
+export const artistNameKey = (name: string) =>
+  name
+    .normalize("NFKD")
+    .replaceAll(/\p{M}/gu, "")
+    .toLowerCase()
+    .replaceAll(/[^\p{L}\p{N}]+/gu, "");
+
+export const nameSeparator = /\s*(?:,|&|\s(?:x|\u00d7|vs\.?|b2b|\+)\s)\s*/iu;
+
 /** Milliseconds of a clock time such as `1:02:03` or `12:34` */
 export const clockMs = (text: string) =>
   text.split(":").reduce((total, part) => total * 60 + Number(part), 0) * 1000;

@@ -69,8 +69,6 @@ class LinkedAccount extends Data.Class<{
   readonly credentials: Credentials;
 }> {}
 
-const StoredCredentials = Schema.Record(Schema.String, Schema.String);
-
 const loadAccount = (userId: string, provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -81,11 +79,8 @@ const loadAccount = (userId: string, provider: string) =>
       .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, provider)));
     if (row === undefined) return Option.none();
 
-    const values = yield* Schema.decodeUnknownEffect(StoredCredentials)(row.values).pipe(
-      Effect.orDie,
-    );
     return Option.some(
-      new LinkedAccount({ id: row.id, userId, provider, credentials: toCredentials(values) }),
+      new LinkedAccount({ id: row.id, userId, provider, credentials: toCredentials(row.values) }),
     );
   });
 
@@ -503,9 +498,8 @@ const withoutEach = <A>(
 };
 
 /**
- * Reads the provider playlist, then sends the edits in Dyad that the provider can make: the whole
- * list with `replace`, else the new songs with `add`. Entries without a source of the provider
- * stay only in Dyad.
+ * Reads the provider playlist, then sends the new songs in Dyad with `add`. Entries without a
+ * source of the provider stay only in Dyad.
  */
 const pushPlaylist = (
   account: LinkedAccount,
@@ -519,16 +513,6 @@ const pushPlaylist = (
     const playlistId = row.id;
     const link = row.link;
     if (link === null) return;
-
-    if (row.deleted) {
-      if (link.remoteId === null || writes.delete === undefined) return;
-      yield* writes.delete(account.credentials, link.remoteId);
-      const remoteId = link.remoteId;
-      return yield* writeIfLinked(
-        account,
-        db.delete(libraryRemotePlaylist).where(remotePlaylistOf(account, remoteId)),
-      );
-    }
 
     const remoteId =
       link.remoteId ??
@@ -603,14 +587,6 @@ const pushPlaylist = (
 
     const written = yield* Effect.gen(function* () {
       if (sameOrder(remote)) return remote;
-      if (writes.replace !== undefined) {
-        yield* writes.replace(
-          account.credentials,
-          remoteId,
-          wanted.map((song) => song.externalId),
-        );
-        return wanted.map((song) => song.recordingId);
-      }
       const added = withoutEach(wanted, remote.map(rootOf), (song) => song.root);
       if (writes.add === undefined || added.length === 0) return remote;
       yield* writes.add(
@@ -644,7 +620,7 @@ const runPlaylistPush = (payload: typeof PlaylistPushPayload.Type) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
     const row = yield* readRow("playlist", payload.playlistId);
-    if (row?.table !== "playlist" || row.link?.direction !== "two-way") return;
+    if (row?.table !== "playlist" || row.deleted || row.link?.direction !== "two-way") return;
 
     const providerId = row.link.provider;
     const provider = providers.get(providerId);
@@ -661,7 +637,7 @@ const runPlaylistPush = (payload: typeof PlaylistPushPayload.Type) =>
 
     const account = yield* loadAccount(row.ownerId, providerId);
     if (Option.isNone(account)) {
-      if (!row.deleted) yield* setError(`Link the ${provider.name} account to send the changes`);
+      yield* setError(`Link the ${provider.name} account to send the changes`);
       return;
     }
 
@@ -677,7 +653,7 @@ const runPlaylistPush = (payload: typeof PlaylistPushPayload.Type) =>
           yield* Effect.logWarning("Playlist write failed").pipe(
             Effect.annotateLogs({ provider: providerId, kind: error.kind, reason: error.reason }),
           );
-          if (!row.deleted) yield* setError(error.reason);
+          yield* setError(error.reason);
           if (error.kind === "account") return;
           if (error.kind === "failed") return yield* error;
           return yield* new RetryLater({

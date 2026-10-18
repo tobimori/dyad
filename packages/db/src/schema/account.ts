@@ -25,5 +25,5 @@ export const credential = sqliteTable("credential", {
   providerAccountId: text("provider_account_id")
     .primaryKey()
     .references(() => providerAccount.id, { onDelete: "cascade" }),
-  values: text("values", { mode: "json" }).notNull(),
+  values: text("values", { mode: "json" }).$type<Readonly<Record<string, string>>>().notNull(),
 });
