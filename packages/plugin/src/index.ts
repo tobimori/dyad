@@ -117,6 +117,22 @@ export class ProviderAudio extends Data.Class<{
   readonly decryptionKeys?: Redacted.Redacted<ReadonlyMap<string, string>>;
 }> {}
 
+/** One line of a tracklist, as the provider shows it */
+export class TracklistEntry extends Schema.Class<TracklistEntry>("TracklistEntry")({
+  /** `null` when the line has no time */
+  startMs: Schema.NullOr(Schema.Int),
+  /** `null` when the line does not separate artist and title */
+  artist: Schema.NullOr(Schema.String),
+  title: Schema.String,
+}) {}
+
+/** One tracklist candidate of a source, for example from the chapters of a video */
+export class ProviderTracklist extends Data.Class<{
+  /** The core adds it to the origin ref after `#`, for example `chapters` or `comment:<id>` */
+  readonly part: string;
+  readonly entries: ReadonlyArray<TracklistEntry>;
+}> {}
+
 /** Secrets of one linked account, by name. For a browser login, the names are the cookie names. */
 export type Credentials = ReadonlyMap<string, Redacted.Redacted<string>>;
 
@@ -242,6 +258,11 @@ export class Provider extends Data.Class<{
    * them as credits. `ProviderSource.uploader` names the account.
    */
   readonly uploads?: true;
+  /** The tracklists that the provider shows for a source, for example of a DJ set */
+  readonly tracklists?: (
+    externalId: string,
+    credentials: Credentials,
+  ) => Effect.Effect<ReadonlyArray<ProviderTracklist>, ProviderError>;
   /**
    * Lets devices keep files of the provider's audio. A device deletes them when it does not check
    * in with the server for `leaseDays` (`null`: never). Without it, devices cannot download.

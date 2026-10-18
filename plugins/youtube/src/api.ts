@@ -1,0 +1,384 @@
+import {
+  CreditedArtist,
+  ProviderAudio,
+  ProviderError,
+  ProviderSource,
+  ProviderTracklist,
+} from "@dyad/plugin";
+import { getJson, HttpStatusError, makeScrapedToken, send } from "@dyad/plugin/http";
+import type { HttpRequestError } from "@dyad/plugin/http";
+import { Effect, Option, Redacted, Schema, Stream } from "effect";
+import { HttpClient, HttpClientRequest } from "effect/http";
+
+import { clockMs, parseTracklist, tracklistEntry } from "./tracklist.ts";
+import { clusterOffset } from "./webm.ts";
+
+export const provider = "youtube";
+
+const api = "https://www.youtube.com/youtubei/v1";
+
+const web = { clientName: "WEB", clientVersion: "2.20260623.01.00", hl: "en", gl: "US" };
+
+// yt-dlp 2026.08.19: the only client whose audio URLs need no PO token and no player JavaScript.
+// `ANDROID_VR` now needs a PO token.
+const visionos = {
+  clientName: "VISIONOS",
+  clientVersion: "1.02",
+  deviceMake: "Apple",
+  deviceModel: "RealityDevice17,1",
+  osName: "visionOS",
+  osVersion: "26.5.23O471",
+  hl: "en",
+  gl: "US",
+};
+
+// The `params` of the web client's "Type: Video" search filter
+const videosOnly = "EgIQAQ%3D%3D";
+
+const Runs = Schema.Struct({ runs: Schema.Array(Schema.Struct({ text: Schema.String })) });
+
+const VideoRenderer = Schema.Struct({
+  videoId: Schema.String,
+  title: Runs,
+  ownerText: Schema.Struct({
+    runs: Schema.Array(
+      Schema.Struct({
+        text: Schema.String,
+        // Missing for a video of several channels
+        navigationEndpoint: Schema.optional(
+          Schema.Struct({
+            browseEndpoint: Schema.optional(Schema.Struct({ browseId: Schema.String })),
+          }),
+        ),
+      }),
+    ),
+  }),
+  // Missing for live and upcoming streams
+  lengthText: Schema.optional(Schema.Struct({ simpleText: Schema.String })),
+  thumbnail: Schema.Struct({
+    thumbnails: Schema.Array(Schema.Struct({ url: Schema.String, width: Schema.Finite })),
+  }),
+});
+
+const SearchResults = Schema.Struct({
+  contents: Schema.Struct({
+    twoColumnSearchResultsRenderer: Schema.Struct({
+      primaryContents: Schema.Struct({
+        sectionListRenderer: Schema.Struct({
+          contents: Schema.Array(
+            Schema.Struct({
+              itemSectionRenderer: Schema.optional(
+                Schema.Struct({
+                  contents: Schema.Array(
+                    Schema.Struct({ videoRenderer: Schema.optional(VideoRenderer) }),
+                  ),
+                }),
+              ),
+            }),
+          ),
+        }),
+      }),
+    }),
+  }),
+});
+
+const VisitorData = Schema.Struct({
+  responseContext: Schema.Struct({ visitorData: Schema.String }),
+});
+
+const Range = Schema.Struct({ start: Schema.FiniteFromString, end: Schema.FiniteFromString });
+
+// Other formats, for example video or AAC, do not decode as this schema and are skipped
+const OpusFormat = Schema.Struct({
+  url: Schema.String,
+  mimeType: Schema.String.check(Schema.isStartingWith('audio/webm; codecs="opus"')),
+  bitrate: Schema.Int,
+  contentLength: Schema.FiniteFromString,
+  indexRange: Range,
+  // A copy with dynamic range compression
+  isDrc: Schema.optional(Schema.Boolean),
+  // Dubbed videos have one audio track per language
+  audioTrack: Schema.optional(Schema.Struct({ audioIsDefault: Schema.Boolean })),
+});
+
+const Player = Schema.Struct({
+  playabilityStatus: Schema.Struct({
+    status: Schema.String,
+    reason: Schema.optional(Schema.String),
+  }),
+  videoDetails: Schema.optional(Schema.Struct({ shortDescription: Schema.String })),
+  streamingData: Schema.optional(Schema.Struct({ adaptiveFormats: Schema.Array(Schema.Unknown) })),
+});
+
+const Chapter = Schema.Struct({
+  chapterRenderer: Schema.Struct({
+    title: Schema.Struct({ simpleText: Schema.String }),
+    timeRangeStartMillis: Schema.Int,
+  }),
+});
+
+// Each level is missing for some videos, for example a video without chapters
+const Next = Schema.Struct({
+  playerOverlays: Schema.optional(
+    Schema.Struct({
+      playerOverlayRenderer: Schema.optional(
+        Schema.Struct({
+          decoratedPlayerBarRenderer: Schema.optional(
+            Schema.Struct({
+              decoratedPlayerBarRenderer: Schema.optional(
+                Schema.Struct({
+                  playerBar: Schema.optional(
+                    Schema.Struct({
+                      multiMarkersPlayerBarRenderer: Schema.optional(
+                        Schema.Struct({
+                          markersMap: Schema.optional(
+                            Schema.Array(
+                              Schema.Struct({
+                                key: Schema.String,
+                                value: Schema.Struct({
+                                  chapters: Schema.optional(Schema.Array(Chapter)),
+                                }),
+                              }),
+                            ),
+                          ),
+                        }),
+                      ),
+                    }),
+                  ),
+                }),
+              ),
+            }),
+          ),
+        }),
+      ),
+    }),
+  ),
+});
+
+const ExternalId = Schema.String.check(Schema.isPattern(/^[\w-]{11}$/));
+
+const toProviderError = (error: HttpStatusError | HttpRequestError) =>
+  new ProviderError({
+    reason:
+      error instanceof HttpStatusError ? `YouTube answered status ${error.status}` : error.reason,
+  });
+
+const innertube = <S extends Schema.Constraint>(
+  endpoint: string,
+  client: typeof web | (typeof visionos & { readonly visitorData: string }),
+  fields: {
+    readonly videoId?: string;
+    readonly query?: string;
+    readonly params?: string;
+    readonly contentCheckOk?: boolean;
+    readonly racyCheckOk?: boolean;
+  },
+  schema: S,
+) =>
+  getJson(
+    HttpClientRequest.post(`${api}/${endpoint}`).pipe(
+      HttpClientRequest.setUrlParam("prettyPrint", "false"),
+      HttpClientRequest.bodyJsonUnsafe({ context: { client }, ...fields }),
+    ),
+    schema,
+  );
+
+/**
+ * An anonymous visitor ID. Without one, `/player` asks to sign in. It belongs to no account, so
+ * all users share it for an hour.
+ */
+export const visitorCache = makeScrapedToken(
+  innertube("visitor_id", web, {}, VisitorData).pipe(
+    Effect.map((response) => Redacted.make(response.responseContext.visitorData)),
+    Effect.mapError(toProviderError),
+  ),
+  { timeToLive: "1 hour", rejectedStatuses: [] },
+);
+
+const decodeVideoId = (externalId: string) =>
+  Schema.decodeEffect(ExternalId)(externalId).pipe(
+    Effect.mapError(() => new ProviderError({ reason: "Invalid video ID" })),
+  );
+
+const readPlayer = (withVisitor: Effect.Success<typeof visitorCache>, videoId: string) =>
+  Effect.gen(function* () {
+    const player = yield* withVisitor((visitorData) =>
+      innertube(
+        "player",
+        { ...visionos, visitorData: Redacted.value(visitorData) },
+        { videoId, contentCheckOk: true, racyCheckOk: true },
+        Player,
+      ),
+    ).pipe(
+      Effect.catchTags({
+        HttpStatusError: (error) => Effect.fail(toProviderError(error)),
+        HttpRequestError: (error) => Effect.fail(toProviderError(error)),
+      }),
+    );
+
+    if (player.playabilityStatus.status !== "OK") {
+      return yield* new ProviderError({
+        reason: `YouTube does not play the video: ${player.playabilityStatus.reason ?? player.playabilityStatus.status}`,
+      });
+    }
+    return player;
+  });
+
+// Itag 251, which nearly every video has, is Opus of up to 160 kbit/s
+const opusBitrate = 160_000;
+
+/** Videos in YouTube's order of relevance, without live streams */
+export const searchVideos = (query: string) =>
+  Effect.gen(function* () {
+    const response = yield* innertube(
+      "search",
+      web,
+      { query, params: videosOnly },
+      SearchResults,
+    ).pipe(Effect.mapError(toProviderError));
+
+    return response.contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents.flatMap(
+      (section) =>
+        (section.itemSectionRenderer?.contents ?? []).flatMap(({ videoRenderer: video }) => {
+          if (video === undefined || video.lengthText === undefined) return [];
+
+          const channel = video.ownerText.runs[0];
+          const channelId = channel?.navigationEndpoint?.browseEndpoint?.browseId;
+          const artwork = video.thumbnail.thumbnails.toSorted((a, b) => b.width - a.width)[0];
+          return [
+            new ProviderSource({
+              externalId: video.videoId,
+              title: video.title.runs.map((run) => run.text).join(""),
+              // YouTube makes `<Artist> - Topic` channels for the releases of an artist
+              artist: channel?.text.replace(/ - Topic$/, "") ?? null,
+              album: null,
+              durationMs: clockMs(video.lengthText.simpleText),
+              isrc: null,
+              container: "webm",
+              codec: "opus",
+              lossless: false,
+              encrypted: false,
+              artworkUrl: artwork?.url ?? null,
+              artists: [],
+              explicit: null,
+              bitrate: opusBitrate,
+              uploader:
+                channel === undefined || channelId === undefined
+                  ? null
+                  : new CreditedArtist({ id: channelId, name: channel.text }),
+              albumId: null,
+            }),
+          ];
+        }),
+    );
+  });
+
+// A request without a bounded range (October 2026) is throttled to about twice real time
+const chunkBytes = 10 * 1024 * 1024;
+
+const readChunks = (url: string, start: number, end: number) =>
+  Stream.range(0, Math.ceil((end - start) / chunkBytes) - 1).pipe(
+    Stream.flatMap((index) => {
+      const from = start + index * chunkBytes;
+      const to = Math.min(end, from + chunkBytes) - 1;
+      return Stream.unwrap(
+        Effect.map(
+          send(HttpClientRequest.get(`${url}&range=${from}-${to}`)),
+          (response) => response.stream,
+        ),
+      );
+    }),
+  );
+
+/** Streams the Opus audio of a video in its WebM file */
+export const resolveVideo = (
+  withVisitor: Effect.Success<typeof visitorCache>,
+  externalId: string,
+) =>
+  Effect.gen(function* () {
+    const player = yield* readPlayer(withVisitor, yield* decodeVideoId(externalId));
+
+    const format = (player.streamingData?.adaptiveFormats ?? [])
+      .flatMap((item) => Option.toArray(Schema.decodeUnknownOption(OpusFormat)(item)))
+      .filter((item) => item.isDrc !== true && item.audioTrack?.audioIsDefault !== false)
+      .toSorted((a, b) => b.bitrate - a.bitrate)[0];
+    if (format === undefined) {
+      return yield* new ProviderError({ reason: "The video has no Opus audio" });
+    }
+
+    const services = yield* Effect.context<HttpClient.HttpClient>();
+    // Errors contain the signed URL
+    const safe = <E>(stream: Stream.Stream<Uint8Array, E, HttpClient.HttpClient>) =>
+      stream.pipe(
+        Stream.mapError(
+          (error) =>
+            new ProviderError({
+              reason:
+                error instanceof HttpStatusError
+                  ? `YouTube answered status ${error.status}`
+                  : "Cannot read the audio stream",
+            }),
+        ),
+        Stream.provideContext(services),
+      );
+
+    // The head is the WebM header and the `Cues` index. A start skips to the cluster before it.
+    const bytesFrom = (startMs: number) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const response = yield* send(
+            HttpClientRequest.get(`${format.url}&range=0-${format.indexRange.end}`),
+          );
+          const head = new Uint8Array(yield* response.arrayBuffer);
+          const offset = yield* Effect.try(() =>
+            clusterOffset(head, format.indexRange.start, startMs),
+          );
+          return Stream.concat(
+            Stream.succeed(head.subarray(0, format.indexRange.start)),
+            readChunks(format.url, offset, format.contentLength),
+          );
+        }),
+      ).pipe(safe);
+
+    return new ProviderAudio({
+      bytes: readChunks(format.url, 0, format.contentLength).pipe(safe),
+      bytesFrom,
+    });
+  });
+
+// YouTube makes chapters from the description. `AUTO_CHAPTERS` are topics, not tracks.
+const descriptionChapters = "DESCRIPTION_CHAPTERS";
+
+// YouTube needs three chapters too; fewer times in a description are rarely a tracklist
+const minimumEntries = 3;
+
+/** The chapters and the timed lines of the description */
+export const videoTracklists = (
+  withVisitor: Effect.Success<typeof visitorCache>,
+  externalId: string,
+) =>
+  Effect.gen(function* () {
+    const videoId = yield* decodeVideoId(externalId);
+    const [player, next] = yield* Effect.all(
+      [
+        readPlayer(withVisitor, videoId),
+        innertube("next", web, { videoId }, Next).pipe(Effect.mapError(toProviderError)),
+      ],
+      { concurrency: 2 },
+    );
+
+    const chapters = (
+      next.playerOverlays?.playerOverlayRenderer?.decoratedPlayerBarRenderer?.decoratedPlayerBarRenderer?.playerBar?.multiMarkersPlayerBarRenderer?.markersMap?.find(
+        (marker) => marker.key === descriptionChapters,
+      )?.value.chapters ?? []
+    ).flatMap(({ chapterRenderer: chapter }) => {
+      const entry = tracklistEntry(chapter.title.simpleText, chapter.timeRangeStartMillis);
+      return entry === undefined ? [] : [entry];
+    });
+    const description = parseTracklist(player.videoDetails?.shortDescription ?? "");
+
+    return [
+      new ProviderTracklist({ part: "chapters", entries: chapters }),
+      new ProviderTracklist({ part: "description", entries: description }),
+    ].filter((tracklist) => tracklist.entries.length >= minimumEntries);
+  });

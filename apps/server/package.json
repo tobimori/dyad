@@ -22,6 +22,7 @@
     "@dyad/plugin-local-files": "workspace:*",
     "@dyad/plugin-musicbrainz": "workspace:*",
     "@dyad/plugin-soundcloud": "workspace:*",
+    "@dyad/plugin-youtube": "workspace:*",
     "@dyad/server-core": "workspace:*",
     "@dyad/sync": "workspace:*",
     "@dyad/web": "workspace:*",

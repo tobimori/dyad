@@ -11,6 +11,7 @@ import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { musicbrainzPlugin } from "@dyad/plugin-musicbrainz/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
+import { youtubePlugin } from "@dyad/plugin-youtube/server";
 import {
   MediaCacheConfig,
   ServerIdentity,
@@ -38,6 +39,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   deezerPlugin,
   musicbrainzPlugin,
   soundcloudPlugin,
+  youtubePlugin,
 ];
 
 export const serverLayer = Layer.unwrap(
