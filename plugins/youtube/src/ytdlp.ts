@@ -64,6 +64,7 @@ const hourMs = 60 * 60 * 1000;
 // Enough for the head of most files. A larger `Cues` needs a second read.
 const headBytes = 256 * 1024;
 
+const forbidden = "YouTube answered status 403";
 const signInAgain = "Sign in to YouTube again";
 const blocked = "YouTube blocks this server and the YouTube account for now";
 
@@ -247,33 +248,83 @@ export const ytdlpResolver = Effect.gen(function* () {
       ? Effect.fail(new ProviderError({ reason: "YouTube blocks this server for now" }))
       : Cache.get(answers, videoId).pipe(Effect.provideService(Cookies, credentials));
 
+  // yt-dlp nightly 2026.10.10: URLs of the embedded client sometimes answer 403 before the first
+  // byte, and the URLs of a new run play
+  const playable = (
+    videoId: string,
+    credentials: Credentials,
+    kind: "audio" | "video",
+    formatOf: (
+      answer: Effect.Success<ReturnType<typeof answerOf>>,
+    ) => { readonly url: string; readonly filesize: number } | undefined,
+  ) =>
+    Effect.gen(function* () {
+      const context = yield* Effect.context<HttpClient.HttpClient>();
+      const open = (answer: Effect.Success<ReturnType<typeof answerOf>>) => {
+        const format = formatOf(answer);
+        return format === undefined
+          ? Effect.fail(new ProviderError({ reason: `The video has no ${kind} stream` }))
+          : webmStream(format.url, format.filesize, kind);
+      };
+      const first = yield* answerOf(videoId, credentials).pipe(Effect.flatMap(open));
+      const fresh = Cache.invalidate(answers, videoId).pipe(
+        Effect.andThen(answerOf(videoId, credentials)),
+        Effect.flatMap(open),
+        Effect.provideContext(context),
+      );
+
+      const retried = (
+        bytes: Stream.Stream<Uint8Array, ProviderError>,
+        again: (stream: typeof first) => Stream.Stream<Uint8Array, ProviderError>,
+      ) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const started = yield* Ref.make(false);
+            return bytes.pipe(
+              Stream.tap(() => Ref.set(started, true)),
+              Stream.catchIf(
+                (error) => error.reason === forbidden,
+                (error) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      if (yield* Ref.get(started)) return Stream.fail(error);
+                      yield* Effect.logWarning("YouTube refused the URLs of yt-dlp. Asking again.");
+                      return again(yield* fresh);
+                    }),
+                  ),
+              ),
+            );
+          }),
+        );
+
+      return {
+        bytes: retried(first.bytes, (stream) => stream.bytes),
+        bytesFrom: (startMs: number) =>
+          retried(first.bytesFrom(startMs), (stream) => stream.bytesFrom(startMs)),
+      };
+    });
+
   return {
     /** The Opus audio, chosen like `resolveAudio` */
     audio: (videoId: string, credentials: Credentials) =>
-      Effect.gen(function* () {
-        const format = (yield* answerOf(videoId, credentials)).audio
-          .filter((item) => !item.format_id.includes("drc"))
-          .toSorted(
-            (a, b) =>
-              (b.language_preference ?? -1) - (a.language_preference ?? -1) || b.tbr - a.tbr,
-          )[0];
-        if (format === undefined) {
-          return yield* new ProviderError({ reason: "The video has no Opus audio" });
-        }
-        return new ProviderAudio(yield* webmStream(format.url, format.filesize, "audio"));
-      }),
+      playable(
+        videoId,
+        credentials,
+        "audio",
+        (answer) =>
+          answer.audio
+            .filter((item) => !item.format_id.includes("drc"))
+            .toSorted(
+              (a, b) =>
+                (b.language_preference ?? -1) - (a.language_preference ?? -1) || b.tbr - a.tbr,
+            )[0],
+      ).pipe(Effect.map((stream) => new ProviderAudio(stream))),
     /** The VP9 video, chosen like `resolveVideo` */
     video: (videoId: string, credentials: Credentials, maxHeight: number) =>
-      Effect.gen(function* () {
-        const formats = (yield* answerOf(videoId, credentials)).video.toSorted(
-          (a, b) => b.height - a.height || a.tbr - b.tbr,
-        );
-        const format = formats.find((item) => item.height <= maxHeight) ?? formats.at(-1);
-        if (format === undefined) {
-          return yield* new ProviderError({ reason: "The video has no VP9 stream" });
-        }
-        return new ProviderVideo(yield* webmStream(format.url, format.filesize, "video"));
-      }),
+      playable(videoId, credentials, "video", (answer) => {
+        const formats = answer.video.toSorted((a, b) => b.height - a.height || a.tbr - b.tbr);
+        return formats.find((item) => item.height <= maxHeight) ?? formats.at(-1);
+      }).pipe(Effect.map((stream) => new ProviderVideo(stream))),
     /** A new sign-in may end the rest of the account */
     resume: Ref.set(pausedUntil, 0),
   };
