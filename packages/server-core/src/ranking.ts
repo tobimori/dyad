@@ -14,6 +14,8 @@ export class Candidate extends Data.Class<{
   /** A file on this replica */
   readonly local: boolean;
   readonly lossless: boolean;
+  /** From a provider with `uploads`, where a music video adds an intro or an outro */
+  readonly upload: boolean;
 }> {}
 
 /** One play of the user who searches */
@@ -189,8 +191,8 @@ const scoreCandidate = (
   return new Score({ ...parts, total });
 };
 
-// Same ISRC, else same title and artist with durations within 3 % where both are known. Uploads
-// add seconds of silence or noise, and a new release can give the recording a new ISRC.
+// Same ISRC, else same title and artist with durations within 5 % where both are known, or an
+// upload up to 30 s longer. A new release can give the recording a new ISRC.
 const sameRecording = (a: Candidate, b: Candidate) => {
   if (a.isrc !== null && a.isrc === b.isrc) return true;
 
@@ -200,7 +202,11 @@ const sameRecording = (a: Candidate, b: Candidate) => {
   const durationA = a.summary.durationMs;
   const durationB = b.summary.durationMs;
   if (durationA === null || durationB === null) return true;
-  return Math.abs(durationA - durationB) <= Math.max(2000, 0.03 * Math.max(durationA, durationB));
+  if (Math.abs(durationA - durationB) <= Math.max(2000, 0.05 * Math.max(durationA, durationB))) {
+    return true;
+  }
+  const longer = durationA < durationB ? b : a;
+  return longer.upload && Math.abs(durationA - durationB) <= 30_000;
 };
 
 /**

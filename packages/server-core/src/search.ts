@@ -41,6 +41,7 @@ const searchLocalSources = (query: string, userId: UserId) =>
         position,
         local: row.tags !== null,
         lossless: row.variant.lossless,
+        upload: false,
       });
     });
   });
@@ -56,6 +57,7 @@ const searchProvider = (
   id: string,
   name: string,
   search: NonNullable<Provider["search"]>,
+  upload: boolean,
   credentials: Credentials,
   query: string,
 ) =>
@@ -87,6 +89,7 @@ const searchProvider = (
           position,
           local: false,
           lossless: item.source.lossless,
+          upload,
         }),
     );
     return new Answer({ candidates, hits: [], unavailable: [] });
@@ -199,7 +202,8 @@ export const search = (query: string) =>
       const providerAnswers = [...providers].flatMap(([id, { provider, credentials }]) => {
         if (provider.search === undefined) return [];
 
-        return [searchProvider(id, provider.name, provider.search, credentials, query)];
+        const upload = provider.uploads === true;
+        return [searchProvider(id, provider.name, provider.search, upload, credentials, query)];
       });
       const popularityAnswers = [...popularities].map(([name, popularity]) =>
         fetchPopularity(name, popularity, query).pipe(
