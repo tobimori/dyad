@@ -4,7 +4,12 @@ import { Data, Effect, Exit, Scope, Semaphore } from "effect";
 
 import { entryLevel, peakCeiling } from "./loudness.ts";
 import type { Loudness } from "./loudness.ts";
+import { planTransition } from "./planner.ts";
+import type { DjAnalysis, DjStyle, Transition } from "./planner.ts";
 import { Resampler, timelineRate } from "./resampler.ts";
+import { openStretcher } from "./stretch.ts";
+import { echoPeak, TransitionEffects, transitionGain } from "./styles.ts";
+import { entryAt, TempoMap, Warp } from "./warp.ts";
 
 /** One queue entry. Its bytes can still arrive while it plays. */
 export class Entry extends Data.Class<{
@@ -18,6 +23,8 @@ export class Entry extends Data.Class<{
   readonly complete: () => boolean;
   /** Without it, the entry plays 8 dB quieter */
   readonly loudness: Loudness | undefined;
+  /** Without it, DJ mode joins the entry by crossfade */
+  readonly dj?: DjAnalysis | undefined;
 }> {}
 
 export class EntryError extends Data.TaggedError("EntryError")<{
@@ -33,7 +40,10 @@ export class Span extends Data.Class<{
   readonly frames: number;
   /** Entry position of the first frame, in timeline frames */
   readonly position: number;
-  /** The entry that plays now. In a crossfade, the next entry is current from the middle on. */
+  /**
+   * The entry that plays now. In a crossfade or a DJ transition, the next entry is current from
+   * the middle on.
+   */
   readonly current: boolean;
 }> {}
 
@@ -58,6 +68,12 @@ export class Renderer extends Data.Class<{
   readonly seek: (position: number) => Effect.Effect<void>;
   /** 0 turns crossfade off. A crossfade that plays already continues. */
   readonly setCrossfade: (seconds: number) => Effect.Effect<void>;
+  /**
+   * Turns DJ mode on with a style, or off with `undefined`. Entries with `dj` analysis then join
+   * by beat-matched transitions, other entries by crossfade. A transition that plays already
+   * continues.
+   */
+  readonly setDj: (style: DjStyle | undefined) => Effect.Effect<void>;
   /** Renders the next `frames` timeline frames */
   readonly render: (frames: number) => Effect.Effect<Block, EntryError>;
 }> {}
@@ -67,6 +83,13 @@ export const defaultCrossfadeSeconds = 6;
 
 // Fade-out of an entry that a skip or a seek stops while another entry plays
 const cutFrames = 0.1 * timelineRate;
+
+// Room for filter overshoot in a DJ transition
+const djHeadroom = 10 ** (1 / 20);
+
+// signalsmith-stretch 1.3.2 raises the true peak of loud masters by up to 4.4 dB at ±6 %
+const stretchHeadroom = 10 ** (5 / 20);
+const stretchEaseFrames = 4 * timelineRate;
 
 // An entry whose source feeds a lane
 class Track extends Data.Class<{
@@ -80,12 +103,24 @@ class Track extends Data.Class<{
   readonly peak: number;
 }> {}
 
-// The gain goes along an equal-power curve over `frames` lane output frames from `from`
-class Fade extends Data.Class<{ readonly from: number; readonly frames: number }> {}
+// One side of a DJ transition. The effects keep the filter and echo state.
+class DjFade extends Data.Class<{
+  readonly transition: Transition;
+  readonly effects: TransitionEffects;
+}> {}
 
-// Entries of one sample rate play through one resampler, so that their joins stay gapless
+// The gain goes along an equal-power curve, or a DJ style, over `frames` lane frames from `from`
+class Fade extends Data.Class<{
+  readonly from: number;
+  readonly frames: number;
+  readonly dj?: DjFade;
+}> {}
+
+// Entries of one sample rate play through one resampler, so that their joins stay gapless. Lane
+// frames are the resampler's output frames, except while a warp stretches the lane.
 class Lane extends Data.Class<{
   readonly resampler: Resampler;
+  readonly warp: Warp | undefined;
   /** The first track plays now; the last track feeds the resampler */
   readonly tracks: Array<Track>;
   readonly fadeIn: Fade | undefined;
@@ -97,9 +132,11 @@ class Lane extends Data.Class<{
 // The next lane. It opens when the head lane reaches output frame `at`, or at once without `at`.
 class Start extends Data.Class<{
   readonly entry: Entry;
+  /** The first lane frame. Without `tempo`, it is the entry position. */
   readonly position: number;
   readonly at: number | undefined;
   readonly fadeIn: Fade | undefined;
+  readonly tempo?: TempoMap;
 }> {}
 
 const readInfo = (entry: Entry) => {
@@ -128,38 +165,119 @@ const progress = (fade: Fade, frame: number) =>
 
 const middle = (fade: Fade) => Math.ceil(fade.from + fade.frames / 2);
 
+const fadeGain = (fade: Fade | undefined, incoming: boolean, frame: number) => {
+  if (fade === undefined) return 1;
+  const done = progress(fade, frame);
+  if (fade.dj !== undefined) return transitionGain(fade.dj.transition, incoming, done);
+  return incoming ? Math.sin((Math.PI / 2) * done) : Math.cos((Math.PI / 2) * done);
+};
+
 const laneGain = (lane: Lane, frame: number) =>
-  (lane.fadeIn === undefined ? 1 : Math.sin((Math.PI / 2) * progress(lane.fadeIn, frame))) *
-  (lane.fadeOut === undefined ? 1 : Math.cos((Math.PI / 2) * progress(lane.fadeOut, frame)));
+  fadeGain(lane.fadeIn, true, frame) * fadeGain(lane.fadeOut, false, frame);
+
+// Stretched audio keeps its headroom until the lane plays only direct audio, then it eases out
+const stretchPeak = (lane: Lane, frame: number) => {
+  if (lane.warp === undefined) return 1;
+  const direct = (frame - lane.warp.directFrom) / stretchEaseFrames;
+  return 1 + (stretchHeadroom - 1) * (1 - Math.min(1, Math.max(0, direct)));
+};
+
+// The lane's share of the true peak bound. DJ effects get headroom that eases in and out.
+const lanePeak = (lane: Lane, frame: number) => {
+  const { fadeIn, fadeOut } = lane;
+  const gain = laneGain(lane, frame) * stretchPeak(lane, frame);
+  if (fadeOut?.dj !== undefined && frame >= fadeOut.from) {
+    const done = progress(fadeOut, frame);
+    const ease = Math.min(1, done * 16);
+    return gain * (1 + (djHeadroom - 1) * ease) + echoPeak(fadeOut.dj.transition, done);
+  }
+  if (fadeIn?.dj !== undefined) {
+    const ease = Math.min(1, (1 - progress(fadeIn, frame)) * 16);
+    return gain * (1 + (djHeadroom - 1) * ease);
+  }
+  return gain;
+};
+
+const warping = (lane: Lane) => lane.warp !== undefined && !lane.warp.done;
+
+// The next lane frame
+const clock = (lane: Lane) =>
+  lane.warp === undefined || lane.warp.done ? lane.resampler.output : lane.warp.output;
+
+const available = (lane: Lane) =>
+  lane.warp === undefined ? lane.resampler.available : lane.warp.available(lane.resampler);
+
+const pull = (lane: Lane, out: Float32Array, frames: number) =>
+  lane.warp === undefined
+    ? lane.resampler.pull(out, 0, frames)
+    : lane.warp.pull(lane.resampler, out, 0, frames);
 
 // The same fade from its progress at `frame`, but it ends `cutFrames` later
 const hasten = (fade: Fade | undefined, frame: number) => {
   if (fade !== undefined && fade.from + fade.frames <= frame + cutFrames) return fade;
   const done = fade === undefined ? 0 : progress(fade, frame);
   const frames = cutFrames / (1 - done);
-  return new Fade({ from: frame - done * frames, frames });
+  return new Fade({ ...fade, from: frame - done * frames, frames });
 };
 
 const release = (lane: Lane) =>
-  new Lane({ ...lane, released: true, fadeOut: hasten(lane.fadeOut, lane.resampler.output) });
+  new Lane({ ...lane, released: true, fadeOut: hasten(lane.fadeOut, clock(lane)) });
 
 const trackStart = (lane: Lane, track: Track) => lane.resampler.outputAt(track.input);
 
-// The tracks of a lane in `frames` output frames from `from`
-const pieces = (lane: Lane, from: number, frames: number) =>
-  lane.tracks.flatMap((track, index) => {
+// The tracks of a lane in `frames` lane frames from `from`, with the entry position of each
+const pieces = (lane: Lane, from: number, frames: number) => {
+  if (lane.warp !== undefined && !lane.warp.done) {
+    // A warp ends before the next entry joins its lane
+    const track = lane.tracks[0]!;
+    const position = Math.round(entryAt(lane.warp.map, from)) - trackStart(lane, track);
+    return [{ track, first: from, last: from + frames, position }];
+  }
+  return lane.tracks.flatMap((track, index) => {
     const following = lane.tracks[index + 1];
     const first = Math.max(from, trackStart(lane, track));
     const last = Math.min(
       from + frames,
       following === undefined ? Number.POSITIVE_INFINITY : trackStart(lane, following),
     );
-    return first < last ? [{ track, first, last }] : [];
+    return first < last ? [{ track, first, last, position: first - trackStart(lane, track) }] : [];
   });
+};
 
 const finished = (lane: Lane) =>
-  lane.resampler.done ||
-  (lane.fadeOut !== undefined && lane.resampler.output >= lane.fadeOut.from + lane.fadeOut.frames);
+  (lane.warp !== undefined && !lane.warp.done
+    ? lane.warp.finished(lane.resampler)
+    : lane.resampler.done) ||
+  (lane.fadeOut !== undefined && clock(lane) >= lane.fadeOut.from + lane.fadeOut.frames);
+
+// Applies the gains and the DJ style of the fade that plays to `frames` frames from lane frame `from`
+const applyFades = (
+  lane: Lane,
+  pcm: Float32Array,
+  gains: Float32Array,
+  from: number,
+  frames: number,
+) => {
+  const { fadeIn, fadeOut } = lane;
+  const outgoing = fadeOut?.dj !== undefined && from + frames > fadeOut.from;
+  const fade = outgoing ? fadeOut : fadeIn;
+  if (fade?.dj === undefined || (!outgoing && progress(fade, from) >= 1)) {
+    for (let frame = 0; frame < frames; frame++) {
+      pcm[2 * frame] = (pcm[2 * frame] ?? 0) * (gains[frame] ?? 0);
+      pcm[2 * frame + 1] = (pcm[2 * frame + 1] ?? 0) * (gains[frame] ?? 0);
+    }
+    return;
+  }
+  fade.dj.effects.process(
+    fade.dj.transition,
+    !outgoing,
+    pcm,
+    gains,
+    frames,
+    (from - fade.from) / fade.frames,
+    1 / fade.frames,
+  );
+};
 
 const closeLane = (lane: Lane) =>
   Effect.forEach(lane.tracks, (track) => Scope.close(track.scope, Exit.void), { discard: true });
@@ -173,7 +291,12 @@ export const openRenderer = Effect.gen(function* () {
   let lanes: Array<Lane> = [];
   let next: Start | undefined;
   let crossfade = 0;
+  let dj: DjStyle | undefined;
   let timeline = 0;
+
+  // DJ mode falls back to a crossfade also when crossfade is off
+  const fadeFrames = () =>
+    crossfade === 0 && dj !== undefined ? defaultCrossfadeSeconds * timelineRate : crossfade;
 
   const closeAll = Effect.gen(function* () {
     const closing = lanes;
@@ -189,7 +312,7 @@ export const openRenderer = Effect.gen(function* () {
   const currentLane = () => {
     const playing = lanes.filter((lane) => !lane.released);
     const audible = playing.findLast(
-      (lane) => lane.fadeIn === undefined || lane.resampler.output >= middle(lane.fadeIn),
+      (lane) => lane.fadeIn === undefined || clock(lane) >= middle(lane.fadeIn),
     );
     return audible ?? playing[0];
   };
@@ -221,11 +344,11 @@ export const openRenderer = Effect.gen(function* () {
     // Half of each entry at most, so that no entry fades out before it has faded in
     const overlap = sameAlbum(last.entry, entry)
       ? 0
-      : Math.floor(Math.min(crossfade, (end - trackStart(lane, last)) / 2, entryFrames / 2));
-    const at = Math.max(end - overlap, resampler.output);
+      : Math.floor(Math.min(fadeFrames(), (end - trackStart(lane, last)) / 2, entryFrames / 2));
+    const at = Math.max(end - overlap, clock(lane));
     const fade = at < end ? new Fade({ from: at, frames: end - at }) : undefined;
 
-    if (lane.fadeOut === undefined || lane.fadeOut.from >= resampler.output) {
+    if (lane.fadeOut === undefined || lane.fadeOut.from >= clock(lane)) {
       replace(lane, new Lane({ ...lane, fadeOut: fade }));
     }
     next = new Start({
@@ -236,16 +359,54 @@ export const openRenderer = Effect.gen(function* () {
     });
   };
 
-  const openLane = (start: Start) =>
+  // Plans a beat-matched transition from the head lane into `entry`. Gives false for a crossfade.
+  const planDj = (entry: Entry) => {
+    const lane = head()!;
+    const last = lane.tracks.at(-1)!;
+    if (dj === undefined || warping(lane) || lane.fadeOut !== undefined) return false;
+    if (last.entry.dj === undefined || entry.dj === undefined || sameAlbum(last.entry, entry)) {
+      return false;
+    }
+    const transition = planTransition(last.entry.dj, entry.dj, dj);
+    if (transition === undefined) return false;
+    const at = trackStart(lane, last) + Math.round(transition.out * timelineRate);
+    if (at <= clock(lane)) return false;
+
+    const frames = Math.round(transition.beats * transition.beat * timelineRate);
+    const rampFrames = Math.round(
+      ((transition.rampBeats * transition.beat * (1 + transition.rate)) / 2) * timelineRate,
+    );
+    const entryIn = transition.in * timelineRate;
+    // B's lane frames are its entry frames after the ramp, within half a frame
+    const frame = Math.round(entryIn + (transition.rate - 1) * (frames + rampFrames / 2));
+    const side = () => new DjFade({ transition, effects: new TransitionEffects() });
+    replace(lane, new Lane({ ...lane, fadeOut: new Fade({ from: at, frames, dj: side() }) }));
+    next = new Start({
+      entry,
+      position: frame,
+      at,
+      fadeIn: new Fade({ from: frame, frames, dj: side() }),
+      tempo: new TempoMap({ frame, entry: entryIn, rate: transition.rate, frames, rampFrames }),
+    });
+    return true;
+  };
+
+  // A lane that opens `late` frames after its start keeps the timing of its fade and tempo
+  const openLane = (start: Start, late: number) =>
     Effect.gen(function* () {
       const info = yield* readInfo(start.entry);
       if (info === undefined) return undefined;
 
-      const resampler = new Resampler(info.sampleRate, start.position);
+      const warp =
+        start.tempo === undefined
+          ? undefined
+          : new Warp(yield* openStretcher(), start.tempo, start.position + late);
+      const resampler = new Resampler(info.sampleRate, warp?.inputStart ?? start.position);
       const track = yield* openTrack(start.entry, info, 0);
       track.source.seek(resampler.inputEnd);
       return new Lane({
         resampler,
+        warp,
         tracks: [track],
         fadeIn: start.fadeIn,
         fadeOut: undefined,
@@ -273,7 +434,8 @@ export const openRenderer = Effect.gen(function* () {
         following !== undefined &&
         next === undefined &&
         lane === head() &&
-        (crossfade === 0 || sameAlbum(track.entry, following));
+        !warping(lane) &&
+        (fadeFrames() === 0 || sameAlbum(track.entry, following));
       if (!joins) {
         lane.resampler.end();
         return true;
@@ -309,14 +471,15 @@ export const openRenderer = Effect.gen(function* () {
   const mix = (samples: Float32Array, spans: Array<Span>, at: number, frames: number) => {
     const current = currentLane();
     const peaks = new Float32Array(frames);
-    const gains = lanes.map((lane) => {
-      const from = lane.resampler.output;
+    const froms = lanes.map(clock);
+    const gains = lanes.map((lane, index) => {
+      const from = froms[index]!;
       const gain = new Float32Array(frames);
       for (const piece of pieces(lane, from, frames)) {
         for (let frame = piece.first; frame < piece.last; frame++) {
-          const value = laneGain(lane, frame);
-          gain[frame - from] = value;
-          peaks[frame - from] = (peaks[frame - from] ?? 0) + piece.track.peak * value;
+          gain[frame - from] = laneGain(lane, frame);
+          peaks[frame - from] =
+            (peaks[frame - from] ?? 0) + piece.track.peak * lanePeak(lane, frame);
         }
         addSpan(
           spans,
@@ -324,7 +487,7 @@ export const openRenderer = Effect.gen(function* () {
             entry: piece.track.entry.id,
             frame: timeline + at + (piece.first - from),
             frames: piece.last - piece.first,
-            position: piece.first - trackStart(lane, piece.track),
+            position: piece.position,
             current: lane === current,
           }),
         );
@@ -334,11 +497,11 @@ export const openRenderer = Effect.gen(function* () {
 
     const pcm = new Float32Array(frames * 2);
     lanes.forEach((lane, index) => {
-      lane.resampler.pull(pcm, 0, frames);
-      const gain = gains[index]!;
+      pull(lane, pcm, frames);
+      applyFades(lane, pcm, gains[index]!, froms[index]!, frames);
       for (let frame = 0; frame < frames; frame++) {
         const peak = peaks[frame] ?? 0;
-        const value = (gain[frame] ?? 0) * (peak > peakCeiling ? peakCeiling / peak : 1);
+        const value = peak > peakCeiling ? peakCeiling / peak : 1;
         const out = 2 * (at + frame);
         samples[out] = (samples[out] ?? 0) + (pcm[2 * frame] ?? 0) * value;
         samples[out + 1] = (samples[out + 1] ?? 0) + (pcm[2 * frame + 1] ?? 0) * value;
@@ -365,7 +528,7 @@ export const openRenderer = Effect.gen(function* () {
       next = undefined;
 
       if (matches(joined, 0)) {
-        if (lane.fadeOut !== undefined && lane.fadeOut.from >= lane.resampler.output) {
+        if (lane.fadeOut !== undefined && lane.fadeOut.from >= clock(lane)) {
           replace(lane, new Lane({ ...lane, fadeOut: undefined }));
         }
         queue = rest.slice(joined.length);
@@ -404,7 +567,7 @@ export const openRenderer = Effect.gen(function* () {
         const index = lanes.indexOf(lane);
         const incoming = lanes.slice(index + 1).find((other) => !other.released);
         if (incoming !== undefined && first.id === incoming.tracks[0]!.entry.id) {
-          const output = incoming.resampler.output;
+          const output = clock(incoming);
           const skipped = new Lane({
             ...incoming,
             fadeIn: incoming.fadeIn === undefined ? undefined : hasten(incoming.fadeIn, output),
@@ -458,8 +621,26 @@ export const openRenderer = Effect.gen(function* () {
       crossfade = Math.max(0, Math.round(seconds * timelineRate));
       // A planned join that has not started follows the new setting
       const lane = head();
-      if (lane !== undefined && next?.at !== undefined && next.at > lane.resampler.output) {
+      if (
+        lane !== undefined &&
+        next?.at !== undefined &&
+        next.tempo === undefined &&
+        next.at > clock(lane)
+      ) {
         plan(next.entry);
+      }
+    }).pipe(Semaphore.withPermits(lock, 1));
+
+  const setDj = (style: DjStyle | undefined) =>
+    Effect.sync(() => {
+      dj = style;
+      // A planned join that has not started is planned again
+      const lane = head();
+      if (lane === undefined || next?.at === undefined || next.at <= clock(lane)) return;
+      queue = [next.entry, ...queue];
+      next = undefined;
+      if (lane.fadeOut !== undefined && lane.fadeOut.from >= clock(lane)) {
+        replace(lane, new Lane({ ...lane, fadeOut: undefined }));
       }
     }).pipe(Semaphore.withPermits(lock, 1));
 
@@ -480,9 +661,11 @@ export const openRenderer = Effect.gen(function* () {
         const playing = head();
         if (
           next !== undefined &&
-          (next.at === undefined || playing === undefined || playing.resampler.output >= next.at)
+          (next.at === undefined || playing === undefined || clock(playing) >= next.at)
         ) {
-          const opened = yield* openLane(next);
+          const late =
+            next.at === undefined || playing === undefined ? 0 : clock(playing) - next.at;
+          const opened = yield* openLane(next, late);
           if (opened === undefined && playing === undefined) {
             waiting = true;
             break;
@@ -496,9 +679,13 @@ export const openRenderer = Effect.gen(function* () {
 
         const lane = head();
         if (lane !== undefined) {
+          if (next === undefined && queue[0] !== undefined && planDj(queue[0])) {
+            queue = queue.slice(1);
+            continue;
+          }
           // With crossfade on, the head decodes ahead, so that its end is known before a fade starts
-          const ahead = crossfade + frames - filled;
-          while (crossfade > 0 && !lane.resampler.ended && lane.resampler.available < ahead) {
+          const ahead = fadeFrames() + frames - filled;
+          while (fadeFrames() > 0 && !lane.resampler.ended && lane.resampler.available < ahead) {
             if (!(yield* feed(lane))) break;
           }
           if (lane.resampler.ended && next === undefined && queue[0] !== undefined) {
@@ -511,21 +698,21 @@ export const openRenderer = Effect.gen(function* () {
         // A step ends where a lane opens or passes the middle of its fade-in, so that its spans
         // keep one `current` value
         let step = frames - filled;
-        const output = head()?.resampler.output;
+        const output = lane === undefined ? undefined : clock(lane);
         if (next?.at !== undefined && output !== undefined && next.at > output) {
           step = Math.min(step, next.at - output);
         }
         for (const each of lanes) {
-          const left = each.fadeIn === undefined ? 0 : middle(each.fadeIn) - each.resampler.output;
+          const left = each.fadeIn === undefined ? 0 : middle(each.fadeIn) - clock(each);
           if (left > 0) step = Math.min(step, left);
         }
         for (const each of lanes) {
-          while (each.resampler.available < step && !each.resampler.ended) {
+          while (available(each) < step && !each.resampler.ended) {
             if (!(yield* feed(each))) break;
           }
         }
         if (lanes.some(finished)) continue;
-        for (const each of lanes) step = Math.min(step, each.resampler.available);
+        for (const each of lanes) step = Math.min(step, available(each));
         if (step === 0) {
           waiting = true;
           break;
@@ -541,7 +728,7 @@ export const openRenderer = Effect.gen(function* () {
       return block;
     }).pipe(Semaphore.withPermits(lock, 1));
 
-  return new Renderer({ setQueue, seek, setCrossfade, render });
+  return new Renderer({ setQueue, seek, setCrossfade, setDj, render });
 });
 
 // Extends a span of the same entry that ends where `span` begins

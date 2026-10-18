@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@dyad/audio": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "signalsmith-stretch": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:"
