@@ -20,11 +20,7 @@
       "development": "./src/node.ts",
       "default": "./dist/node.js"
     },
-    "./client": {
-      "types": "./src/client/index.ts",
-      "development": "./src/client/index.ts",
-      "default": "./dist/client/index.js"
-    }
+    "./client": "./src/client/index.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
