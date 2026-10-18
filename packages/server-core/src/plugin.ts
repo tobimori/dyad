@@ -11,6 +11,7 @@ import { syncLibraryRoot } from "./library.ts";
 import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
 import { Outputs } from "./outputs.ts";
 import { Popularities, Providers } from "./providers.ts";
+import { Recommenders } from "./recommenders.ts";
 import { Tracklists } from "./tracklists.ts";
 
 // A second registration of a key would replace the first, and closing either plugin scope would
@@ -79,6 +80,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
       const scope = yield* Effect.scope;
       const providers = yield* Providers;
       const popularities = yield* Popularities;
+      const recommenders = yield* Recommenders;
       const musicbrainzLookups = yield* MusicBrainzLookups;
       const outputs = yield* Outputs;
       const tracklists = yield* Tracklists;
@@ -118,6 +120,9 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         },
         popularity: {
           add: (name, popularity) => register(popularities, name, popularity),
+        },
+        recommenders: {
+          add: (id, recommender) => register(recommenders, id, recommender),
         },
         musicbrainz: {
           add: (lookup) => register(musicbrainzLookups, musicbrainzLookupKey, lookup),

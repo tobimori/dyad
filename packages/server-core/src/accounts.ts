@@ -5,6 +5,7 @@ import {
   AccountProviderSummary,
   CurrentPrincipal,
   ProviderAccountSummary,
+  TokenLogin,
 } from "@dyad/domain";
 import { and, eq, sql } from "drizzle-orm";
 import { Clock, Crypto, Effect, Schema } from "effect";
@@ -12,21 +13,25 @@ import { Clock, Crypto, Effect, Schema } from "effect";
 import { forgetDownloads } from "./downloads.ts";
 import { forgetLibrary, queueLibrarySync } from "./library-sync.ts";
 import { Providers, toCredentials } from "./providers.ts";
+import { Recommenders, accountOf, forgetRecommendations, queueScrobbles } from "./recommenders.ts";
 
+/** Providers with an account, then recommenders with their own */
 export const listAccountProviders = Effect.gen(function* () {
   const providers = yield* Providers;
+  const recommenders = yield* Recommenders;
 
-  return [...providers].flatMap(([provider, { name, account, playlists }]) =>
-    account === undefined
-      ? []
-      : [
-          new AccountProviderSummary({
-            provider,
-            name,
-            login: account.login,
-            createsPlaylists: playlists?.create !== undefined,
-          }),
-        ],
+  return [
+    ...[...providers].map(([provider, { name, account, playlists }]) => ({
+      provider,
+      name,
+      account,
+      createsPlaylists: playlists?.create !== undefined,
+    })),
+    ...[...recommenders].flatMap(([provider, { name, account }]) =>
+      providers.has(provider) ? [] : [{ provider, name, account, createsPlaylists: false }],
+    ),
+  ].flatMap(({ account, ...summary }) =>
+    account === undefined ? [] : [new AccountProviderSummary({ ...summary, login: account.login })],
   );
 });
 
@@ -48,24 +53,29 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
     const principal = yield* CurrentPrincipal;
-    const providers = yield* Providers;
 
-    const account = providers.get(provider)?.account;
+    const account = yield* accountOf(provider);
     if (account === undefined) {
       return yield* new AccountLinkFailed({ reason: "Unknown provider" });
     }
 
-    const RequiredCookies = Schema.Record(
-      Schema.Literals(account.login.requiredCookies ?? account.login.cookies),
+    const login = account.login;
+    const rule = Schema.is(TokenLogin)(login)
+      ? { names: ["token"], required: ["token"], missing: `Enter the ${login.label}` }
+      : {
+          names: login.cookies,
+          required: login.requiredCookies ?? login.cookies,
+          missing: "The import did not give all required cookies",
+        };
+    const Required = Schema.Record(
+      Schema.Literals(rule.required),
       Schema.String.check(Schema.isMinLength(1)),
     );
-    yield* Schema.decodeEffect(RequiredCookies)(values).pipe(
-      Effect.mapError(
-        () => new AccountLinkFailed({ reason: "The import did not give all required cookies" }),
-      ),
+    yield* Schema.decodeEffect(Required)(values).pipe(
+      Effect.mapError(() => new AccountLinkFailed({ reason: rule.missing })),
     );
     const stored = Object.fromEntries(
-      Object.entries(values).filter(([name]) => account.login.cookies.includes(name)),
+      Object.entries(values).filter(([name]) => rule.names.includes(name)),
     );
     const displayName = yield* account.link(toCredentials(stored));
 
@@ -88,6 +98,7 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
       }),
     );
     yield* queueLibrarySync(principal.userId, provider);
+    yield* queueScrobbles(principal.userId, provider);
 
     return new ProviderAccountSummary({ provider, displayName });
   });
@@ -108,6 +119,7 @@ export const unlinkAccount = (provider: string) =>
           );
         yield* forgetLibrary(principal.userId, provider);
         yield* forgetDownloads(principal.userId, provider);
+        yield* forgetRecommendations(principal.userId, provider);
       }),
     );
 

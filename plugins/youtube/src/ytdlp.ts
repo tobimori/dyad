@@ -281,5 +281,10 @@ export const ytdlpResolver = Effect.gen(function* () {
       }).pipe(Effect.map((stream) => new ProviderVideo(stream))),
     /** A new sign-in may end the rest of the account */
     resume: Ref.set(pausedUntil, 0),
+    /** Other account requests also rest while yt-dlp rests */
+    resting: Effect.gen(function* () {
+      return (yield* Clock.currentTimeMillis) < (yield* Ref.get(pausedUntil));
+    }),
+    pause,
   };
 });

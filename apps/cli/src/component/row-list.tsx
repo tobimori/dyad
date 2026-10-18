@@ -117,6 +117,29 @@ function Cell(props: {
   );
 }
 
+// The artist, then why Dyad suggests the track, dim
+function ReasonCell(props: {
+  readonly artist: string;
+  readonly reason: string;
+  readonly width: number;
+  readonly fg: string;
+  readonly bold: boolean;
+}) {
+  const theme = useTheme();
+  const artist = fit(props.artist, props.width);
+  const rest = props.width - artist.length - gap;
+  return (
+    <text
+      width={props.width}
+      fg={props.fg}
+      attributes={props.bold ? TextAttributes.BOLD : TextAttributes.NONE}
+    >
+      {artist}
+      {rest > 3 && <span fg={theme.faint}>{`  ${fit(props.reason, rest)}`}</span>}
+    </text>
+  );
+}
+
 function RowCells(props: {
   readonly row: SelectableRow;
   readonly width: number;
@@ -156,12 +179,22 @@ function RowCells(props: {
           {fit(titleOf(source), titleWidth - (source.video ? videoMark.length : 0))}
           {source.video && <span fg={secondary}>{videoMark}</span>}
         </text>
-        <Cell
-          text={source.artist ?? ""}
-          width={flexible - titleWidth}
-          fg={row.track.playable ? secondary : theme.faint}
-          bold={bold}
-        />
+        {row.track.reason === null ? (
+          <Cell
+            text={source.artist ?? ""}
+            width={flexible - titleWidth}
+            fg={row.track.playable ? secondary : theme.faint}
+            bold={bold}
+          />
+        ) : (
+          <ReasonCell
+            artist={source.artist ?? ""}
+            reason={row.track.reason}
+            width={flexible - titleWidth}
+            fg={secondary}
+            bold={bold}
+          />
+        )}
         <Cell
           text={formatDuration(source.durationMs)}
           width={timeWidth}

@@ -111,7 +111,7 @@ const containsPhrase = (text: string, phrase: string) => ` ${text} `.includes(` 
 const sum = (values: ReadonlyArray<number>) => values.reduce((total, value) => total + value, 0);
 
 // Maps any sum of plays to -1..1. One recent listen gives 0.5, three give 0.75.
-const saturate = (value: number) => value / (1 + Math.abs(value));
+export const saturate = (value: number) => value / (1 + Math.abs(value));
 
 export const playValue = (
   play: Pick<Play, "startedAt" | "playedMs" | "completed">,

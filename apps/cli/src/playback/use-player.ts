@@ -165,6 +165,7 @@ export function usePlayer(props: {
     index: number,
     context: typeof PlayContext.Type,
     shuffle: boolean,
+    reasons: Readonly<Record<string, string>> = {},
   ) => {
     const selected = window(sources, index);
     const [first, ...others] = selected.sourceIds;
@@ -175,6 +176,7 @@ export function usePlayer(props: {
         index: selected.index,
         context,
         shuffle,
+        reasons,
       }),
     );
   };
@@ -210,6 +212,7 @@ export function usePlayer(props: {
     state: loading ? ("loading" as const) : playback.state,
     shuffle: playback.shuffle,
     repeat: playback.repeat,
+    autoplay: playback.autoplay,
     volume,
     muted: volumeOutput?.muted ?? false,
     error,
@@ -223,11 +226,13 @@ export function usePlayer(props: {
     tap: () => (current === undefined ? null : (props.engine?.tap(current.id) ?? null)),
     /** `null` while the audio plays on another device */
     quality: () => (current === undefined ? null : (props.engine?.quality(current.id) ?? null)),
+    /** `reasons`: why a radio suggests each source, by source ID */
     playList: (
       sources: ReadonlyArray<SourceSummary>,
       index: number,
       context: typeof PlayContext.Type,
-    ) => playList(sources, index, context, playback.shuffle),
+      reasons?: Readonly<Record<string, string>>,
+    ) => playList(sources, index, context, playback.shuffle, reasons),
     shuffleList: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) => {
       const index = Effect.runSync(Random.nextIntBetween(0, sources.length, { halfOpen: true }));
       playList(sources, index, context, true);
@@ -274,6 +279,7 @@ export function usePlayer(props: {
     toggleShuffle: () => send(SessionCommand.cases.SetShuffle.make({ on: !playback.shuffle })),
     cycleRepeat: () =>
       send(SessionCommand.cases.SetRepeat.make({ mode: nextRepeatMode[playback.repeat] })),
+    toggleAutoplay: () => send(SessionCommand.cases.SetAutoplay.make({ on: !playback.autoplay })),
     /** The session pauses when this device plays it, so that it does not look like it plays on */
     quit: () =>
       playback.outputId === own && playback.state === "playing"

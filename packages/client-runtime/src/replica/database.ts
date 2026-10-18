@@ -1,5 +1,5 @@
 import { clientState, migrateClientDatabase } from "@dyad/db/client";
-import { RecordingId } from "@dyad/domain";
+import { HomePage, RecordingId } from "@dyad/domain";
 import { eq } from "drizzle-orm";
 import { EffectCache } from "drizzle-orm/cache/core/cache-effect";
 import { EffectLogger } from "drizzle-orm/effect-core";
@@ -76,3 +76,6 @@ export class AccountProviders extends Schema.Class<AccountProviders>("AccountPro
 }) {}
 
 export const accountProvidersState = stateKey("accountProviders", AccountProviders);
+
+/** The last home page from the server, for the home while the server cannot answer */
+export const homePageState = stateKey("homePage", HomePage);

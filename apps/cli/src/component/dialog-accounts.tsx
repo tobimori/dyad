@@ -1,5 +1,5 @@
 import type { ServerConnection } from "@dyad/client-runtime";
-import { AccountLinkFailed } from "@dyad/domain";
+import { AccountLinkFailed, TokenLogin } from "@dyad/domain";
 import type { AccountProviderSummary, BrowserLogin, ProviderAccountSummary } from "@dyad/domain";
 import { NodeServices } from "@effect/platform-node";
 import type { InputRenderable } from "@opentui/core";
@@ -68,14 +68,27 @@ export function AccountsDialog(props: {
   const choose = (id: string) => {
     const provider = providers?.find((candidate) => candidate.provider === id);
     if (provider === undefined) return;
+    const login = provider.login;
     dialog.push(
-      <AccountDialog
-        provider={provider}
-        account={accountOf(provider)}
-        connection={props.connection}
-        run={props.run}
-        onChange={load}
-      />,
+      Schema.is(TokenLogin)(login) ? (
+        <TokenAccountDialog
+          provider={provider}
+          login={login}
+          account={accountOf(provider)}
+          connection={props.connection}
+          run={props.run}
+          onChange={load}
+        />
+      ) : (
+        <AccountDialog
+          provider={provider}
+          login={login}
+          account={accountOf(provider)}
+          connection={props.connection}
+          run={props.run}
+          onChange={load}
+        />
+      ),
     );
   };
 
@@ -95,6 +108,7 @@ export function AccountsDialog(props: {
 
 function AccountDialog(props: {
   readonly provider: AccountProviderSummary;
+  readonly login: BrowserLogin;
   readonly account: ProviderAccountSummary | undefined;
   readonly connection: typeof ServerConnection.Service;
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
@@ -158,12 +172,12 @@ function AccountDialog(props: {
     if (value === "file") {
       dialog.replace(
         <CookieFileDialog
-          login={props.provider.login}
+          login={props.login}
           onSubmit={(file) =>
             dialog.replace(
               <CookieLoginDialog
                 {...props}
-                read={readCookieFile(props.provider.login, file)}
+                read={readCookieFile(props.login, file)}
                 onLinked={onLinked}
               />,
             )
@@ -178,7 +192,7 @@ function AccountDialog(props: {
       dialog.replace(
         <CookieLoginDialog
           {...props}
-          read={readBrowserCookies(browser, profile, props.provider.login)}
+          read={readBrowserCookies(browser, profile, props.login)}
           onLinked={onLinked}
         />,
       );
@@ -208,7 +222,7 @@ function AccountDialog(props: {
       <box marginTop={1}>
         <SelectList options={options} width={accountsWidth - 4} rows={8} onChoose={choose} />
       </box>
-      <text fg={theme.muted}>{cookieFileHint(props.provider.login)}</text>
+      <text fg={theme.muted}>{cookieFileHint(props.login)}</text>
       <text fg={theme.muted}>
         {`Normal browser cookies expire sooner than a private-window export. Re-import when Dyad says "Sign in to ${props.provider.name} again".`}
       </text>
@@ -291,6 +305,123 @@ function CookieLoginDialog(props: {
       <text fg={error === null ? theme.text : theme.error}>
         {error ?? "Importing cookies. Allow the browser key in Keychain if asked."}
       </text>
+    </Dialog>
+  );
+}
+
+/** A provider that links with a token that the user copies from its site */
+function TokenAccountDialog(props: {
+  readonly provider: AccountProviderSummary;
+  readonly login: TokenLogin;
+  readonly account: ProviderAccountSummary | undefined;
+  readonly connection: typeof ServerConnection.Service;
+  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+  /** Called after a link or an unlink */
+  readonly onChange: () => void;
+}) {
+  const theme = useTheme();
+  const dialog = useDialog();
+  const toast = useToast();
+  const [error, setError] = useState<string | null>(null);
+
+  const options = [
+    new SelectOption({ value: "token", title: `Enter the ${props.login.label}`, detail: "" }),
+    ...(props.account === undefined
+      ? []
+      : [new SelectOption({ value: "unlink", title: "Unlink", detail: "" })]),
+  ];
+
+  const choose = (value: string) => {
+    if (value === "token") {
+      dialog.replace(<TokenInputDialog {...props} />);
+      return;
+    }
+    props.run(
+      props.connection.unlinkAccount({ provider: props.provider.provider }).pipe(
+        Effect.match({
+          onSuccess: () => {
+            toast("notice", `Unlinked ${props.provider.name}`);
+            props.onChange();
+            dialog.pop();
+          },
+          onFailure: (failure) => setError(failureText(failure)),
+        }),
+      ),
+    );
+  };
+
+  return (
+    <Dialog title={props.provider.name} width={accountsWidth}>
+      <text fg={theme.muted}>
+        {props.account === undefined ? "Not linked" : `Linked as ${props.account.displayName}`}
+      </text>
+      <box marginTop={1}>
+        <SelectList options={options} width={accountsWidth - 4} rows={4} onChoose={choose} />
+      </box>
+      {error !== null && <text fg={theme.error}>{error}</text>}
+    </Dialog>
+  );
+}
+
+function TokenInputDialog(props: {
+  readonly provider: AccountProviderSummary;
+  readonly login: TokenLogin;
+  readonly connection: typeof ServerConnection.Service;
+  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+  readonly onChange: () => void;
+}) {
+  const theme = useTheme();
+  const dialog = useDialog();
+  const toast = useToast();
+  const input = useRef<InputRenderable | null>(null);
+  const [token, setToken] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const link = () => {
+    if (token.trim() === "" || busy) return;
+    setBusy(true);
+    props.run(
+      props.connection
+        .linkAccount({ provider: props.provider.provider, credentials: { token: token.trim() } })
+        .pipe(
+          Effect.match({
+            onSuccess: (account) => {
+              toast("notice", `Linked ${account.displayName}`);
+              props.onChange();
+              dialog.pop();
+            },
+            onFailure: (failure) => {
+              setBusy(false);
+              setError(failureText(failure));
+            },
+          }),
+        ),
+    );
+  };
+
+  useCommands([[commands.submitInput, link]], { target: input, targetMode: "focus" });
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+
+  return (
+    <Dialog title={props.provider.name} width={accountsWidth}>
+      <text fg={theme.muted}>{`Copy your ${props.login.label} from ${props.login.url}`}</text>
+      <input
+        ref={input}
+        value={token}
+        placeholder={`Paste the ${props.login.label}`}
+        onInput={setToken}
+        backgroundColor={theme.panel}
+        focusedBackgroundColor={theme.panel}
+        textColor={theme.text}
+        focusedTextColor={theme.text}
+        placeholderColor={theme.faint}
+        cursorColor={theme.accent}
+      />
+      {error !== null && <text fg={theme.error}>{error}</text>}
+      <text fg={theme.faint}>{busy ? "Linking…" : "⏎ link · esc cancel"}</text>
     </Dialog>
   );
 }

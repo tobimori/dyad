@@ -1,4 +1,4 @@
-import { Plugin, Provider, ProviderError } from "@dyad/plugin";
+import { Plugin, Provider, ProviderError, Recommender } from "@dyad/plugin";
 import { Clock, Data, Effect, Ref } from "effect";
 import { HttpClient } from "effect/http";
 
@@ -11,6 +11,7 @@ import {
   visitorCache,
 } from "./api.ts";
 import { browserLogin, readAccountName } from "./login.ts";
+import { youtubeRadio, youtubeShelves } from "./recommend.ts";
 import { searchMusic } from "./search.ts";
 import { ytdlpResolver } from "./ytdlp.ts";
 
@@ -81,6 +82,29 @@ export const youtubePlugin = new Plugin({
               ),
             optional: true,
           },
+        }),
+      );
+
+      yield* context.recommenders.add(
+        provider,
+        new Recommender({
+          name: "YouTube Music",
+          priority: 20,
+          radio: (seed) => youtubeRadio(seed).pipe(Effect.provide(services)),
+          // The account requests of yt-dlp and of the home rest together
+          shelves: (credentials) =>
+            Effect.gen(function* () {
+              if (yield* ytdlp.resting) {
+                return yield* new ProviderError({ reason: "The YouTube account rests for 1 hour" });
+              }
+              return yield* youtubeShelves(credentials).pipe(
+                Effect.tapError((error) =>
+                  /status (401|403|429)/.test(error.reason)
+                    ? ytdlp.pause(error.reason)
+                    : Effect.void,
+                ),
+              );
+            }).pipe(Effect.provide(services)),
         }),
       );
     }),

@@ -19,7 +19,7 @@ import {
   nextEntry,
   positionAt,
 } from "@dyad/domain";
-import type { DeviceId, PlayContext, UserId } from "@dyad/domain";
+import type { DeviceId, PageTrack, PlayContext, UserId } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
 import { and, eq, inArray } from "drizzle-orm";
 import {
@@ -46,6 +46,7 @@ import { Outputs } from "./outputs.ts";
 import { hintPrefetch } from "./playback.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSessions, saveSession } from "./session-store.ts";
+import { continueRadio } from "./radio.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { TimedDesired, driveTimedOutputs } from "./timed-output.ts";
 import type { TimedDriver } from "./timed-output.ts";
@@ -128,6 +129,7 @@ const makeSession = (
   userId: UserId,
   initial: SessionState,
   prefetch: (sourceIds: ReadonlyArray<string>) => void,
+  queueEnds: (entries: ReadonlyArray<QueueEntry>) => void,
 ) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<Database | Crypto.Crypto>();
@@ -165,6 +167,8 @@ const makeSession = (
       commandDevice: Option.none<DeviceId>(),
       // The play of an entry that the output started offline. The server continues it.
       handover: Option.none<PlayerResume>(),
+      // The entry that asked for radio songs last, so that it asks once
+      refilled: Option.none<EntryId>(),
     };
 
     const broadcast = (event: Event) => {
@@ -217,11 +221,13 @@ const makeSession = (
     const createEntries = (
       sources: ReadonlyArray<SourceSummary>,
       context: typeof PlayContext.Type,
+      reasons: Readonly<Record<string, string>> = {},
     ) =>
       sources.map((summary) => {
         const id = EntryId.make(state.nextEntryId);
         state.nextEntryId += 1;
-        return new QueueEntry({ id, source: summary, context, unplayable: false });
+        const reason = reasons[summary.id] ?? null;
+        return new QueueEntry({ id, source: summary, context, unplayable: false, reason });
       });
 
     // A new transport: the output loads the entry, so the position does not move until it reports
@@ -356,7 +362,7 @@ const makeSession = (
         next: nextEntry(state.entries, entryId, repeat, "end"),
       });
       if (Option.isSome(state.urlDriver)) return yield* state.urlDriver.value.desire(desired);
-      if (!urlOutputs.has(outputId) || urlOutputs.isTimed(outputId)) return;
+      if (!urlOutputs.has(outputId)) return;
 
       const created: UrlDriver = yield* driveUrlOutput({
         userId,
@@ -425,6 +431,12 @@ const makeSession = (
           if (upcoming.join(" ") !== state.prefetched) {
             state.prefetched = upcoming.join(" ");
             prefetch(upcoming);
+          }
+          const { entryId, repeat, autoplay } = state.playback;
+          const ends = upcoming.length === 0 && repeat === "off" && autoplay && entryId !== null;
+          if (ends && !Option.contains(state.refilled, entryId)) {
+            state.refilled = Option.some(entryId);
+            queueEnds(state.entries);
           }
 
           if (state.playback !== before) {
@@ -512,6 +524,7 @@ const makeSession = (
               const entries = createEntries(
                 ordered.map((item) => item.summary),
                 command.context,
+                command.reasons,
               );
               const first = entries[ordered.indexOf(selected)];
               if (first === undefined) return yield* fail("nothing_to_play");
@@ -741,6 +754,12 @@ const makeSession = (
           SetRepeat: (command) =>
             Effect.sync(() => {
               if (command.mode !== playback.repeat) setPlayback({ repeat: command.mode });
+              return [];
+            }),
+
+          SetAutoplay: (command) =>
+            Effect.sync(() => {
+              if (command.on !== playback.autoplay) setPlayback({ autoplay: command.on });
               return [];
             }),
 
@@ -1195,6 +1214,26 @@ const makeSession = (
         }),
       );
 
+    /** Adds radio songs at the end, unless the last entry is no longer `afterId` */
+    const appendRadio = (afterId: EntryId, tracks: ReadonlyArray<PageTrack>) =>
+      modify(() =>
+        Effect.sync(() => {
+          if (state.entries.at(-1)?.id !== afterId || tracks.length === 0) return;
+          if (state.entries.length + tracks.length > maxEntries) return;
+          const reasons = Object.fromEntries(
+            tracks.flatMap((track) =>
+              track.reason === null ? [] : [[track.source.id, track.reason]],
+            ),
+          );
+          const insert = createEntries(
+            tracks.map((track) => track.source),
+            "radio",
+            reasons,
+          );
+          spliceQueue([new QueueSplice({ index: state.entries.length, remove: 0, insert })]);
+        }),
+      );
+
     return {
       connect,
       control,
@@ -1204,6 +1243,7 @@ const makeSession = (
       tick,
       endOpenPlay,
       changes,
+      appendRadio,
     };
   });
 
@@ -1212,7 +1252,9 @@ type Session = Effect.Success<ReturnType<typeof makeSession>>;
 const makeSessions = Effect.gen(function* () {
   const db = yield* Database;
   const services =
-    yield* Effect.context<Effect.Services<ReturnType<typeof makeSession | typeof hintPrefetch>>>();
+    yield* Effect.context<
+      Effect.Services<ReturnType<typeof makeSession | typeof hintPrefetch | typeof continueRadio>>
+    >();
   const sessions = new Map<UserId, Session>();
   const creating = yield* Semaphore.make(1);
 
@@ -1229,9 +1271,31 @@ const makeSessions = Effect.gen(function* () {
     ),
   );
 
+  // Radio requests take seconds, so they run outside the session lock
+  const endings = yield* Queue.unbounded<readonly [UserId, ReadonlyArray<QueueEntry>]>();
+  yield* Effect.forkScoped(
+    Effect.forever(
+      Effect.flatMap(Queue.take(endings), ([userId, entries]) =>
+        Effect.gen(function* () {
+          const last = entries.at(-1);
+          if (last === undefined) return;
+          const tracks = yield* continueRadio(userId, entries);
+          yield* (yield* sessionFor(userId)).appendRadio(last.id, tracks);
+        }).pipe(
+          orDieOnDatabaseError("continueRadio"),
+          Effect.provide(services),
+          Effect.catchCause((cause) => Effect.logError("Cannot continue with radio", cause)),
+        ),
+      ),
+    ),
+  );
+
   const create = (userId: UserId, state: SessionState) =>
-    makeSession(userId, state, (sourceIds) =>
-      Queue.offerUnsafe(prefetches, [userId, sourceIds]),
+    makeSession(
+      userId,
+      state,
+      (sourceIds) => Queue.offerUnsafe(prefetches, [userId, sourceIds]),
+      (entries) => Queue.offerUnsafe(endings, [userId, entries]),
     ).pipe(Effect.provide(services));
 
   for (const [userId, state] of yield* loadSessions)

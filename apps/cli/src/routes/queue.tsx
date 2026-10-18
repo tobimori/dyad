@@ -15,7 +15,12 @@ export const queue = new Section({
     const current = player.currentIndex;
     const items = player.entries.map(
       (entry) =>
-        new ListItem({ key: String(entry.id), source: entry.source, context: entry.context }),
+        new ListItem({
+          key: String(entry.id),
+          source: entry.source,
+          context: entry.context,
+          reason: entry.reason,
+        }),
     );
 
     const remove = (index: number) =>
@@ -39,7 +44,12 @@ export const queue = new Section({
       ],
       actions: (index) => {
         const target = index ?? current;
-        return target === null ? [] : [remove(target)];
+        const autoplay = new Action({
+          command: commands.autoplay,
+          label: `Continue with radio when the queue ends: ${player.autoplay ? "on" : "off"}`,
+          run: player.toggleAutoplay,
+        });
+        return target === null ? [autoplay] : [remove(target), autoplay];
       },
       render: (list) => (
         <TrackList

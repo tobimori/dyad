@@ -6,18 +6,23 @@ import { HttpClientRequest } from "effect/http";
 
 import { searchVideos } from "./api.ts";
 
-const remix = { clientName: "WEB_REMIX", clientVersion: "1.20260617.01.00", hl: "en", gl: "US" };
+export const remix = {
+  clientName: "WEB_REMIX",
+  clientVersion: "1.20260617.01.00",
+  hl: "en",
+  gl: "US",
+};
 
 // The `params` of the "Songs" and "Videos" filters of YouTube Music
 const songsOnly = "EgWKAQIIAWoMEA4QChADEAQQCRAF";
 const videosOnly = "EgWKAQIQAWoMEA4QChADEAQQCRAF";
 
 // Itag 251, which nearly every video has, is Opus of up to 160 kbit/s
-const opusBitrate = 160_000;
+export const opusBitrate = 160_000;
 
 const setMs = 20 * 60 * 1000;
 
-const Run = Schema.Struct({
+export const Run = Schema.Struct({
   text: Schema.String,
   navigationEndpoint: Schema.optional(
     Schema.Struct({
@@ -41,7 +46,7 @@ const Run = Schema.Struct({
   ),
 });
 
-const ListItem = Schema.Struct({
+export const ListItem = Schema.Struct({
   flexColumns: Schema.Array(
     Schema.Struct({
       musicResponsiveListItemFlexColumnRenderer: Schema.Struct({
@@ -101,15 +106,90 @@ const MusicSearch = Schema.Struct({
 });
 
 // YouTube Music 2026-10: songs are `MUSIC_VIDEO_TYPE_ATV`, a still cover with the audio
-const videoTypes = new Set(["MUSIC_VIDEO_TYPE_OMV", "MUSIC_VIDEO_TYPE_UGC"]);
+export const videoTypes = new Set(["MUSIC_VIDEO_TYPE_OMV", "MUSIC_VIDEO_TYPE_UGC"]);
 
-const pageType = (run: typeof Run.Type) =>
+export const pageType = (run: typeof Run.Type) =>
   run.navigationEndpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs
     .browseEndpointContextMusicConfig.pageType;
 
-// The second column is `Artist • Album • 3:45` for a song and `Channel • 1.2M views • 3:45` for
-// a video
-const musicSources = (query: string, song: boolean) =>
+/**
+ * A song or video of YouTube Music. The byline is `Artist • Album • 3:45` for a song and
+ * `Channel • 1.2M views • 3:45` for a video; the artist or channel ends at the first ` • `.
+ */
+export const musicSource = (item: {
+  readonly videoId: string;
+  readonly title: ReadonlyArray<typeof Run.Type>;
+  readonly byline: ReadonlyArray<typeof Run.Type>;
+  readonly album: string | null;
+  readonly durationMs: number | null;
+  readonly thumbnails: ReadonlyArray<{ readonly url: string; readonly width: number }>;
+  readonly explicit: boolean;
+  readonly song: boolean;
+  readonly videoType: string | undefined;
+}) => {
+  const end = item.byline.findIndex((run) => run.text === " • ");
+  const credit = end === -1 ? item.byline : item.byline.slice(0, end);
+  const channel = credit.find((run) => pageType(run) !== undefined);
+  const channelId = channel?.navigationEndpoint?.browseEndpoint?.browseId;
+  const [artwork] = item.thumbnails.toSorted((a, b) => b.width - a.width);
+  return new ProviderSource({
+    externalId: item.videoId,
+    title: item.title.map((run) => run.text).join(""),
+    artist:
+      item.song || credit.some((run) => pageType(run) === "MUSIC_PAGE_TYPE_ARTIST")
+        ? credit.map((run) => run.text).join("")
+        : null,
+    album: item.album,
+    durationMs: item.durationMs,
+    isrc: null,
+    container: "webm",
+    codec: "opus",
+    lossless: false,
+    encrypted: false,
+    // Song covers are on `googleusercontent.com`, which scales to the size in the URL
+    artworkUrl: artwork?.url.replace(/=w\d+-h\d+/, "=w544-h544") ?? null,
+    artists: [],
+    explicit: item.explicit || (item.song ? false : null),
+    bitrate: opusBitrate,
+    uploader:
+      channel === undefined || channelId === undefined
+        ? null
+        : new CreditedArtist({ id: channelId, name: channel.text }),
+    albumId: null,
+    video: videoTypes.has(item.videoType ?? ""),
+  });
+};
+
+/**
+ * A song or video of a list, for example of search results. The length is the last part of the
+ * second column, when the list shows it; then the album can be in a third column.
+ */
+export const listItemSource = (item: typeof ListItem.Type, song: boolean) => {
+  if (item.playlistItemData === undefined) return undefined;
+  const [title = [], byline = [], ...more] = item.flexColumns.map(
+    (column) => column.musicResponsiveListItemFlexColumnRenderer.text.runs ?? [],
+  );
+  const length = byline.at(-1)?.text ?? "";
+  return musicSource({
+    videoId: item.playlistItemData.videoId,
+    title,
+    byline,
+    album:
+      [...byline, ...more.flat()].find((run) => pageType(run) === "MUSIC_PAGE_TYPE_ALBUM")?.text ??
+      null,
+    durationMs: /^\d+(:\d\d)+$/.test(length) ? clockMs(length) : null,
+    thumbnails: item.thumbnail.musicThumbnailRenderer.thumbnail.thumbnails,
+    explicit: (item.badges ?? []).some(
+      (badge) => badge.musicInlineBadgeRenderer?.icon.iconType === "MUSIC_EXPLICIT_BADGE",
+    ),
+    song,
+    videoType:
+      title[0]?.navigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs
+        .watchEndpointMusicConfig.musicVideoType,
+  });
+};
+
+export const musicSources = (query: string, song: boolean) =>
   Effect.gen(function* () {
     const response = yield* getJson(
       HttpClientRequest.post("https://music.youtube.com/youtubei/v1/search").pipe(
@@ -123,62 +203,13 @@ const musicSources = (query: string, song: boolean) =>
       MusicSearch,
     ).pipe(Effect.mapError(providerError("YouTube Music")));
 
+    // Podcast episodes and live streams have no length
     return response.contents.tabbedSearchResultsRenderer.tabs
       .flatMap((tab) => tab.tabRenderer.content.sectionListRenderer.contents)
       .flatMap((section) => section.musicShelfRenderer?.contents ?? [])
       .flatMap(({ musicResponsiveListItemRenderer: item }) => {
-        if (item === undefined) return [];
-
-        const [title = [], details = []] = item.flexColumns.map(
-          (column) => column.musicResponsiveListItemFlexColumnRenderer.text.runs ?? [],
-        );
-        const duration = details.at(-1)?.text ?? "";
-        // Podcast episodes and live streams have no duration
-        if (item.playlistItemData === undefined || !/^\d+(:\d\d)+$/.test(duration)) return [];
-
-        const credit = details.slice(
-          0,
-          details.findIndex((run) => run.text === " • "),
-        );
-        const channel = credit.find((run) => pageType(run) !== undefined);
-        const channelId = channel?.navigationEndpoint?.browseEndpoint?.browseId;
-        const [artwork] = item.thumbnail.musicThumbnailRenderer.thumbnail.thumbnails.toSorted(
-          (a, b) => b.width - a.width,
-        );
-        const explicit = (item.badges ?? []).some(
-          (badge) => badge.musicInlineBadgeRenderer?.icon.iconType === "MUSIC_EXPLICIT_BADGE",
-        );
-        return [
-          new ProviderSource({
-            externalId: item.playlistItemData.videoId,
-            title: title.map((run) => run.text).join(""),
-            artist:
-              song || credit.some((run) => pageType(run) === "MUSIC_PAGE_TYPE_ARTIST")
-                ? credit.map((run) => run.text).join("")
-                : null,
-            album: details.find((run) => pageType(run) === "MUSIC_PAGE_TYPE_ALBUM")?.text ?? null,
-            durationMs: clockMs(duration),
-            isrc: null,
-            container: "webm",
-            codec: "opus",
-            lossless: false,
-            encrypted: false,
-            // Song covers are on `googleusercontent.com`, which scales to the size in the URL
-            artworkUrl: artwork?.url.replace(/=w\d+-h\d+/, "=w544-h544") ?? null,
-            artists: [],
-            explicit: explicit || (song ? false : null),
-            bitrate: opusBitrate,
-            uploader:
-              channel === undefined || channelId === undefined
-                ? null
-                : new CreditedArtist({ id: channelId, name: channel.text }),
-            albumId: null,
-            video: videoTypes.has(
-              title[0]?.navigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs
-                .watchEndpointMusicConfig.musicVideoType ?? "",
-            ),
-          }),
-        ];
+        const source = item === undefined ? undefined : listItemSource(item, song);
+        return source === undefined || source.durationMs === null ? [] : [source];
       });
   });
 

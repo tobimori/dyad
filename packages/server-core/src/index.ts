@@ -27,6 +27,8 @@ import { outputsLayer } from "./outputs.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
+import { recommendersLayer } from "./recommenders.ts";
+import { radio } from "./radio.ts";
 import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { listSources } from "./sources.ts";
@@ -41,6 +43,7 @@ export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { StreamPort } from "./outputs.ts";
 export { pluginLayer } from "./plugin.ts";
+export { recommendationsLayer } from "./recommenders.ts";
 export { tracklistsLayer } from "./tracklists.ts";
 
 export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescriptor>()(
@@ -53,6 +56,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
     Layer.mergeAll(
       providersLayer,
       popularitiesLayer,
+      recommendersLayer,
       streamKeyLayer,
       authCodesLayer,
       providerCacheSweepLayer,
@@ -87,6 +91,7 @@ export const serverRoutes = Layer.unwrap(
       artistPage: ({ ref }) => artistPage(ref),
       albumPage: ({ ref }) => albumPage(ref),
       homePage: () => homePage,
+      radio: ({ start }) => radio(start).pipe(orDieOnDatabaseError("radio")),
       listLibraryArtists: () => listLibraryArtists.pipe(orDieOnDatabaseError("listLibraryArtists")),
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>

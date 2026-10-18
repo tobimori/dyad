@@ -120,6 +120,11 @@ export class PageTrack extends Schema.Class<PageTrack>("PageTrack")({
   number: Schema.NullOr(Schema.Int),
   /** `false`: the provider does not stream it, for example outside the storefront */
   playable: Schema.Boolean,
+  /** Why Dyad suggests the track, for example `Because you played Song`. Safe to show. */
+  reason: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 // The section kinds are fixed and do not depend on the provider. Clients map a kind to a heading.
@@ -192,9 +197,9 @@ export class HomeShelf extends Schema.Class<HomeShelf>("HomeShelf")({
   albums: Schema.Array(AlbumCard),
 }) {}
 
-/** The shelves from the plays on the server, or from one provider */
+/** The shelves from the plays on the server, from the user's recommenders, or from one provider */
 export class HomeGroup extends Schema.Class<HomeGroup>("HomeGroup")({
-  /** `null` for the shelves from the plays on the server */
+  /** `null` for the shelves from the plays on the server and from the recommenders */
   providerName: Schema.NullOr(Schema.String),
   shelves: Schema.Array(HomeShelf),
   state: PageState,
@@ -203,6 +208,12 @@ export class HomeGroup extends Schema.Class<HomeGroup>("HomeGroup")({
 export class HomePage extends Schema.Class<HomePage>("HomePage")({
   groups: Schema.Array(HomeGroup),
 }) {}
+
+/** What a radio starts from: a song or a DJ set, or an artist */
+export const RadioStart = Schema.TaggedUnion({
+  Source: { sourceId: Schema.String.check(Schema.isUUID()) },
+  Artist: { name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)) },
+});
 
 /**
  * Why the user cannot play a library entry. `library_only`: the song is only in the user's
@@ -433,12 +444,20 @@ export class BrowserLogin extends Schema.Class<BrowserLogin>("BrowserLogin")({
   requiredCookies: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
+/** Clients ask for a token that the user copies from `url`, and send it as `token` to `linkAccount` */
+export class TokenLogin extends Schema.TaggedClass<TokenLogin>()("TokenLogin", {
+  /** The page that shows the token. HTTPS only. */
+  url: BrowserLogin.fields.url,
+  /** The provider's name of the token, for example `user token` */
+  label: Schema.String,
+}) {}
+
 export class AccountProviderSummary extends Schema.Class<AccountProviderSummary>(
   "AccountProviderSummary",
 )({
   provider: Schema.String,
   name: Schema.String,
-  login: BrowserLogin,
+  login: Schema.Union([BrowserLogin, TokenLogin]),
   /** A new playlist can have a two-way link to a new playlist of the provider */
   createsPlaylists: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 }) {}
@@ -521,6 +540,11 @@ export class QueueEntry extends Schema.Class<QueueEntry>("QueueEntry")({
   context: PlayContext,
   /** The entry failed to play. Skips and ends pass over it; `JumpTo` tries it again. */
   unplayable: Schema.Boolean,
+  /** Why a radio added the entry, for example `Because you played Song`. Safe to show. */
+  reason: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 /** The transport of the user's session. `positionAt` gives the position at a server time. */
@@ -542,6 +566,11 @@ export class Playback extends Schema.Class<Playback>("Playback")({
   lost: Schema.Boolean,
   shuffle: Schema.Boolean,
   repeat: RepeatMode,
+  /** The session adds radio songs when the last entry plays and `repeat` is `off` */
+  autoplay: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(true)),
+    Schema.withConstructorDefault(Effect.succeed(true)),
+  ),
 }) {}
 
 export class Output extends Schema.Class<Output>("Output")({
@@ -593,7 +622,16 @@ const SourceIds = Schema.NonEmptyArray(Schema.String.check(Schema.isUUID())).che
 
 export const SessionCommand = Schema.TaggedUnion({
   /** Replaces the queue and plays `sourceIds[index]` */
-  Play: { sourceIds: SourceIds, index: Schema.Int, context: PlayContext, shuffle: Schema.Boolean },
+  Play: {
+    sourceIds: SourceIds,
+    index: Schema.Int,
+    context: PlayContext,
+    shuffle: Schema.Boolean,
+    /** `QueueEntry.reason` by source ID, from `radio` */
+    reasons: Schema.optionalKey(
+      Schema.Record(Schema.String, Schema.String.check(Schema.isMaxLength(200))),
+    ),
+  },
   Enqueue: {
     sourceIds: SourceIds,
     context: PlayContext,
@@ -612,6 +650,7 @@ export const SessionCommand = Schema.TaggedUnion({
   Skip: { fromEntryId: EntryId, direction: Schema.Literals([1, -1]) },
   SetShuffle: { on: Schema.Boolean },
   SetRepeat: { mode: RepeatMode },
+  SetAutoplay: { on: Schema.Boolean },
   /** `play: null` keeps the state. The session leaves its group. */
   Transfer: { outputId: OutputId, play: Schema.NullOr(Schema.Boolean) },
   /**
@@ -735,6 +774,8 @@ const UserRpc = RpcGroup.make(
   }),
   // Streams the page again each time that a provider group changes, like `artistPage`
   Rpc.make("homePage", { success: HomePage, stream: true }),
+  // Songs that follow the start, best first, each with a reason. The start itself is not in it.
+  Rpc.make("radio", { payload: { start: RadioStart }, success: Schema.Array(PageTrack) }),
   // The album artists and the albums of the files on the server, sorted by name
   Rpc.make("listLibraryArtists", { success: Schema.Array(ArtistCard) }),
   Rpc.make("listLibraryAlbums", { success: Schema.Array(AlbumCard) }),

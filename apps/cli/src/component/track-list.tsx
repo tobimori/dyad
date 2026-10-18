@@ -15,6 +15,8 @@ export class ListItem extends Data.Class<{
   readonly context: typeof PlayContext.Type;
   /** Shown in place of the source */
   readonly label?: string | undefined;
+  /** Why a radio added it, shown dim in place of the album */
+  readonly reason?: string | null | undefined;
 }> {}
 
 /** A library entry that the user cannot play. The list shows it dimmed and never queues it. */
@@ -105,6 +107,7 @@ function Columns(props: {
   readonly video: boolean;
   readonly artist: string;
   readonly album: string;
+  readonly reason: string | null;
   readonly time: string;
   readonly source: string;
   readonly width: number;
@@ -115,6 +118,7 @@ function Columns(props: {
   readonly accent: string;
   readonly attributes: number;
 }) {
+  const theme = useTheme();
   const widths = columnWidths(props.width, props.wide);
 
   return (
@@ -130,8 +134,12 @@ function Columns(props: {
         {fit(props.artist, widths.artist)}
       </text>
       {props.wide && (
-        <text width={widths.album} fg={props.secondary} attributes={props.attributes}>
-          {fit(props.album, widths.album)}
+        <text
+          width={widths.album}
+          fg={props.reason === null ? props.secondary : theme.faint}
+          attributes={props.attributes}
+        >
+          {fit(props.reason ?? props.album, widths.album)}
         </text>
       )}
       <text width={timeWidth} textAlign="right" fg={props.secondary} attributes={props.attributes}>
@@ -204,6 +212,7 @@ export function TrackList(props: {
           video={false}
           artist="Artist"
           album="Album"
+          reason={null}
           time="Time"
           source="Source"
           width={width}
@@ -251,6 +260,7 @@ export function TrackList(props: {
                 video={!unavailable && item.source.video}
                 artist={track.artist ?? ""}
                 album={track.album ?? ""}
+                reason={unavailable ? null : (item.reason ?? null)}
                 time={formatDuration(track.durationMs)}
                 source={unavailable ? item.label : (item.label ?? sourceLabel(item.source))}
                 width={width}

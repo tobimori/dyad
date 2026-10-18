@@ -7,6 +7,7 @@ import { Pacing, RateLimited, pacingLayer } from "./http.ts";
 import type { LookupError } from "./http.ts";
 import { lookupRecordings } from "./listenbrainz.ts";
 import { lookupIsrcs, searchRecording } from "./musicbrainz.ts";
+import { listenbrainzRecommender } from "./recommender.ts";
 
 const toMusicBrainzError = (error: LookupError | RateLimited) =>
   error instanceof RateLimited
@@ -38,7 +39,8 @@ const recordingsByText = (
 
 /**
  * Finds MusicBrainz recordings for the matching of the core. The plugin owns HTTP, pacing and
- * response schemas; the core decides which match to accept.
+ * response schemas; the core decides which match to accept. A ListenBrainz account adds scrobbles
+ * and recommendations.
  */
 export const musicbrainzPlugin = new Plugin({
   id: "dyad.musicbrainz",
@@ -60,5 +62,6 @@ export const musicbrainzPlugin = new Plugin({
             ),
         }),
       );
+      yield* context.recommenders.add("listenbrainz", yield* listenbrainzRecommender);
     }),
 });

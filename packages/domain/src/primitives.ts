@@ -24,4 +24,5 @@ export const PlayContext = Schema.Literals([
   "artist",
   "home",
   "playlist",
+  "radio",
 ]);

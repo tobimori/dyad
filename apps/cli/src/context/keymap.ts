@@ -78,6 +78,8 @@ export const commands = {
   searchTrack: command("track.searchTrack", "Search the track", "Track", []),
   goToArtist: command("track.goToArtist", "Go to the artist", "Track", []),
   goToAlbum: command("track.goToAlbum", "Go to the album", "Track", []),
+  startRadio: command("track.startRadio", "Start radio", "Track", []),
+  artistRadio: command("artist.startRadio", "Start artist radio", "Track", []),
   download: command("track.download", "Download", "Track", []),
   removeDownload: command("track.removeDownload", "Remove download", "Track", []),
   playAll: command("page.playAll", "Play all", "Browse", []),
@@ -107,6 +109,7 @@ export const commands = {
     "shift+j",
   ]),
   clear: command("queue.clear", "Clear, keep current", "Queue", ["c"], "clear"),
+  autoplay: command("queue.autoplay", "Continue with radio when the queue ends", "Queue", []),
 
   leaveInput: command("input.leave", "Leave the search field", null, ["escape", "down"], "leave"),
   submitInput: command("input.submit", "Show the results", null, ["return"], "results"),

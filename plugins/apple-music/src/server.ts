@@ -7,6 +7,7 @@ import {
   ProviderError,
   ProviderLibrary,
   ProviderPlaylists,
+  Recommender,
 } from "@dyad/plugin";
 import type { Credentials } from "@dyad/plugin";
 import { readSegments, segmentBytes, segmentsFrom } from "@dyad/plugin/hls";
@@ -34,7 +35,7 @@ import {
   readPlaylists,
   readPlaylistTracks,
 } from "./library.ts";
-import { readCharts } from "./home.ts";
+import { readCharts, readPersonal } from "./home.ts";
 import { readAlbum, readArtist } from "./pages.ts";
 import { acquireAppleKeys } from "./widevine.ts";
 
@@ -275,6 +276,14 @@ export const appleMusicPlugin = new Plugin({
           playlists,
           metadataPriority: 30,
           download: { leaseDays: 30 },
+        }),
+      );
+
+      yield* context.recommenders.add(
+        provider,
+        new Recommender({
+          name: "Apple Music",
+          shelves: (credentials) => catalogPage(credentials, readPersonal),
         }),
       );
     }),

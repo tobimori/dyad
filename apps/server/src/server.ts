@@ -24,6 +24,7 @@ import {
   hlcClockFromDatabase,
   librarySyncLayer,
   pluginLayer,
+  recommendationsLayer,
   serverRoutes,
   tracklistsLayer,
 } from "@dyad/server-core";
@@ -95,8 +96,8 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(identity),
     );
     return Layer.mergeAll(
-      // The first library imports, ISRC lookups and tracklist reads need what the plugins add
-      Layer.mergeAll(librarySyncLayer, catalogLayer, tracklistsLayer).pipe(
+      // The first library imports, ISRC lookups, tracklist reads and scrobbles need what the plugins add
+      Layer.mergeAll(librarySyncLayer, catalogLayer, tracklistsLayer, recommendationsLayer).pipe(
         Layer.provide(pluginLayer(builtinPlugins, packageJson.version)),
       ),
       HttpRouter.serve(routes).pipe(

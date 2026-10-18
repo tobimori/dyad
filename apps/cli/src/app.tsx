@@ -1,6 +1,6 @@
 import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
 import type { Downloads, Replica, ServerAtoms, SessionClient } from "@dyad/client-runtime";
-import { segmentIndexAt } from "@dyad/domain";
+import { ArtistPage, RadioStart, segmentIndexAt } from "@dyad/domain";
 import type {
   AlbumCard,
   AlbumRef,
@@ -14,7 +14,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
 import type { BoxRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
-import { Data, Effect, SubscriptionRef } from "effect";
+import { Data, Effect, Schema, SubscriptionRef } from "effect";
 import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -388,6 +388,45 @@ export function App(props: {
 
   // No "Go to" for the page that shows now; a source without a ref falls back to a search
   // The video plays with its own audio, so a source that does not play yet starts first
+  // The seed plays first, then the songs that the server suggests after it
+  const startRadio = (start: typeof RadioStart.Type, label: string, seed: SourceSummary | null) => {
+    if (client === null) {
+      toast("error", "Connect to the server to start a radio");
+      return;
+    }
+    toast("notice", `Starting radio: ${label}`);
+    props.run(
+      client.radio({ start }).pipe(
+        Effect.match({
+          onSuccess: (tracks) => {
+            if (tracks.length === 0) {
+              toast("notice", `No radio songs for ${label} yet`);
+              return;
+            }
+            const reasons = Object.fromEntries(
+              tracks.flatMap((track) =>
+                track.reason === null ? [] : [[track.source.id, track.reason]],
+              ),
+            );
+            const sources = [
+              ...(seed === null ? [] : [seed]),
+              ...tracks.map((track) => track.source),
+            ];
+            player.playList(sources, 0, "radio", reasons);
+          },
+          onFailure: () => toast("error", "Cannot start the radio. Try again."),
+        }),
+      ),
+    );
+  };
+
+  const artistRadio = (name: string) =>
+    new Action({
+      command: commands.artistRadio,
+      label: `Start artist radio: ${name}`,
+      run: () => startRadio(RadioStart.cases.Artist.make({ name }), name, null),
+    });
+
   const watchVideo = (source: SourceSummary) => {
     if (player.current?.source.id !== source.id) activate(indexOfSelection());
     setView("video");
@@ -405,6 +444,16 @@ export function App(props: {
         command: commands.addToQueue,
         label: "Add to queue",
         run: () => player.addToQueue([source], target.context),
+      }),
+      new Action({
+        command: commands.startRadio,
+        label: "Start radio",
+        run: () =>
+          startRadio(
+            RadioStart.cases.Source.make({ sourceId: source.id }),
+            titleOf(source),
+            source,
+          ),
       }),
       ...(source.video
         ? [
@@ -526,7 +575,14 @@ export function App(props: {
   };
 
   const pageActions = () => {
-    if (view !== "browse" || route instanceof SectionRoute || pageSources.length === 0) return [];
+    const loaded = AsyncResult.isSuccess(page.result) ? page.result.value : null;
+    const artist = loaded !== null && Schema.is(ArtistPage)(loaded) ? loaded.name : null;
+    const radio =
+      view === "browse" && route instanceof ArtistRoute && artist !== null
+        ? [artistRadio(artist)]
+        : [];
+    if (view !== "browse" || route instanceof SectionRoute || pageSources.length === 0)
+      return radio;
 
     return [
       new Action({
@@ -608,6 +664,7 @@ export function App(props: {
     if (target instanceof ActionTarget) return [...inSet, ...trackActions(target)];
     if (target instanceof AlbumRow) return albumActions(target.album);
     if (target instanceof PlaylistRow) return playlistActions.manage(target.playlist, () => {});
+    if (target instanceof ArtistRow) return [artistRadio(target.artist.name)];
     return [];
   };
 

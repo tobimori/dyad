@@ -1,5 +1,6 @@
 import { ServerConnection } from "@dyad/client-runtime";
-import { Console, Effect, Option } from "effect";
+import { TokenLogin } from "@dyad/domain";
+import { Console, Effect, Option, Redacted, Schema } from "effect";
 import { Argument, Command, Flag, Prompt } from "effect/cli";
 
 import { deviceConnection, fail, reportFailures } from "./auth.ts";
@@ -40,9 +41,14 @@ const linkCommand = Command.make(
         );
       }
 
+      const login = accountProvider.login;
       const credentials = yield* Effect.gen(function* () {
-        if (Option.isSome(cookies))
-          return yield* readCookieFile(accountProvider.login, cookies.value);
+        if (Schema.is(TokenLogin)(login)) {
+          yield* Console.log(`Copy your ${login.label} from ${login.url}`);
+          const token = yield* Prompt.Hidden({ message: `Paste the ${login.label}` });
+          return { token: Redacted.value(token).trim() };
+        }
+        if (Option.isSome(cookies)) return yield* readCookieFile(login, cookies.value);
         const browsers = yield* availableCookieBrowsers;
         const index = yield* Prompt.Select({
           message: "Import cookies",
@@ -53,9 +59,9 @@ const linkCommand = Command.make(
         });
         const browser = browsers[index];
         if (browser === undefined) {
-          yield* Console.log(cookieFileHint(accountProvider.login));
+          yield* Console.log(cookieFileHint(login));
           const file = yield* Prompt.String({ message: "Cookie file" });
-          return yield* readCookieFile(accountProvider.login, file);
+          return yield* readCookieFile(login, file);
         }
         yield* Console.log(
           `Normal browser cookies expire sooner than a private-window export. Re-import when Dyad says "Sign in to ${accountProvider.name} again".`,
@@ -70,12 +76,12 @@ const linkCommand = Command.make(
                   value: profile,
                 })),
               });
-        return yield* readBrowserCookies(browser, profile, accountProvider.login);
+        return yield* readBrowserCookies(browser, profile, login);
       });
       const account = yield* connection.linkAccount({ provider, credentials });
       yield* Console.log(`Linked ${account.displayName}`);
     }).pipe(Effect.provide(deviceConnection), reportFailures),
-).pipe(Command.withDescription("Import browser cookies and link a provider account"));
+).pipe(Command.withDescription("Link a provider account with browser cookies or a token"));
 
 const unlinkCommand = Command.make(
   "unlink",

@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Option, Stream } from "effect";
 import { AsyncResult, Atom, Reactivity } from "effect/reactivity";
 
 import { ConnectionStatus, ServerConnection } from "./connection.ts";
-import { ClientDatabase, accountProvidersState } from "./replica/database.ts";
+import { ClientDatabase, accountProvidersState, homePageState } from "./replica/database.ts";
 import { catalogTables } from "./replica/rows.ts";
 import {
   localLibrary,
@@ -116,7 +116,18 @@ export const serverAtoms = (
         .atom(Stream.unwrap(ServerConnection.useSync((client) => client.albumPage({ ref }))))
         .pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
-    homePage: runtime.atom(Stream.unwrap(ServerConnection.useSync((client) => client.homePage()))),
+    /** The page that the device saved last first, so that the home shows offline */
+    homePage: runtime.atom(
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const saved = yield* homePageState.get;
+          const live = Stream.unwrap(ServerConnection.useSync((client) => client.homePage())).pipe(
+            Stream.tap(homePageState.set),
+          );
+          return Stream.concat(Stream.fromIterable(Option.toArray(saved)), live);
+        }),
+      ),
+    ),
     /** The tracklist of a DJ set source from the server, else from the replica */
     sourceSegments: Atom.family((sourceId: string) => {
       const remote = runtime.atom(

@@ -1,5 +1,5 @@
 import { PartialDate, ReleaseType, SecondaryType } from "@dyad/domain";
-import type { AccountLinkFailed, AudioFormat, BrowserLogin } from "@dyad/domain";
+import type { AccountLinkFailed, AudioFormat, BrowserLogin, TokenLogin } from "@dyad/domain";
 import { Data, Effect, Schema } from "effect";
 import type { FileSystem, Path, Redacted, Scope, Stream } from "effect";
 import type { NonEmptyReadonlyArray } from "effect/Array";
@@ -312,7 +312,8 @@ export class Provider extends Data.Class<{
   ) => Effect.Effect<ReadonlyArray<ProviderShelf>, ProviderError>;
   /** Without `optional`, users must link an account before they can search or play the provider */
   readonly account?: {
-    readonly login: BrowserLogin;
+    /** With a `TokenLogin`, the credentials have one value, `token` */
+    readonly login: BrowserLogin | TokenLogin;
     /** Users can also search and play without an account */
     readonly optional?: true;
     /** Checks the credentials with the provider and returns the account name to show */
@@ -339,6 +340,68 @@ export class Provider extends Data.Class<{
    * in with the server for `leaseDays` (`null`: never). Without it, devices cannot download.
    */
   readonly download?: { readonly leaseDays: number | null };
+}> {}
+
+/** A song that a recommender suggests. The core finds a playable source for it. */
+export class Suggestion extends Schema.Class<Suggestion>("Suggestion")({
+  title: Schema.String,
+  artist: Schema.String,
+  /** A source of the provider with the recommender's ID. Without it, the core looks for one. */
+  source: Schema.NullOr(ProviderSource),
+}) {}
+
+/** One personal list, for example `Quick picks`. The core caches it per user, so it is a schema. */
+export class SuggestionShelf extends Schema.Class<SuggestionShelf>("SuggestionShelf")({
+  title: Schema.String,
+  songs: Schema.Array(Suggestion),
+  /** Releases of the provider with the recommender's ID */
+  releases: Schema.Array(ProviderRelease),
+}) {}
+
+/** The song or artist that a radio starts from */
+export class RadioSeed extends Data.Class<{
+  /** `null` for an artist */
+  readonly title: string | null;
+  readonly artist: string;
+  /** The `ProviderSource.externalId` when the seed is a source of the recommender's provider */
+  readonly externalId: string | null;
+}> {}
+
+/** One play that the user listened to */
+export class Scrobble extends Data.Class<{
+  readonly title: string;
+  readonly artist: string;
+  readonly album: string | null;
+  readonly durationMs: number | null;
+  /** Epoch milliseconds */
+  readonly startedAt: number;
+}> {}
+
+/**
+ * Personal suggestions of a service, for example YouTube Music or ListenBrainz. The functions get
+ * the credentials of the user's account of the provider with the recommender's ID, else of the
+ * recommender's own `account`.
+ */
+export class Recommender extends Data.Class<{
+  readonly name: string;
+  /** Higher first when the core merges the suggestions of several recommenders */
+  readonly priority?: number;
+  /** Only when no provider has the recommender's ID */
+  readonly account?: Provider["account"];
+  /** Called only with a linked account. The core caches the shelves of each user for 6 hours. */
+  readonly shelves?: (
+    credentials: Credentials,
+  ) => Effect.Effect<ReadonlyArray<SuggestionShelf>, ProviderError>;
+  /** Songs that follow the seed, best first. The credentials are empty without a linked account. */
+  readonly radio?: (
+    seed: RadioSeed,
+    credentials: Credentials,
+  ) => Effect.Effect<ReadonlyArray<Suggestion>, ProviderError>;
+  /** Sends plays to the account. Called only with a linked account, at most 100 plays at a time. */
+  readonly scrobble?: (
+    plays: ReadonlyArray<Scrobble>,
+    credentials: Credentials,
+  ) => Effect.Effect<void, LibraryError>;
 }> {}
 
 export class MusicBrainzRecording extends Data.Class<{
@@ -393,6 +456,8 @@ export class OutputInfo extends Data.Class<{
   /** Stable for the device, for example the UPnP UDN */
   readonly id: string;
   readonly name: string;
+  /** IP address. Outputs of two plugins on one address show as one row of the device. */
+  readonly host?: string | undefined;
 }> {}
 
 export class UrlStatus extends Data.Class<{
@@ -514,6 +579,10 @@ export class PluginContext extends Data.Class<{
       name: string,
       popularity: (query: string) => Effect.Effect<ReadonlyArray<PopularityHit>, ProviderError>,
     ) => Effect.Effect<void, never, Scope.Scope>;
+  };
+  readonly recommenders: {
+    /** Setup fails if another plugin added the same ID */
+    readonly add: (id: string, recommender: Recommender) => Effect.Effect<void, never, Scope.Scope>;
   };
   readonly musicbrainz: {
     /** Supplies the MusicBrainz lookups of matching. Setup fails if another plugin supplied them. */
