@@ -54,21 +54,31 @@ export class HlcClock extends Context.Service<
   }
 >()("@dyad/sync/HlcClock") {}
 
-export const hlcClockLayer = (replicaId: ReplicaId) =>
+/** The wall time of `hlc` in ms */
+export const wallTimeOf = (hlc: HybridLogicalClock) => decode(hlc).wallTime;
+
+export const hlcClockLayer = (options: {
+  readonly replicaId: ReplicaId;
+  /** The highest stored value. Later values are greater, also when the wall clock went back. */
+  readonly latest: HybridLogicalClock | null;
+  /** Wall time in ms. A client adds its offset to the server clock. */
+  readonly now?: Effect.Effect<number>;
+}) =>
   Layer.effect(
     HlcClock,
     Effect.gen(function* () {
-      const last = yield* Ref.make(origin);
+      const now = options.now ?? Clock.currentTimeMillis;
+      const last = yield* Ref.make(options.latest === null ? origin : decode(options.latest));
 
       const advance = (remote: ClockTime) =>
         Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
+          const wallTime = yield* now;
           const time = yield* Ref.modify(last, (previous) => {
-            const value = tick(previous, now, remote);
+            const value = tick(previous, wallTime, remote);
             return [value, value];
           });
 
-          return encode(time, replicaId);
+          return encode(time, options.replicaId);
         });
 
       // A local event has no remote value. `origin` is not greater than any clock value.

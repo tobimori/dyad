@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 
 import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
-import { ReplicaId, ServerDescriptor } from "@dyad/domain";
+import { ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
 import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
@@ -17,11 +17,11 @@ import {
   StreamPort,
   catalogLayer,
   coreServicesLayer,
+  hlcClockFromDatabase,
   librarySyncLayer,
   pluginLayer,
   serverRoutes,
 } from "@dyad/server-core";
-import { hlcClockLayer } from "@dyad/sync";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -61,12 +61,6 @@ export const serverLayer = Layer.unwrap(
           protocolVersion: 1,
           capabilities: { replication: false, playback: true, providerSync: false },
         }),
-      ),
-    );
-
-    const hlcClock = Layer.unwrap(
-      ReplicaDatabase.use(({ replicaId }) =>
-        Effect.map(Schema.decodeEffect(ReplicaId)(replicaId), hlcClockLayer),
       ),
     );
 
@@ -112,7 +106,7 @@ export const serverLayer = Layer.unwrap(
         coreServicesLayer.pipe(
           Layer.provide(mediaCacheConfig),
           Layer.provide(streamPort),
-          Layer.provideMerge(hlcClock),
+          Layer.provideMerge(hlcClockFromDatabase),
           Layer.provideMerge(database),
         ),
       ),

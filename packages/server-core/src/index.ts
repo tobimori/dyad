@@ -33,6 +33,7 @@ import { listSources } from "./sources.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
 export { catalogLayer } from "./catalog-backfill.ts";
+export { hlcClockFromDatabase } from "./clock.ts";
 export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { StreamPort } from "./outputs.ts";
