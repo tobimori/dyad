@@ -315,6 +315,21 @@ export class WebLink extends Schema.Class<WebLink>("WebLink")({
   url: Schema.String,
 }) {}
 
+/** One copy of a recording: a source of a provider or a file */
+export class SourceCopy extends Schema.Class<SourceCopy>("SourceCopy")({
+  source: SourceSummary,
+  lossless: Schema.Boolean,
+  /** In bit/s, `null` when unknown */
+  bitrate: Schema.NullOr(Schema.Int),
+  sampleRate: Schema.NullOr(Schema.Int),
+  bitDepth: Schema.NullOr(Schema.Int),
+  /**
+   * Why the user cannot play it. `account_required`: the user has no linked account of the
+   * provider. `unavailable`: the server has neither the file nor the provider.
+   */
+  unavailable: Schema.NullOr(Schema.Literals(["account_required", "unavailable"])),
+}) {}
+
 export class TracklistEditFailed extends Schema.TaggedError<TracklistEditFailed>()(
   "TracklistEditFailed",
   { reason: Schema.Literals(["not_admin", "source_not_found"]) },
@@ -963,6 +978,12 @@ const UserRpc = RpcGroup.make(
   Rpc.make("webLinks", {
     payload: { sourceId: Schema.String.check(Schema.isUUID()) },
     success: Schema.Array(WebLink),
+  }),
+  // All copies of the recording of the source on all providers and as files, in the user's
+  // source order, also the copies that the user cannot play
+  Rpc.make("sourceCopies", {
+    payload: { sourceId: Schema.String.check(Schema.isUUID()) },
+    success: Schema.Array(SourceCopy),
   }),
   // Admin only. Hides the tracklists of the source for all users, or shows them again.
   Rpc.make("hideTracklist", {

@@ -15,6 +15,7 @@ export {
   recording,
   source,
   sourceKey,
+  sourcePreference,
   sourceSegment,
   sourceVariant,
   syncQueue,

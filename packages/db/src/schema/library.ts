@@ -88,3 +88,27 @@ export const playlistEntry = sqliteTable(
     index("playlist_entry_seq_idx").on(table.changeSeq),
   ],
 );
+
+/**
+ * How the user orders the sources of a recording. LWW per row: each write sets all fields. Only
+ * the `global` scope exists now.
+ */
+export const sourcePreference = sqliteTable(
+  "source_preference",
+  {
+    // UUIDv5 of `source_preference:<user_id>:<scope>`
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    scope: text("scope", { enum: ["global"] }).notNull(),
+    // Provider IDs, best first, with `local` for files. Providers that it leaves out come after.
+    providerRanking: text("provider_ranking", { mode: "json" })
+      .$type<ReadonlyArray<string>>()
+      .notNull(),
+    hlc: text("hlc").notNull(),
+    changeSeq,
+  },
+  (table) => [
+    index("source_preference_change_idx").on(table.userId, table.changeSeq),
+    index("source_preference_seq_idx").on(table.changeSeq),
+  ],
+);

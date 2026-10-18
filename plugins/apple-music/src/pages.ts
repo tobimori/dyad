@@ -8,7 +8,16 @@ import {
 import { Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
-import { amp, AppleTrack, authorize, catalogSource, requestJson, songIncludes } from "./api.ts";
+import {
+  amp,
+  AppleTrack,
+  authorize,
+  catalogSource,
+  datePrefix,
+  requestJson,
+  songIncludes,
+  typeSuffix,
+} from "./api.ts";
 import type { AppleSession } from "./api.ts";
 
 const Artwork = Schema.optional(Schema.Struct({ url: Schema.String }));
@@ -75,11 +84,6 @@ const AlbumResponse = Schema.Struct({
 
 const artwork = (image: { readonly url: string } | undefined) =>
   image?.url.replace("{w}", "600").replace("{h}", "600") ?? null;
-
-const datePrefix = /^\d{4}(-\d{2}(-\d{2})?)?/;
-
-// Apple marks EPs and singles in the name, for example `Creep - EP` (October 2026)
-const typeSuffix = / - (EP|Single)$/;
 
 const primaryTypeOf = (album: typeof AppleAlbum.Type) => {
   const suffix = album.attributes.name.match(typeSuffix)?.[1];

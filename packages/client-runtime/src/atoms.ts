@@ -14,7 +14,9 @@ import {
   libraryArtistsState,
 } from "./replica/database.ts";
 import { catalogTables } from "./replica/rows.ts";
+import { localSourceCopies } from "./replica/copies.ts";
 import { localHeardInSets, localSets } from "./replica/sets.ts";
+import { localProviderChoices } from "./replica/source-preference.ts";
 import {
   localLibrary,
   localPlaylistEntries,
@@ -106,14 +108,19 @@ export const serverAtoms = (
     sources: runtime.atom(
       ServerConnection.use((client) => client.listSources()).pipe(Effect.timeout("5 seconds")),
     ),
-    library: local(["library_item", ...catalogTables, "client_state"], localLibrary),
+    library: local(
+      ["library_item", "source_preference", ...catalogTables, "client_state"],
+      localLibrary,
+    ),
     playlists: local(["playlist", "playlist_entry"], localPlaylists),
     playlistEntries: Atom.family((playlistId: string) =>
       local(
-        ["playlist", "playlist_entry", ...catalogTables, "client_state"],
+        ["playlist", "playlist_entry", "source_preference", ...catalogTables, "client_state"],
         localPlaylistEntries(playlistId),
       ).pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
+    /** The providers in the user's order, best first, for the setting */
+    providerChoices: local(["source_preference", "source", "client_state"], localProviderChoices),
     /** Which scopes are still "Syncing" */
     syncProgress: local(["sync_scope"], localSyncProgress),
     librarySyncStatus,
@@ -223,6 +230,23 @@ export const serverAtoms = (
         }),
       ),
     ),
+    /** All copies of the recording of a source from the server, else from the replica */
+    sourceCopies: Atom.family((sourceId: string) => {
+      const remote = runtime.atom(
+        ServerConnection.use((client) => client.sourceCopies({ sourceId })).pipe(
+          Effect.timeout("5 seconds"),
+        ),
+      );
+      const replica = local(
+        ["source_preference", ...catalogTables, "client_state"],
+        localSourceCopies(sourceId),
+      );
+      // No idle time: a changed provider order must apply at the next open
+      return Atom.make((get) => {
+        const online = get(remote);
+        return AsyncResult.isSuccess(online) ? online : get(replica);
+      });
+    }),
     /** The tracklist of a DJ set source from the server, else from the replica */
     sourceSegments: Atom.family((sourceId: string) => {
       const remote = runtime.atom(

@@ -83,6 +83,10 @@ export const mergeRow = (current: SyncRow | undefined, incoming: SyncRow) =>
             current.table === "playlist_entry"
               ? mergeFields(current, row, entryFields, (merged) => new PlaylistEntryRow(merged))
               : Option.none<SyncRow>(),
+          source_preference: (row) =>
+            current.table === "source_preference" && row.hlc > current.hlc
+              ? Option.some<SyncRow>(row)
+              : Option.none<SyncRow>(),
         }),
       );
 
@@ -141,6 +145,7 @@ export const changeTarget = (change: SyncChange) =>
       "playlist_entry.add": (add) => ({ table: add.row.table, id: add.row.id }),
       "playlist.patch": (patch) => ({ table: "playlist" as const, id: patch.id }),
       "playlist_entry.patch": (patch) => ({ table: "playlist_entry" as const, id: patch.id }),
+      "source_preference.set": (set) => ({ table: set.row.table, id: set.row.id }),
     }),
   );
 
@@ -159,6 +164,7 @@ export const applyChange = (current: SyncRow | undefined, change: SyncChange) =>
         current?.table === "playlist_entry"
           ? patchRow(current, patch, patch.hlc)
           : Option.none<SyncRow>(),
+      "source_preference.set": (set) => mergeRow(current, set.row),
     }),
   );
 

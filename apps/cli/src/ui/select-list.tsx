@@ -25,13 +25,15 @@ export function SelectList<A>(props: {
   readonly empty?: string;
   readonly onChoose: (value: A) => void;
   readonly onHighlight?: (value: A) => void;
+  /** The option that is highlighted first */
+  readonly initial?: A;
 }) {
   const theme = useTheme();
   const container = useRef<BoxRenderable | null>(null);
   const filterInput = useRef<InputRenderable | null>(null);
   const scroll = useRef<ScrollBoxRenderable | null>(null);
   const [query, setQuery] = useState("");
-  const [highlighted, setHighlighted] = useState<A | null>(null);
+  const [highlighted, setHighlighted] = useState<A | null>(props.initial ?? null);
 
   const needle = query.trim().toLowerCase();
   const visible =

@@ -55,6 +55,24 @@ export class ProviderSource extends Schema.Class<ProviderSource>("ProviderSource
     Schema.withDecodingDefaultKey(Effect.succeed(false)),
     Schema.withConstructorDefault(Effect.succeed(false)),
   ),
+  /**
+   * The type of the release of `album`. The core shows an album before an EP and a single when a
+   * recording is on several. `null` when the provider does not say.
+   */
+  albumType: Schema.NullOr(ReleaseType).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
+  /** Sessions count as `live` */
+  albumSecondaryTypes: Schema.Array(SecondaryType).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
+  /** Of the release of `album`. The core shows the earlier edition when a recording is on several. */
+  releaseDate: Schema.NullOr(PartialDate).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 /** One release on a provider page. The core caches pages on its replica, so they are schemas. */

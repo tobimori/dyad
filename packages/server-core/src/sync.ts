@@ -6,6 +6,7 @@ import {
   replica,
   replicaIdentity,
   source,
+  sourcePreference,
   syncRejection,
 } from "@dyad/db";
 import { Database, ReplicaDatabase, orDieOnDatabaseError } from "@dyad/db/node";
@@ -18,6 +19,8 @@ import {
   PlaylistPatch,
   PlaylistRow,
   ReplicaId,
+  SourcePreferenceRow,
+  SourcePreferenceSet,
   ReplicaMismatch,
   ScopeCursor,
   SyncHint,
@@ -40,7 +43,7 @@ import type {
   SyncTable,
   UserId,
 } from "@dyad/domain";
-import { HlcClock, applyChange, changeTarget, wallTimeOf } from "@dyad/sync";
+import { HlcClock, applyChange, changeTarget, sourcePreferenceId, wallTimeOf } from "@dyad/sync";
 import { and, asc, eq, gt, gte, lt, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
@@ -133,11 +136,18 @@ const syncSources = {
     changeSeq: playlistEntry.changeSeq,
     id: playlistEntry.id,
   }),
+  source_preference: new SyncSource({
+    table: "source_preference",
+    rows: sourcePreference,
+    scopeColumn: sourcePreference.userId,
+    changeSeq: sourcePreference.changeSeq,
+    id: sourcePreference.id,
+  }),
 } satisfies Record<SyncTable, SyncSource>;
 
 const sourcesOf = (scope: SyncScope) =>
   scope.startsWith("user:")
-    ? [syncSources.library_item, syncSources.play_event]
+    ? [syncSources.library_item, syncSources.play_event, syncSources.source_preference]
     : [syncSources.playlist, syncSources.playlist_entry];
 
 // Rows of one scope sort by `(change_seq, table, id)`. `rowKey` is `<table>:<id>`.
@@ -348,6 +358,7 @@ const hlcOf = (change: SyncChange) =>
       "playlist_entry.add": (add) => add.row.hlc,
       "playlist.patch": (patch) => patch.hlc,
       "playlist_entry.patch": (patch) => patch.hlc,
+      "source_preference.set": (set) => set.row.hlc,
     }),
   );
 
@@ -361,6 +372,8 @@ const withHlc = (change: SyncChange, hlc: HybridLogicalClock) =>
         new PlaylistEntryAdd({ ...add, row: new PlaylistEntryRow({ ...add.row, hlc }) }),
       "playlist.patch": (patch) => new PlaylistPatch({ ...patch, hlc }),
       "playlist_entry.patch": (patch) => new PlaylistEntryPatch({ ...patch, hlc }),
+      "source_preference.set": (set) =>
+        new SourcePreferenceSet({ ...set, row: new SourcePreferenceRow({ ...set.row, hlc }) }),
     }),
   );
 
@@ -399,6 +412,11 @@ const checkChange = (
         current?.table === "playlist_entry"
           ? Effect.map(rowAt("playlist", current.playlistId), editable)
           : Effect.succeed("not_found" as const),
+      // One row per user, so that two replicas write the same row
+      "source_preference.set": (set) =>
+        Effect.map(sourcePreferenceId(principal.userId), (id) =>
+          set.row.userId === principal.userId && set.row.id === id ? null : ("forbidden" as const),
+        ),
     }),
   );
 };

@@ -147,6 +147,11 @@ export const readRelease = (externalId: string) =>
 
     const artist = release.tralbum_artist ?? release.band.name;
     const artworkUrl = releaseArt(release.art_id);
+    const releaseDate = isoDate(
+      release.release_date === undefined || release.release_date === null
+        ? null
+        : release.release_date * 1000,
+    );
     const account = new CreditedArtist({ id: String(bandId), name: release.band.name });
 
     return new ProviderAlbum({
@@ -155,11 +160,7 @@ export const readRelease = (externalId: string) =>
         title: release.title,
         artist,
         artistId: String(bandId),
-        releaseDate: isoDate(
-          release.release_date === undefined || release.release_date === null
-            ? null
-            : release.release_date * 1000,
-        ),
+        releaseDate,
         primaryType: type === "t" ? "single" : null,
         secondaryTypes: [],
         explicit: false,
@@ -192,6 +193,7 @@ export const readRelease = (externalId: string) =>
               bitrate: 128_000,
               uploader: account,
               albumId: externalId,
+              releaseDate: type === "a" ? releaseDate : null,
             }),
           }),
       ),

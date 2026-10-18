@@ -34,6 +34,7 @@ import { radio } from "./radio.ts";
 import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { heardInSets } from "./sets.ts";
+import { sourceCopies } from "./source-copies.ts";
 import { listSources } from "./sources.ts";
 import {
   createServerPairingCode,
@@ -153,6 +154,8 @@ export const serverRoutes = Layer.unwrap(
       heardInSets: ({ recordingId }) =>
         heardInSets(recordingId).pipe(orDieOnDatabaseError("heardInSets")),
       webLinks: ({ sourceId }) => webLinks(sourceId).pipe(orDieOnDatabaseError("webLinks")),
+      sourceCopies: ({ sourceId }) =>
+        sourceCopies(sourceId).pipe(orDieOnDatabaseError("sourceCopies")),
       createServerPairingCode: () =>
         createServerPairingCode.pipe(orDieOnDatabaseError("createServerPairingCode")),
       pairServer: (payload) => pairServer(payload).pipe(orDieOnDatabaseError("pairServer")),

@@ -6,6 +6,7 @@ import { HlcClock } from "@dyad/sync";
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 
+import { AlbumType, ReleaseDate, shownAlbum } from "./editions.ts";
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
@@ -41,6 +42,8 @@ export const fields = {
   uploader_role: ParsedTitle.fields.uploaderRole,
   set: Schema.Boolean,
   series: TitleSeries,
+  album_type: AlbumType,
+  release_date: ReleaseDate,
 };
 
 /** The input of a parse, so that a new parser version can run without the provider cache */
@@ -274,13 +277,15 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
     const changed = yield* Effect.forEach(rows, (row) => {
       const members = new Set(membersOf.get(row.id));
       const own = assertions.filter((assertion) => members.has(assertion.entityId));
+      const shown = shownAlbum(own, compareAssertions(providers));
       const resolved = {
         title: resolveField(providers, own, "title", fields.title),
         artistName:
           resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
-        album: resolveField(providers, own, "album", fields.album),
+        album: shown?.album ?? resolveField(providers, own, "album", fields.album),
         durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
-        artworkUrl: resolveField(providers, own, "artwork_url", fields.artwork_url),
+        artworkUrl:
+          shown?.artworkUrl ?? resolveField(providers, own, "artwork_url", fields.artwork_url),
         explicit: resolveField(providers, own, "explicit", fields.explicit),
       };
 

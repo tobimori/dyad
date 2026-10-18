@@ -7,6 +7,7 @@ import {
   playlistEntry,
   recording,
   source,
+  sourcePreference,
   sourceVariant,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
@@ -44,6 +45,7 @@ const peerTables = {
   playlist: peerTable("playlist", playlist),
   playlist_entry: peerTable("playlist_entry", playlistEntry),
   source: peerTable("source", source),
+  source_preference: peerTable("source_preference", sourcePreference),
   source_variant: peerTable("source_variant", sourceVariant),
 } satisfies Record<PeerRow["table"], PeerTable>;
 
@@ -131,7 +133,8 @@ const isSyncRow = (row: PeerRow): row is SyncRow =>
   row.table === "library_item" ||
   row.table === "play_event" ||
   row.table === "playlist" ||
-  row.table === "playlist_entry";
+  row.table === "playlist_entry" ||
+  row.table === "source_preference";
 
 const IsrcEvidence = Schema.Struct({ isrc: Schema.String });
 

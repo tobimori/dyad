@@ -6,6 +6,7 @@ import { eq, inArray } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path } from "effect";
 
 import { requestAnalysis } from "./audio-analysis.ts";
+import { tagAlbumType, tagReleaseDate } from "./editions.ts";
 import { boundRecordingId } from "./ids.ts";
 import { normV1 } from "./normalize.ts";
 import { tagIdentifiers, writeSource } from "./sources.ts";
@@ -50,6 +51,8 @@ const importFile = (rootId: string, relativePath: string, file: AudioFile, stat:
             artworkUrl: null,
             explicit: null,
             uploader: null,
+            albumType: tagAlbumType(tags),
+            releaseDate: tagReleaseDate(tags),
           },
           {
             codec: file.codec,

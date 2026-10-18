@@ -32,6 +32,7 @@ export const commands = {
   plugins: command("app.plugins", "Plugins", "Other", ["shift+p"]),
   downloads: command("app.downloads", "Downloads", "Other", ["shift+d"]),
   accounts: command("app.accounts", "Provider accounts", "Other", ["shift+l"]),
+  providerOrder: command("app.providerOrder", "Provider order", "Other", ["shift+o"]),
   close: command("app.close", "Close, go back", "Other", ["escape"], "close"),
 
   togglePause: command("playback.toggle", "Play or pause", "Playback", ["space"]),
@@ -128,6 +129,9 @@ export const commands = {
   selectUp: command("select.up", "Move up", null, ["up", "ctrl+p"], "move"),
   selectDown: command("select.down", "Move down", null, ["down", "ctrl+n"]),
   choose: command("select.choose", "Choose", null, ["return"], "choose"),
+  orderUp: command("order.up", "Move the provider up", null, ["shift+up", "shift+k"], "move up"),
+  orderDown: command("order.down", "Move the provider down", null, ["shift+down", "shift+j"]),
+  orderReset: command("order.reset", "Use the default order", null, ["d"], "default"),
   playSegment: command(
     "tracklist.play",
     "Play from this track of the set",

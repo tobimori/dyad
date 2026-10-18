@@ -41,7 +41,8 @@ const codecNames = new Map([
 const codecName = (codec: string) =>
   codecNames.get(codec) ?? (codec.startsWith("pcm_") ? "PCM" : codec.toUpperCase());
 
-const audioLabel = (audio: AudioQuality) => {
+/** For example `FLAC 24/96` or `AAC 256`. It leaves out unknown values. */
+export const audioLabel = (audio: AudioQuality) => {
   const name = codecName(audio.codec);
   if (!audio.lossless) {
     return audio.bitrate === null ? name : `${name} ${Math.round(audio.bitrate / 1000)}`;

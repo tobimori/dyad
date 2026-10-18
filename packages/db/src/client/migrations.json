@@ -86,5 +86,16 @@
       "\nCREATE INDEX `source_change_idx` ON `source` (`change_seq`);",
       "\nCREATE INDEX `source_variant_change_idx` ON `source_variant` (`change_seq`);"
     ]
+  },
+  {
+    "name": "20261018171839_add_source_preference",
+    "folderMillis": 1792343919000,
+    "hash": "439f4d6fe51d44b4d46bcee2364f02dfcc2a68be5999ad4c041386f237c3d02b",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `source_preference` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`scope` text NOT NULL,\n\t`provider_ranking` text NOT NULL,\n\t`hlc` text NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE INDEX `source_preference_change_idx` ON `source_preference` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `source_preference_seq_idx` ON `source_preference` (`change_seq`);"
+    ]
   }
 ]

@@ -13,6 +13,7 @@ import { cacheProviderSources, cachedSummary } from "./provider-cache.ts";
 import { Popularities, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { withSeries } from "./sets.ts";
+import { providerOrder } from "./source-preference.ts";
 import { playableSources, sourceSummary, tagIdentifiers } from "./sources.ts";
 
 const localResultLimit = 50;
@@ -199,7 +200,7 @@ const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
     const candidates = [...byId.values()];
     const plays = yield* loadPlays(userId, candidates, now);
 
-    const ranked = rank(query, candidates, answer.hits, plays, now);
+    const ranked = rank(query, candidates, answer.hits, plays, now, yield* providerOrder(userId));
     return new SearchResults({
       sources: ranked.map((result) => result.summary),
       unavailable: answer.unavailable,

@@ -34,6 +34,7 @@ import {
   accountProvidersState,
   missingRecordingsState,
 } from "./database.ts";
+import { localProviderOrder } from "./source-preference.ts";
 
 const recentPlayLimit = 100;
 
@@ -140,7 +141,12 @@ const loadView = (boundIds: ReadonlyArray<string>) =>
     const notSynced = new Set(boundIds.filter((id) => !rootOf.has(id) && !missing.has(id)));
 
     return {
-      view: libraryView({ recordings, sources, remoteTracks }),
+      view: libraryView({
+        recordings,
+        sources,
+        remoteTracks,
+        providerOrder: yield* localProviderOrder,
+      }),
       notSynced: (entry: LibraryEntry) => entry.source === null && notSynced.has(entry.recordingId),
     };
   });

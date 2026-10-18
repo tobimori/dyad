@@ -4,7 +4,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 export { recording } from "../schema/catalog.ts";
 export { playEvent } from "../schema/history.ts";
 export { libraryRemoteTrack } from "../schema/library-sync.ts";
-export { libraryItem, playlist, playlistEntry } from "../schema/library.ts";
+export { libraryItem, playlist, playlistEntry, sourcePreference } from "../schema/library.ts";
 export { source, sourceSegment, sourceVariant } from "../schema/source.ts";
 
 /** Own mutations that the server has not acknowledged */

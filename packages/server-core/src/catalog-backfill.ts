@@ -5,6 +5,7 @@ import { and, asc, eq, gt } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ParseEvidence, projectRecordings } from "./assertions.ts";
+import { tagAlbumType, tagReleaseDate } from "./editions.ts";
 import { assertionId, boundRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { matchingLayer, resolveRoots } from "./matching.ts";
@@ -108,6 +109,8 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
               artworkUrl: null,
               explicit: null,
               uploader: Option.isSome(evidence) ? evidence.value.uploader : null,
+              albumType: tagAlbumType(tags),
+              releaseDate: tagReleaseDate(tags),
             },
             variant,
           );

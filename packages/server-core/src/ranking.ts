@@ -1,3 +1,4 @@
+import { compareSources } from "@dyad/domain";
 import type { SourceSummary } from "@dyad/domain";
 import type { PopularityHit } from "@dyad/plugin";
 import { Data } from "effect";
@@ -210,8 +211,9 @@ const sameRecording = (a: Candidate, b: Candidate) => {
 };
 
 /**
- * One result per recording, best first. A group shows and plays its best source: a local file,
- * then a source that the user played, then lossless, then the provider order.
+ * One result per recording, best first. A group shows and plays its best source: the user's
+ * provider order, then a local file, then a source that the user played, then lossless, then the
+ * position in the provider's results.
  */
 export const rank = (
   query: string,
@@ -219,9 +221,11 @@ export const rank = (
   hits: ReadonlyArray<PopularityHit>,
   plays: ReadonlyArray<Play>,
   now: number,
+  providerOrder: ReadonlyArray<string>,
 ) => {
   const normalizedQuery = normalizeText(query);
   const playedSourceIds = new Set(plays.map((play) => play.sourceId));
+  const byProvider = compareSources(providerOrder);
 
   // A candidate joins the first group whose members are all the same recording
   const groups: Array<Array<Candidate>> = [];
@@ -241,6 +245,10 @@ export const rank = (
 
     const played = (candidate: Candidate) => playedSourceIds.has(candidate.summary.id);
     const compare = (a: Candidate, b: Candidate) =>
+      byProvider(
+        { provider: a.summary.provider, lossless: false },
+        { provider: b.summary.provider, lossless: false },
+      ) ||
       Number(b.local) - Number(a.local) ||
       Number(played(b)) - Number(played(a)) ||
       Number(b.lossless) - Number(a.lossless) ||

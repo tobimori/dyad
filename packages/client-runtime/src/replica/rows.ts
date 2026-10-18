@@ -7,6 +7,7 @@ import {
   recording,
   source,
   sourceKey,
+  sourcePreference,
   sourceSegment,
   sourceVariant,
 } from "@dyad/db/client";
@@ -54,6 +55,12 @@ const syncedTables = {
     rows: playlistEntry,
     id: playlistEntry.id,
     scopeColumn: playlistEntry.playlistId,
+  }),
+  source_preference: new SyncedTable({
+    name: "source_preference",
+    rows: sourcePreference,
+    id: sourcePreference.id,
+    scopeColumn: sourcePreference.userId,
   }),
 } satisfies Record<SyncTable, SyncedTable>;
 
@@ -156,7 +163,7 @@ export const deleteScope = (scope: SyncScope) =>
     const [kind, id] = scope.split(":");
     const tables =
       kind === "user"
-        ? [syncedTables.library_item, syncedTables.play_event]
+        ? [syncedTables.library_item, syncedTables.play_event, syncedTables.source_preference]
         : [syncedTables.playlist, syncedTables.playlist_entry];
     for (const table of tables) {
       yield* db.delete(table.rows).where(eq(table.scopeColumn, id ?? ""));

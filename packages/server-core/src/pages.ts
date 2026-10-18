@@ -12,8 +12,6 @@ import {
   PageNotFound,
   PageState,
   PageTrack,
-  ReleaseType,
-  SecondaryType,
   SourceSummary,
   TrackSection,
 } from "@dyad/domain";
@@ -30,7 +28,9 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
+import { albumTypeOf, editionBase, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
+import { normV1, normalizeArtist } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import {
@@ -99,24 +99,12 @@ const mostCommon = (values: ReadonlyArray<string | undefined>) => {
   return best?.[0] ?? null;
 };
 
-const datePrefix = /^\d{4}(-\d{2}(-\d{2})?)?/;
-
-// FFmpeg (`node-av` 6.1.1) keeps the ID3v2.4 frame name `TDOR` as the key of an MP3 original date
-const releaseDateOf = (tags: typeof Tags.Type) =>
-  (tags.originaldate ?? tags.tdor ?? tags.date)?.match(datePrefix)?.[0];
-
-// Picard writes `releasetype`, for example `album; compilation`. FFmpeg (`node-av` 6.1.1) gives the
-// MP3 frame `TXXX:MusicBrainz Album Type` the key `musicbrainz album type`.
-const releaseTypeOf = (tags: typeof Tags.Type) =>
-  tags.releasetype ?? tags["musicbrainz album type"];
-
 const albumCard = (ref: AlbumRef, files: ReadonlyArray<LibraryFile>) => {
   const tags = files.map((file) => file.tags);
-  const types = (mostCommon(tags.map(releaseTypeOf)) ?? "")
-    .toLowerCase()
-    .split(/[;/]/)
-    .map((type) => type.trim());
-  const compilation = tags.some((fileTags) => fileTags.compilation === "1");
+  const type = albumTypeOf(
+    mostCommon(tags.map(tagReleaseTypes)) ?? undefined,
+    tags.some((fileTags) => fileTags.compilation === "1"),
+  );
   const albumArtistKey = files[0]?.albumArtistKey ?? null;
 
   return new AlbumCard({
@@ -124,11 +112,9 @@ const albumCard = (ref: AlbumRef, files: ReadonlyArray<LibraryFile>) => {
     title: mostCommon(tags.map((fileTags) => fileTags.album)) ?? "",
     artist: mostCommon(tags.map(albumArtistOf)),
     artistRef: albumArtistKey === null ? null : libraryArtistRef(albumArtistKey),
-    releaseDate: tags.flatMap((fileTags) => releaseDateOf(fileTags) ?? []).toSorted()[0] ?? null,
-    primaryType: types.find(Schema.is(ReleaseType)) ?? null,
-    secondaryTypes: SecondaryType.literals.filter(
-      (type) => types.includes(type) || (type === "compilation" && compilation),
-    ),
+    releaseDate: tags.flatMap((fileTags) => tagReleaseDate(fileTags) ?? []).toSorted()[0] ?? null,
+    primaryType: type.primary,
+    secondaryTypes: type.secondary,
     explicit: false,
     trackCount: files.length,
     artworkUrl: null,
@@ -230,9 +216,13 @@ const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
       }),
   );
 
-/** The card counts the given tracks, because the provider's album is not known without a fetch */
-export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "summary">>) =>
-  [...groupBy(sources, (item) => item.summary.albumRef)].map(([ref, group]) => {
+/**
+ * One card for all editions of an album: the same artist and the same name without edition
+ * suffixes. It opens the edition with the most saved tracks, else the original edition. The card
+ * counts the given tracks, because the provider's album is not known without a fetch.
+ */
+export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "summary">>) => {
+  const editions = [...groupBy(sources, (item) => item.summary.albumRef)].map(([ref, group]) => {
     const artistRef = mostCommon(group.map((item) => item.summary.artistRef ?? undefined));
     return new AlbumCard({
       ref,
@@ -252,6 +242,32 @@ export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "su
         group.find((item) => item.summary.artworkUrl !== null)?.summary.artworkUrl ?? null,
     });
   });
+
+  const albums = groupBy(
+    editions,
+    (card) => `${normalizeArtist(card.artist ?? "")}\n${normV1(editionBase(card.title))}`,
+  );
+  return [...albums.values()].flatMap((group) => {
+    const [shown] = group.toSorted(
+      (a, b) =>
+        (b.trackCount ?? 0) - (a.trackCount ?? 0) ||
+        Number(editionBase(a.title) !== a.title) - Number(editionBase(b.title) !== b.title) ||
+        a.ref.localeCompare(b.ref),
+    );
+    if (shown === undefined) return [];
+    const card = new AlbumCard({
+      ...shown,
+      title: editionBase(shown.title),
+      explicit: group.some((edition) => edition.explicit),
+      trackCount: group.reduce((total, edition) => total + (edition.trackCount ?? 0), 0),
+      artworkUrl:
+        shown.artworkUrl ??
+        group.find((edition) => edition.artworkUrl !== null)?.artworkUrl ??
+        null,
+    });
+    return [card];
+  });
+};
 
 /** The album artists of the files on this replica and the artists of the provider library */
 export const listLibraryArtists = Effect.gen(function* () {

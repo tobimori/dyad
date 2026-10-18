@@ -8,7 +8,7 @@ import {
   PlaylistSummary,
   RecordingId,
 } from "./index.ts";
-import type { SourceSummary } from "./index.ts";
+import type { SourceCopy, SourceSummary } from "./index.ts";
 
 /** The namespace of refs to the server's library folder. Provider IDs cannot be `library`. */
 export const libraryRefPrefix = "library:";
@@ -47,6 +47,39 @@ export const playlistSummary = (
   });
 
 /**
+ * Orders the sources of one recording, best first: the user's provider order, then local files,
+ * then lossless sources. Providers that the order leaves out come after the others.
+ */
+export const compareSources =
+  (providerOrder: ReadonlyArray<string>) =>
+  (
+    a: { readonly provider: string; readonly lossless: boolean },
+    b: { readonly provider: string; readonly lossless: boolean },
+  ) => {
+    const rank = (provider: string) => {
+      const index = providerOrder.indexOf(provider);
+      return index === -1 ? providerOrder.length : index;
+    };
+    return (
+      rank(a.provider) - rank(b.provider) ||
+      Number(b.provider === "local") - Number(a.provider === "local") ||
+      Number(b.lossless) - Number(a.lossless)
+    );
+  };
+
+/** The copies that the user can play first, then `compareSources`, then the higher bitrate */
+export const compareCopies = (providerOrder: ReadonlyArray<string>) => {
+  const compare = compareSources(providerOrder);
+  return (a: SourceCopy, b: SourceCopy) =>
+    Number(a.unavailable !== null) - Number(b.unavailable !== null) ||
+    compare(
+      { provider: a.source.provider, lossless: a.lossless },
+      { provider: b.source.provider, lossless: b.lossless },
+    ) ||
+    (b.bitrate ?? 0) - (a.bitrate ?? 0);
+};
+
+/**
  * Builds library and playlist entries from catalog rows, so that the server and client replicas
  * show the same entries. A recording without a row or without `mergedIntoId` is its own root.
  */
@@ -77,16 +110,19 @@ export const libraryView = (rows: {
     readonly rawAlbum: string | null;
     readonly rawDurationMs: number | null;
   }>;
+  /** The user's provider order, best first */
+  readonly providerOrder: ReadonlyArray<string>;
 }) => {
   const recordings = new Map(rows.recordings.map((row) => [row.id, row]));
   const rootOf = (id: string) => recordings.get(id)?.mergedIntoId ?? id;
 
-  // Local files first, then lossless sources
   const sourcesByRoot = new Map<string, Array<(typeof rows.sources)[number]>>();
-  const ranked = rows.sources.toSorted(
-    (a, b) =>
-      Number(b.summary.provider === "local") - Number(a.summary.provider === "local") ||
-      Number(b.lossless) - Number(a.lossless),
+  const compare = compareSources(rows.providerOrder);
+  const ranked = rows.sources.toSorted((a, b) =>
+    compare(
+      { provider: a.summary.provider, lossless: a.lossless },
+      { provider: b.summary.provider, lossless: b.lossless },
+    ),
   );
   for (const row of ranked) {
     if (row.recordingId === null) continue;

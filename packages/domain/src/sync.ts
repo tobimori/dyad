@@ -10,7 +10,7 @@ import {
 } from "./primitives.ts";
 
 /** A client and a server sync only when they have the same version */
-export const syncProtocolVersion = 3;
+export const syncProtocolVersion = 5;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -110,8 +110,31 @@ export class PlayEventRow extends Schema.Class<PlayEventRow>("PlayEventRow")({
   scrobbled: Schema.Boolean,
 }) {}
 
+/** Provider IDs, best first, with `local` for files */
+export const ProviderRanking = Schema.Array(Schema.String.check(Schema.isMaxLength(100))).check(
+  Schema.isMaxLength(100),
+);
+
+/** How the user orders the sources of a recording. Each write sets all fields. */
+export class SourcePreferenceRow extends Schema.Class<SourcePreferenceRow>("SourcePreferenceRow")({
+  table: Schema.Literal("source_preference"),
+  /** UUIDv5 of `source_preference:<user_id>:<scope>` */
+  id: Uuid,
+  userId: UserId,
+  scope: Schema.Literal("global"),
+  /** Providers that it leaves out come after the others */
+  providerRanking: ProviderRanking,
+  hlc: HybridLogicalClock,
+}) {}
+
 /** One row of a synced table, without the server's `change_seq` */
-export const SyncRow = Schema.Union([LibraryItemRow, PlaylistRow, PlaylistEntryRow, PlayEventRow]);
+export const SyncRow = Schema.Union([
+  LibraryItemRow,
+  PlaylistRow,
+  PlaylistEntryRow,
+  PlayEventRow,
+  SourcePreferenceRow,
+]);
 export type SyncRow = typeof SyncRow.Type;
 
 export const SyncTable = Schema.Literals([
@@ -119,6 +142,7 @@ export const SyncTable = Schema.Literals([
   "playlist",
   "playlist_entry",
   "play_event",
+  "source_preference",
 ]);
 export type SyncTable = typeof SyncTable.Type;
 
@@ -339,12 +363,20 @@ export class PlaylistEntryPatch extends Schema.Class<PlaylistEntryPatch>("Playli
   deleted: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 
+/** Replaces the user's source preference */
+export class SourcePreferenceSet extends Schema.Class<SourcePreferenceSet>("SourcePreferenceSet")({
+  kind: Schema.Literal("source_preference.set"),
+  schemaVersion: Schema.Literal(1),
+  row: SourcePreferenceRow,
+}) {}
+
 export const SyncChange = Schema.Union([
   PlayEventAppend,
   PlaylistCreate,
   PlaylistPatch,
   PlaylistEntryAdd,
   PlaylistEntryPatch,
+  SourcePreferenceSet,
 ]);
 export type SyncChange = typeof SyncChange.Type;
 

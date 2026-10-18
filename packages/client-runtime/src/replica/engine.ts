@@ -3,6 +3,7 @@ import {
   playlist,
   playlistEntry,
   recording,
+  sourcePreference,
   syncQueue,
   syncScope,
 } from "@dyad/db/client";
@@ -51,6 +52,7 @@ import {
   stateKey,
 } from "./database.ts";
 import { playlistEdits } from "./playlists.ts";
+import { setProviderOrder } from "./source-preference.ts";
 import {
   applyChanges,
   catalogTables,
@@ -113,6 +115,7 @@ const makeReplica = Effect.gen(function* () {
     db.select({ hlc: max(playlist.hlc) }).from(playlist),
     db.select({ hlc: max(playlistEntry.hlc) }).from(playlistEntry),
     db.select({ hlc: max(libraryItem.hlc) }).from(libraryItem),
+    db.select({ hlc: max(sourcePreference.hlc) }).from(sourcePreference),
   ]).pipe(Effect.orDie);
   const latest =
     stored
@@ -496,6 +499,8 @@ const makeReplica = Effect.gen(function* () {
       }).pipe(Effect.provideContext(context)),
     /** Edits of the user's playlists. They apply at once, also offline. */
     playlists: playlistEdits(mutate, owner),
+    /** Sets the provider order that chooses the source of a recording, best first */
+    setProviderOrder: setProviderOrder(mutate, owner),
     /** The mutations that the server has not acknowledged */
     pending: db
       .select({ count: count() })

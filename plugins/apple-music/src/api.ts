@@ -54,6 +54,7 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
     url: Schema.optional(Schema.String),
     discNumber: Schema.optional(Schema.Int),
     trackNumber: Schema.optional(Schema.Int),
+    releaseDate: Schema.optional(Schema.String),
   }),
   // With `include[songs]=artists`
   relationships: Schema.optional(
@@ -262,8 +263,24 @@ export const sessionCache = Effect.gen(function* () {
     );
 });
 
+/** Apple marks EPs and singles in the name, for example `Creep - EP` (October 2026) */
+export const typeSuffix = / - (EP|Single)$/;
+
+export const datePrefix = /^\d{4}(-\d{2}(-\d{2})?)?/;
+
+// Apple has no type for sessions and live albums, only their names, for example `Apple Music Home
+// Session: Schmyt` or `Live at Wembley`
+const liveName = /\b(?:live (?:at|from|in|on)\b|home session\b|sessions?\b)|[([]live[)\]]|- live$/i;
+
 const albumIdOf = (url: string | undefined) =>
   (url === undefined ? null : URL.parse(url)?.pathname.split("/").at(-1)) || null;
+
+const albumTypeOf = (albumName: string | undefined) => {
+  if (albumName === undefined) return null;
+  const suffix = albumName.match(typeSuffix)?.[1];
+  if (suffix === "EP") return "ep";
+  return suffix === "Single" ? "single" : "album";
+};
 
 export const catalogSource = (song: AppleTrack) =>
   new ProviderSource({
@@ -287,6 +304,9 @@ export const catalogSource = (song: AppleTrack) =>
     bitrate: 256_000,
     uploader: null,
     albumId: albumIdOf(song.attributes.url),
+    albumType: albumTypeOf(song.attributes.albumName),
+    albumSecondaryTypes: liveName.test(song.attributes.albumName ?? "") ? ["live"] : [],
+    releaseDate: song.attributes.releaseDate?.match(datePrefix)?.[0] ?? null,
   });
 
 /** The catalog needs only the web client token, not a subscriber */

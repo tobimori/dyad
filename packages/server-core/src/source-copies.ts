@@ -1,0 +1,114 @@
+import { source, sourceVariant } from "@dyad/db";
+import { Database } from "@dyad/db/node";
+import {
+  CurrentPrincipal,
+  RecordingId,
+  SourceCopy,
+  SourceSummary,
+  compareCopies,
+} from "@dyad/domain";
+import { eq, inArray } from "drizzle-orm";
+import { Effect, Option } from "effect";
+
+import { isrcRecordingId } from "./ids.ts";
+import { cachedProviderSource, cachedSummary } from "./provider-cache.ts";
+import { Providers, usableProviders } from "./providers.ts";
+import { recordingGroup } from "./sets.ts";
+import { providerOrder } from "./source-preference.ts";
+import { playableSources, sourceSummary } from "./sources.ts";
+
+/**
+ * All sources of the canonical recording of the source. A search result that is not in the catalog
+ * finds the recordings of its ISRC.
+ */
+export const sourceCopies = (sourceId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const principal = yield* CurrentPrincipal;
+    const providers = yield* Providers;
+    const usable = yield* usableProviders(principal.userId);
+
+    const [own] = yield* db
+      .select({ recordingId: source.recordingId })
+      .from(source)
+      .where(eq(source.id, sourceId));
+    const cached = own === undefined ? yield* cachedProviderSource(sourceId) : Option.none();
+    const starts =
+      own?.recordingId ??
+      (yield* Option.match(cached, {
+        onNone: () => Effect.succeed(null),
+        onSome: (item) => (item.isrc === null ? Effect.succeed(null) : isrcRecordingId(item.isrc)),
+      }));
+    const group = starts === null ? [] : yield* recordingGroup(starts);
+
+    const playable = yield* playableSources(principal.userId, inArray(source.recordingId, group));
+    const playableIds = new Set(playable.map((row) => row.source.id));
+    // The other sources only need the provider and the quality
+    const others = (yield* db
+      .select({ source, variant: sourceVariant })
+      .from(source)
+      .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
+      .where(inArray(source.recordingId, group))
+      .groupBy(source.id)).filter((row) => !playableIds.has(row.source.id));
+
+    const copies = [
+      ...playable.map((row) => {
+        const summary = sourceSummary(row);
+        return new SourceCopy({
+          // The edition of this copy, which the canonical album can hide
+          source: new SourceSummary({ ...summary, album: row.source.rawAlbum ?? summary.album }),
+          lossless: row.variant.lossless,
+          bitrate: row.variant.bitrate,
+          sampleRate: row.variant.sampleRate,
+          bitDepth: row.variant.bitDepth,
+          unavailable: null,
+        });
+      }),
+      ...others.map(
+        (row) =>
+          new SourceCopy({
+            source: new SourceSummary({
+              id: row.source.id,
+              provider: row.source.provider,
+              title: row.source.rawTitle,
+              artist: row.source.rawArtist,
+              album: row.source.rawAlbum,
+              durationMs: row.source.rawDurationMs,
+              codec: row.variant.codec,
+              artworkUrl: null,
+              artistRef: null,
+              albumRef: null,
+              explicit: false,
+              providerName: providers.get(row.source.provider)?.name ?? null,
+              recordingId:
+                row.source.recordingId === null ? null : RecordingId.make(row.source.recordingId),
+            }),
+            lossless: row.variant.lossless,
+            bitrate: row.variant.bitrate,
+            sampleRate: row.variant.sampleRate,
+            bitDepth: row.variant.bitDepth,
+            // A file of another server, or a provider that this server does not have
+            unavailable:
+              row.source.provider !== "local" && providers.has(row.source.provider)
+                ? "account_required"
+                : "unavailable",
+          }),
+      ),
+      ...Option.toArray(cached).flatMap((item) => {
+        const provider = usable.get(item.provider)?.provider;
+        if (provider === undefined) return [];
+        return [
+          new SourceCopy({
+            source: cachedSummary(item, provider.name),
+            lossless: item.source.lossless,
+            bitrate: item.source.bitrate,
+            sampleRate: null,
+            bitDepth: null,
+            unavailable: null,
+          }),
+        ];
+      }),
+    ];
+
+    return copies.toSorted(compareCopies(yield* providerOrder(principal.userId)));
+  });

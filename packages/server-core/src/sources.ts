@@ -19,6 +19,7 @@ import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
 import { ParseEvidence, assertRecording } from "./assertions.ts";
+import { AlbumType } from "./editions.ts";
 import { boundRecordingId, musicbrainzArtistId, sourceId, variantId } from "./ids.ts";
 import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
@@ -150,6 +151,9 @@ export const writeSource = (
     readonly explicit: boolean | null;
     /** The account that uploaded the source, for providers with `uploads` */
     readonly uploader: CreditedArtist | null;
+    /** Of the release of `album` */
+    readonly albumType: typeof AlbumType.Type | null;
+    readonly releaseDate: string | null;
   },
   variant: Omit<typeof sourceVariant.$inferInsert, "id" | "sourceId" | "hlc" | "changeSeq">,
 ) =>
@@ -232,6 +236,8 @@ export const writeSource = (
           isrc: item.isrc === null ? null : normalizeIsrc(item.isrc),
           artwork_url: item.artworkUrl,
           explicit: item.explicit,
+          album_type: item.album === null ? null : item.albumType,
+          release_date: item.album === null ? null : item.releaseDate,
         };
         yield* assertRecording(
           recordingId,
@@ -264,6 +270,11 @@ export const writeProviderSource = (provider: string, item: ProviderSource) =>
       artworkUrl: item.artworkUrl,
       explicit: item.explicit,
       uploader: item.uploader,
+      albumType:
+        item.albumType === null && item.albumSecondaryTypes.length === 0
+          ? null
+          : AlbumType.make({ primary: item.albumType, secondary: item.albumSecondaryTypes }),
+      releaseDate: item.releaseDate,
     },
     {
       codec: item.codec,

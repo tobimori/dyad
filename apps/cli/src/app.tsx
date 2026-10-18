@@ -32,7 +32,9 @@ import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
 import { usePlaylistActions } from "./component/dialog-playlists.tsx";
 import { useHeardInSets } from "./component/dialog-sets.tsx";
+import { usePlayFrom } from "./component/dialog-play-from.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
+import { ProviderOrderDialog } from "./component/dialog-provider-order.tsx";
 import { useWebLinks } from "./component/dialog-web-links.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
@@ -101,6 +103,7 @@ export function App(props: {
   readonly downloadQuality: typeof DownloadQuality.Type;
   readonly saveDownloadQuality: (quality: typeof DownloadQuality.Type) => void;
   readonly playlists: (typeof Replica.Service)["playlists"];
+  readonly setProviderOrder: (typeof Replica.Service)["setProviderOrder"];
 }) {
   const renderer = useRenderer();
   const screen = useTerminalDimensions();
@@ -151,6 +154,7 @@ export function App(props: {
   });
   const heardInSets = useHeardInSets({ atoms: props.atoms, player });
   const webLinks = useWebLinks({ connection: client, run: props.run });
+  const playFrom = usePlayFrom(props.atoms);
   const playlistSummaries = useAtomValue(props.atoms.playlists);
   const shownPlaylist =
     route instanceof PlaylistRoute && AsyncResult.isSuccess(playlistSummaries)
@@ -545,6 +549,8 @@ export function App(props: {
         ? [playlistActions.saveSet(titleOf(source), identified)]
         : []),
       ...(playingSet ? [] : heardInSets(recordingId)),
+      // A new play: switching the source of an entry in place belongs to the session
+      playFrom(source, (copy) => player.playList([copy], 0, target.context)),
       webLinks(source),
       ...downloadActions(song, commands.download, commands.removeDownload),
       ...target.sectionActions,
@@ -745,6 +751,16 @@ export function App(props: {
   const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [commands.help, () => dialog.push(<HelpDialog />)],
     [commands.plugins, () => dialog.push(<PluginsDialog host={props.plugins} run={props.run} />)],
+    [
+      commands.providerOrder,
+      () =>
+        dialog.push(
+          <ProviderOrderDialog
+            atoms={props.atoms}
+            setOrder={(order) => props.run(props.setProviderOrder(order))}
+          />,
+        ),
+    ],
     [
       commands.accounts,
       () => {

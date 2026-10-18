@@ -22,6 +22,7 @@ import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
 import { generateKeyBetween } from "fractional-indexing";
 
 import { uuidV5 } from "./ids.ts";
+import { providerOrder } from "./source-preference.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 import { readRow, writeRow } from "./sync.ts";
@@ -341,6 +342,7 @@ const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
         summary: sourceSummary(row),
       })),
       remoteTracks,
+      providerOrder: yield* providerOrder(userId),
     });
   });
 
