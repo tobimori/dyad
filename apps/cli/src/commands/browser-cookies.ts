@@ -76,12 +76,16 @@ export const availableCookieBrowsers = Effect.gen(function* () {
   const config = process.env.XDG_CONFIG_HOME ?? path.join(home, ".config");
   const support = path.join(home, "Library/Application Support");
   const browsers: CookieBrowser[] = [];
+
+  // macOS denies a terminal without access to the data of other apps, so skip those paths
+  const present = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
+
   for (const [name, macDir, linuxDir, service, application] of chromiumBrowsers) {
     const directory = mac ? macDir : linuxDir;
     if (directory === "") continue;
     const root = path.join(mac ? support : config, directory);
-    if (!(yield* fs.exists(root))) continue;
-    const names = yield* fs.readDirectory(root);
+    if (!(yield* present(root))) continue;
+    const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
     const profiles: CookieProfile[] = [];
     for (const profile of ["", ...names.filter((name) => /^(Default|Profile \d+)$/.test(name))]) {
       const candidates = [
@@ -89,7 +93,7 @@ export const availableCookieBrowsers = Effect.gen(function* () {
         path.join(root, profile, "Cookies"),
       ];
       for (const file of candidates) {
-        if (!(yield* fs.exists(file))) continue;
+        if (!(yield* present(file))) continue;
         profiles.push(new CookieProfile({ name: profile || "Default", file }));
         break;
       }
@@ -119,10 +123,10 @@ export const availableCookieBrowsers = Effect.gen(function* () {
   for (const [name, root] of firefoxRoots) {
     if (name === undefined || root === undefined) continue;
     const ini = path.join(root, "profiles.ini");
-    if (!(yield* fs.exists(ini))) continue;
+    const text = yield* fs.readFileString(ini).pipe(Effect.orElseSucceed(() => ""));
     const profiles: CookieProfile[] = [];
-    for (const profile of firefoxProfiles(yield* fs.readFileString(ini), root, path)) {
-      if (yield* fs.exists(profile.file)) profiles.push(profile);
+    for (const profile of firefoxProfiles(text, root, path)) {
+      if (yield* present(profile.file)) profiles.push(profile);
     }
     if (profiles.length === 0) continue;
     const previous = browsers.find((browser) => browser.name === name);
@@ -150,7 +154,8 @@ export const availableCookieBrowsers = Effect.gen(function* () {
       ["Legacy Safari", "Library/Cookies", "Cookies.binarycookies"],
     ] as const) {
       const root = path.join(home, directory);
-      if (yield* fs.exists(root))
+      // A denied Safari path is still listed, so that the import can ask for Full Disk Access
+      if (yield* fs.exists(root).pipe(Effect.orElseSucceed(() => true)))
         profiles.push(new CookieProfile({ name, file: path.join(root, file) }));
     }
     if (profiles.length > 0)
