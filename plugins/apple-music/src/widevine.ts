@@ -10,7 +10,7 @@ const widevineSystem = "edef8ba979d64acea3c827dcd51d21ed";
 
 const keyUri = (playlist: string) =>
   Effect.gen(function* () {
-    // Only the DRM URI is needed here. `hls.ts` reads the media segments.
+    // Only the DRM URI is needed here. `@dyad/plugin/hls` reads the media segments.
     const uris = playlist.split(/\r?\n/).flatMap((line) => {
       if (!line.startsWith("#EXT-X-KEY:")) return [];
       const attributes = new Map(
