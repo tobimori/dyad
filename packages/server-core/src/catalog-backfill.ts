@@ -9,6 +9,7 @@ import { assertionId, boundRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { matchingLayer, resolveRoots } from "./matching.ts";
 import { Tags, tagIdentifiers, writeProviderSource, writeSource } from "./sources.ts";
+import { assertSegmentMatches } from "./tracklists.ts";
 
 const backfillKind = "catalog.backfill";
 const batchSize = 50;
@@ -119,6 +120,7 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
       boundRecordingId(row.source.provider, row.source.externalId),
     );
     yield* projectRecordings(yield* resolveRoots(boundIds));
+    yield* assertSegmentMatches(rows.map((row) => row.source.id));
 
     const last = rows.at(-1);
     if (rows.length < batchSize || last === undefined) {

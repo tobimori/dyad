@@ -54,6 +54,31 @@ export const serverPairingCodesLayer = Layer.effect(
   Ref.make<ReadonlyMap<string, PendingServerPairing>>(new Map()),
 );
 
+/**
+ * Per peer, the `change_seq` values of rows that this replica took unchanged from that peer. They
+ * do not go back to it. After a restart, they go back once and change nothing there.
+ */
+export class PeerEchoes extends Context.Service<PeerEchoes, Map<string, Set<number>>>()(
+  "@dyad/server-core/PeerEchoes",
+) {}
+
+export const peerEchoesLayer = Layer.sync(PeerEchoes, () => new Map());
+
+const addEcho = (peer: string, changeSeq: number | undefined) =>
+  Effect.gen(function* () {
+    if (changeSeq === undefined) return;
+    const echoes = yield* PeerEchoes;
+    echoes.set(peer, (echoes.get(peer) ?? new Set()).add(changeSeq));
+  });
+
+// Values before the cursor are no longer read, so they go
+const echoesAfter = (peer: string, cursor: PeerCursor) =>
+  Effect.gen(function* () {
+    const echoes = (yield* PeerEchoes).get(peer) ?? new Set();
+    for (const changeSeq of echoes) if (changeSeq < cursor.changeSeq) echoes.delete(changeSeq);
+    return [...echoes];
+  });
+
 const requireAdmin = Effect.gen(function* () {
   const db = yield* Database;
   const principal = yield* CurrentPrincipal;
@@ -166,7 +191,8 @@ const peerPull = (request: PeerPullRequest) =>
     // After a restore from a backup, the counter can give values again that the peer has
     const reset = request.epoch !== null && request.epoch !== identity.epoch;
     const cursor = reset ? new PeerCursor({ changeSeq: 0, rowKey: null }) : request.cursor;
-    const page = yield* db.transaction(() => readChanges(cursor, pageLimit));
+    const echoes = yield* echoesAfter(yield* CurrentPeer, cursor);
+    const page = yield* db.transaction(() => readChanges(cursor, pageLimit, echoes));
     return new PeerPullResponse({
       replicaId: ReplicaId.make(identity.replicaId),
       workspaceId: WorkspaceId.make(identity.workspaceId),
@@ -179,7 +205,7 @@ const peerPush = (request: PeerPushRequest) =>
   Effect.gen(function* () {
     yield* checkVersion(request.protocolVersion);
     const db = yield* Database;
-    yield* db.transaction(() => mergePeerRows(request.rows));
+    yield* addEcho(yield* CurrentPeer, yield* db.transaction(() => mergePeerRows(request.rows)));
   });
 
 const peerRevoke = Effect.gen(function* () {
@@ -411,12 +437,13 @@ const syncPeer = (peer: typeof serverPeer.$inferSelect) =>
       // A peer restored from a backup can miss rows that this replica pushed earlier
       if (epoch !== null && response.epoch !== epoch) {
         pushed = new PeerCursor({ changeSeq: 0, rowKey: null });
+        (yield* PeerEchoes).delete(peer.replicaId);
       }
       epoch = response.epoch;
       pulled = response.cursor;
       yield* db.transaction(() =>
         Effect.gen(function* () {
-          yield* mergePeerRows(response.rows);
+          yield* addEcho(peer.replicaId, yield* mergePeerRows(response.rows));
           yield* saveState(peer.replicaId, {
             epoch,
             pulledSeq: pulled.changeSeq,
@@ -430,7 +457,8 @@ const syncPeer = (peer: typeof serverPeer.$inferSelect) =>
     }
 
     while (true) {
-      const page = yield* db.transaction(() => readChanges(pushed, pageLimit));
+      const echoes = yield* echoesAfter(peer.replicaId, pushed);
+      const page = yield* db.transaction(() => readChanges(pushed, pageLimit, echoes));
       if (page.rows.length === 0) break;
 
       yield* connection.peerPush(

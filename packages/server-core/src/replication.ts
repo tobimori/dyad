@@ -13,15 +13,15 @@ import { Database } from "@dyad/db/node";
 import { PeerCursor, PeerRow } from "@dyad/domain";
 import type { CatalogInputRow, SyncRow } from "@dyad/domain";
 import { HlcClock, mergeCatalogRow, mergeRow } from "@dyad/sync";
-import { and, asc, eq, gt, gte, inArray, or } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, notInArray, or } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
-import { Data, Effect, Option, Schema } from "effect";
+import { Data, Effect, Equal, Option, Schema } from "effect";
 
 import { projectRecordings } from "./assertions.ts";
 import { isrcRecordingId } from "./ids.ts";
 import { resolveRoots } from "./matching.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
-import { deriveTracklists } from "./tracklists.ts";
+import { EntryText, deriveEntryMatches, deriveTracklists } from "./tracklists.ts";
 
 class PeerTable extends Data.Class<{
   readonly table: PeerRow["table"];
@@ -65,7 +65,7 @@ const afterCursor = (table: PeerTable, cursor: PeerCursor) => {
  * The rows of all replicated tables after `cursor`, at most `limit`. A page can end inside the rows
  * of one write; the receiver derives after each page.
  */
-export const readChanges = (cursor: PeerCursor, limit: number) =>
+export const readChanges = (cursor: PeerCursor, limit: number, skipped: ReadonlyArray<number>) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const tables = yield* Effect.forEach(Object.values(peerTables), (table) =>
@@ -73,7 +73,7 @@ export const readChanges = (cursor: PeerCursor, limit: number) =>
         const rows = yield* db
           .select()
           .from(table.rows)
-          .where(afterCursor(table, cursor))
+          .where(and(afterCursor(table, cursor), notInArray(table.changeSeq, [...skipped])))
           .orderBy(asc(table.changeSeq), asc(table.id))
           .limit(limit + 1);
 
@@ -182,6 +182,14 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
       yield* ensure(merge.intoId, merge.intoId === isrcTarget ? "isrc" : "musicbrainz");
     }
 
+    const entryMatches = rows.flatMap((row) =>
+      row.table === "catalog_assertion" && row.entityType === "tracklist_entry" ? [row] : [],
+    );
+    for (const match of entryMatches) {
+      const id = Schema.decodeUnknownOption(Schema.String)(match.value);
+      if (Option.isSome(id)) yield* ensure(id.value, "musicbrainz");
+    }
+
     const boundIds = sources.flatMap((row) => row.recordingId ?? []);
     const assertedIds = rows.flatMap((row) =>
       row.table === "catalog_assertion" && row.entityType === "recording" ? [row.entityId] : [],
@@ -204,18 +212,27 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
         : [],
     );
     if (tracklists.length > 0) yield* deriveTracklists(tracklists);
+    yield* deriveEntryMatches(
+      entryMatches.flatMap((row) =>
+        Option.toArray(Schema.decodeUnknownOption(EntryText)(row.evidence)),
+      ),
+    );
   });
 
 /**
  * Merges rows from another server replica, then derives the canonical rows. A row that changes
  * gets a `change_seq` of this replica, so that its other peers receive it; an unchanged row writes
- * nothing, so rows do not circulate. Run it in a transaction.
+ * nothing, so rows do not circulate. Returns the `change_seq` of the rows that this replica took
+ * as the peer sent them, if any. Run it in a transaction.
  */
 export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
   Effect.gen(function* () {
     const clock = yield* HlcClock;
-    const changeSeq = yield* Effect.cached(nextChangeSeq);
+    // The peer has the rows that it sent, but not the rows that merged with local changes
+    const adoptedSeq = yield* Effect.cached(nextChangeSeq);
+    const mergedSeq = yield* Effect.cached(nextChangeSeq);
     const changed: Array<PeerRow> = [];
+    const adopted: Array<PeerRow> = [];
 
     for (const row of rows) {
       if (row.table !== "play_event" && row.hlc !== "") yield* clock.receive(row.hlc);
@@ -226,10 +243,12 @@ export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
         : mergeCatalogRow(current !== undefined && !isSyncRow(current) ? current : undefined, row);
       if (Option.isNone(merged)) continue;
 
-      yield* writePeerRow(merged.value, yield* changeSeq);
+      const same = Equal.equals(merged.value, row);
+      yield* writePeerRow(merged.value, yield* same ? adoptedSeq : mergedSeq);
       changed.push(merged.value);
+      if (same) adopted.push(row);
     }
 
     yield* deriveCatalog(changed.flatMap((row) => (isSyncRow(row) ? [] : [row])));
-    return changed.length;
+    return adopted.length > 0 ? yield* adoptedSeq : undefined;
   });

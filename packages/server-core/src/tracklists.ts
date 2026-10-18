@@ -19,8 +19,8 @@ import { HlcClock } from "@dyad/sync";
 import { and, asc, between, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { Clock, Context, Effect, Layer, Option, PubSub, Result, Schema, Stream } from "effect";
 
-import { fields, projectRecordings, resolvedValues } from "./assertions.ts";
-import { assertionId } from "./ids.ts";
+import { fields, projectRecordings, resolveField, resolvedValues } from "./assertions.ts";
+import { assertionId, uuidV5 } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
 import {
   MusicBrainzLookups,
@@ -71,25 +71,21 @@ const publish = (sourceId: string) =>
   });
 
 // An unchanged assertion writes nothing
-const assertTracklist = (
-  sourceId: string,
+const writeAssertion = (
+  target: { readonly entityType: string; readonly entityId: string; readonly field: string },
   assertion: {
-    readonly origin: "provider" | "admin";
+    readonly origin: "provider" | "admin" | "match";
     readonly originRef: string;
-    readonly value: typeof Entries.Encoded | null;
+    readonly value: unknown;
     readonly confidence: number;
+    readonly evidence: unknown;
     readonly authorUserId: UserId | null;
   },
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const identity = yield* ReplicaDatabase;
-    const id = yield* assertionId({
-      entityType: "source",
-      entityId: sourceId,
-      field,
-      ...assertion,
-    });
+    const id = yield* assertionId({ ...target, ...assertion });
 
     const [known] = yield* db.select().from(catalogAssertion).where(eq(catalogAssertion.id, id));
     const same =
@@ -102,12 +98,9 @@ const assertTracklist = (
     const row = {
       id,
       workspaceId: identity.workspaceId,
-      entityType: "source",
-      entityId: sourceId,
-      field,
+      ...target,
       ...assertion,
       originRevision: null,
-      evidence: null,
       authorReplicaId: identity.replicaId,
       hlc: yield* (yield* HlcClock).next,
       retracted: false,
@@ -124,6 +117,30 @@ const assertTracklist = (
     );
     return id;
   });
+
+const assertTracklist = (
+  sourceId: string,
+  assertion: {
+    readonly origin: "provider" | "admin";
+    readonly originRef: string;
+    readonly value: typeof Entries.Encoded | null;
+    readonly confidence: number;
+    readonly authorUserId: UserId | null;
+  },
+) =>
+  writeAssertion(
+    { entityType: "source", entityId: sourceId, field },
+    { ...assertion, evidence: null },
+  );
+
+// A match of a tracklist text is an assertion, so that each server replica derives the same segments
+const entryEntity = (entry: { readonly artist: string | null; readonly title: string | null }) =>
+  uuidV5(`tracklist_entry:${entryKey(entry)}`).pipe(
+    Effect.map((entityId) => ({ entityType: "tracklist_entry", entityId, field: "recording" })),
+  );
+
+/** The raw text of a tracklist entry, in the evidence of its match */
+export const EntryText = Schema.Struct({ artist: Schema.String, title: Schema.String });
 
 const retract = (ids: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -298,8 +315,8 @@ const entryKey = (entry: { readonly artist: string | null; readonly title: strin
 
 /**
  * Makes the segments of the source from its selected tracklist, or from the tracklist of a copy
- * that is better. A segment keeps the recording of an earlier segment with the same text, also of
- * another source. Returns whether a segment changed.
+ * that is better. A segment gets the match of its text, also when another source found it.
+ * Returns whether a segment changed.
  */
 const deriveSegments = (sourceId: string) =>
   Effect.gen(function* () {
@@ -313,21 +330,34 @@ const deriveSegments = (sourceId: string) =>
       copy !== undefined && copy.confidence > (own?.assertion.confidence ?? 0)
         ? copy.entries
         : (own?.entries ?? []);
-    const titles = [...new Set(entries.map((entry) => entry.title))];
-    const matched = new Map(
-      (titles.length === 0
+    const targets = new Map(
+      yield* Effect.forEach(entries, (entry) =>
+        entryEntity(entry).pipe(
+          Effect.map((target) => [entryKey(entry), target.entityId] as const),
+        ),
+      ),
+    );
+    const matches =
+      targets.size === 0
         ? []
         : yield* db
             .select()
-            .from(sourceSegment)
+            .from(catalogAssertion)
             .where(
-              and(inArray(sourceSegment.rawTitle, titles), isNotNull(sourceSegment.recordingId)),
-            )
-      ).map((segment) => [
-        entryKey({ artist: segment.rawArtist, title: segment.rawTitle }),
-        segment.recordingId,
-      ]),
-    );
+              and(
+                eq(catalogAssertion.entityType, "tracklist_entry"),
+                inArray(catalogAssertion.entityId, [...targets.values()]),
+                eq(catalogAssertion.retracted, false),
+              ),
+            );
+    const providers = yield* Providers;
+    const matchOf = (entry: TracklistEntry) =>
+      resolveField(
+        providers,
+        matches.filter((match) => match.entityId === targets.get(entryKey(entry))),
+        "recording",
+        Schema.String,
+      );
 
     const starts = entries.flatMap((entry) => entry.startMs ?? []);
     const segments = entries.map((entry, position) => {
@@ -339,7 +369,7 @@ const deriveSegments = (sourceId: string) =>
       return {
         sourceId,
         position,
-        recordingId: matched.get(entryKey(entry)) ?? null,
+        recordingId: matchOf(entry),
         rawArtist: entry.artist,
         rawTitle: entry.title,
         startMs: start,
@@ -517,7 +547,65 @@ const runRead = ({ sourceId, userId }: typeof ReadPayload.Type) =>
     yield* Effect.forEach(new Set([sourceId, ...changed]), queueMatch, { discard: true });
   });
 
-const writeMatch = (row: typeof sourceSegment.$inferSelect, candidate: MusicBrainzRecording) =>
+/** Derives the segments again of the sources whose tracklists have one of the texts */
+export const deriveEntryMatches = (texts: ReadonlyArray<typeof EntryText.Type>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const rows = yield* Effect.forEach(texts, (text) =>
+      db
+        .selectDistinct({ sourceId: sourceSegment.sourceId })
+        .from(sourceSegment)
+        .where(
+          and(eq(sourceSegment.rawArtist, text.artist), eq(sourceSegment.rawTitle, text.title)),
+        ),
+    );
+    const changed = yield* Effect.filter(
+      new Set(rows.flat().map((row) => row.sourceId)),
+      deriveSegments,
+    );
+    yield* Effect.forEach(changed, publish, { discard: true });
+  });
+
+const assertMatch = (text: typeof EntryText.Type, recordingId: string) =>
+  Effect.gen(function* () {
+    yield* writeAssertion(yield* entryEntity(text), {
+      origin: "match",
+      originRef: musicbrainzLookupKey,
+      value: recordingId,
+      confidence: 1,
+      evidence: text,
+      authorUserId: null,
+    });
+  });
+
+/** Asserts the matches of segments that a replica matched before matches were assertions */
+export const assertSegmentMatches = (sourceIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const rows =
+      sourceIds.length === 0
+        ? []
+        : yield* db
+            .selectDistinct({
+              artist: sourceSegment.rawArtist,
+              title: sourceSegment.rawTitle,
+              recordingId: sourceSegment.recordingId,
+            })
+            .from(sourceSegment)
+            .where(
+              and(inArray(sourceSegment.sourceId, sourceIds), isNotNull(sourceSegment.recordingId)),
+            );
+    yield* Effect.forEach(
+      rows,
+      ({ artist, title, recordingId }) =>
+        artist === null || title === null || recordingId === null
+          ? Effect.void
+          : assertMatch({ artist, title }, recordingId),
+      { discard: true },
+    );
+  });
+
+const writeMatch = (text: typeof EntryText.Type, candidate: MusicBrainzRecording) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const id = yield* assertMusicBrainzRecording(candidate);
@@ -525,25 +613,9 @@ const writeMatch = (row: typeof sourceSegment.$inferSelect, candidate: MusicBrai
       .insert(recording)
       .values({ id, origin: "musicbrainz", policyVersion: 1, revision: 0 })
       .onConflictDoNothing();
-    // A read during the lookup can have changed the segment
-    yield* db
-      .update(sourceSegment)
-      .set({ recordingId: id })
-      .where(
-        and(
-          eq(sourceSegment.sourceId, row.sourceId),
-          eq(sourceSegment.position, row.position),
-          eq(sourceSegment.rawTitle, row.rawTitle ?? ""),
-          isNull(sourceSegment.recordingId),
-        ),
-      );
+    yield* assertMatch(text, id);
     yield* projectRecordings([id]);
-
-    const [set] = yield* db
-      .select({ recordingId: source.recordingId })
-      .from(source)
-      .where(eq(source.id, row.sourceId));
-    if (set?.recordingId != null) yield* touchGroups([set.recordingId]);
+    yield* deriveEntryMatches([text]);
   });
 
 const MatchPayload = Schema.Struct({
@@ -566,7 +638,11 @@ const runMatch = ({ sourceId, after }: typeof MatchPayload.Type) =>
       .filter(({ row }) => row.position > after)
       .toSorted((a, b) => a.row.position - b.row.position);
 
+    // A match applies to all entries with the same text
+    const matched = new Set<string>();
     for (const { row, text } of unmatched) {
+      const raw = { artist: row.rawArtist, title: row.rawTitle };
+      if (matched.has(entryKey(raw))) continue;
       const key = String(row.position);
       const found = yield* lookup.recordingsByText([{ key, ...text }]).pipe(Effect.result);
       if (Result.isFailure(found)) {
@@ -586,8 +662,10 @@ const runMatch = ({ sourceId, after }: typeof MatchPayload.Type) =>
       const candidate = found.success.get(key)?.find(fits(text));
       if (candidate === undefined) continue;
 
-      yield* db.transaction(() => writeMatch(row, candidate));
-      yield* publish(sourceId);
+      yield* db.transaction(() =>
+        writeMatch({ artist: row.rawArtist ?? "", title: row.rawTitle ?? "" }, candidate),
+      );
+      matched.add(entryKey(raw));
     }
   });
 
