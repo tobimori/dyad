@@ -449,6 +449,10 @@ const webmStream = (
         Stream.provideContext(services),
       );
 
+    // October 2026: `/player` can give this server URLs that answer 403. One byte shows it before
+    // the play starts, so that the plugin can switch to yt-dlp.
+    yield* Stream.runDrain(safe(readChunks(format.url, 0, 1)));
+
     const bytesFrom = (startMs: number) =>
       Stream.unwrap(
         Effect.gen(function* () {
