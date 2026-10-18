@@ -255,6 +255,7 @@ export const catalogSource = (song: AppleTrack) =>
     artists: [],
     explicit: song.attributes.contentRating === "explicit",
     bitrate: 256_000,
+    uploader: null,
   });
 
 /** The catalog needs only the web client token, not a subscriber */

@@ -13,6 +13,7 @@ const detailsUrl = "https://bandcamp.com/api/mobile/25/tralbum_details";
 class SearchTrack extends Schema.Class<SearchTrack>("SearchTrack")({
   id: Schema.Int,
   name: Schema.String,
+  // The account. On a label account, `band_name` is the artist of the release and not its name.
   band_id: Schema.Int,
   band_name: Schema.String,
   album_name: Schema.NullOr(Schema.String),
@@ -34,9 +35,15 @@ class DetailsTrack extends Schema.Class<DetailsTrack>("DetailsTrack")({
   ),
 }) {}
 
+class ReleaseDetails extends Schema.Class<ReleaseDetails>("ReleaseDetails")({
+  // The account, not the artist
+  band: Schema.optional(Schema.Struct({ name: Schema.String })),
+  tracks: Schema.Array(DetailsTrack),
+}) {}
+
 // Bandcamp answers status 200 with an error object, for example for a deleted track
 const Details = Schema.Union([
-  Schema.Struct({ tracks: Schema.Array(DetailsTrack) }),
+  ReleaseDetails,
   Schema.Struct({ error: Schema.Literal(true), error_message: Schema.String }),
 ]);
 
@@ -63,7 +70,7 @@ const fetchDetails = ({ bandId, type, id }: Release) =>
     if ("error" in details) {
       return yield* new ProviderError({ reason: `Bandcamp: ${details.error_message}` });
     }
-    return details.tracks;
+    return details;
   });
 
 /** Each pause while the user types starts a new search, which reads the same releases again */
@@ -73,7 +80,7 @@ export const detailsCache = Cache.makeWith(fetchDetails, {
 });
 
 export const searchTracks = (
-  details: Cache.Cache<Release, ReadonlyArray<DetailsTrack>, ProviderError>,
+  details: Cache.Cache<Release, ReleaseDetails, ProviderError>,
   query: string,
 ) =>
   Effect.gen(function* () {
@@ -87,7 +94,8 @@ export const searchTracks = (
     );
     const response = yield* getJson(request, SearchResults).pipe(Effect.mapError(toProviderError));
 
-    // One request per release gives the durations of all its tracks. A single has no album.
+    // One request per release gives the durations of all its tracks and the account name. A single
+    // has no album.
     const releases = new Map(
       response.auto.results.map((track) => {
         const release =
@@ -97,14 +105,21 @@ export const searchTracks = (
         return [`${release.bandId}-${release.type}-${release.id}`, release];
       }),
     );
-    // A timeout keeps the durations that arrived
+    // A timeout keeps the details that arrived
     const durations = new Map<number, number>();
+    const accounts = new Map<number, CreditedArtist>();
     yield* Effect.forEach(
       releases.values(),
       (release) =>
         Cache.get(details, release).pipe(
-          Effect.tap((tracks) =>
+          Effect.tap(({ band, tracks }) =>
             Effect.sync(() => {
+              if (band !== undefined) {
+                accounts.set(
+                  release.bandId,
+                  new CreditedArtist({ id: String(release.bandId), name: band.name }),
+                );
+              }
               for (const track of tracks) {
                 if (track.duration !== undefined && track.duration !== null) {
                   durations.set(track.track_id, Math.round(track.duration * 1000));
@@ -135,9 +150,10 @@ export const searchTracks = (
             track.art_id === undefined || track.art_id === null
               ? null
               : `https://f4.bcbits.com/img/a${track.art_id}_10.jpg`,
-          artists: [new CreditedArtist({ id: String(track.band_id), name: track.band_name })],
+          artists: [],
           explicit: null,
           bitrate: 128_000,
+          uploader: accounts.get(track.band_id) ?? null,
         }),
     );
   });
@@ -149,7 +165,7 @@ export const resolveTrack = (externalId: string) =>
       Effect.mapError(() => new ProviderError({ reason: "Invalid track ID" })),
     );
 
-    const tracks = yield* fetchDetails(new Release({ bandId, type: "t", id: trackId }));
+    const { tracks } = yield* fetchDetails(new Release({ bandId, type: "t", id: trackId }));
     const track = tracks.find((item) => item.track_id === trackId);
     if (track === undefined) {
       return yield* new ProviderError({ reason: "Bandcamp did not return the track" });

@@ -42,6 +42,11 @@ export class ProviderSource extends Schema.Class<ProviderSource>("ProviderSource
   explicit: Schema.NullOr(Schema.Boolean).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** In bit/s, `null` when unknown. Downloads keep a lossy source that is not above their target. */
   bitrate: Schema.NullOr(Schema.Int).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /**
+   * The account that uploaded the source, for providers with `uploads`. `artist` repeats its name
+   * when the uploader typed no other artist.
+   */
+  uploader: Schema.NullOr(CreditedArtist).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 }) {}
 
 /** The core logs `reason`, so it must not contain tokens, signed URLs or keys */
@@ -169,6 +174,11 @@ export class Provider extends Data.Class<{
   readonly library?: ProviderLibrary;
   /** Higher wins when providers share a recording. Curated catalogs rank above uploads */
   readonly metadataPriority?: number;
+  /**
+   * Uploaders type the titles and artists as free text, so the core parses them and does not use
+   * them as credits. `ProviderSource.uploader` names the account.
+   */
+  readonly uploads?: true;
   /**
    * Lets devices keep files of the provider's audio. A device deletes them when it does not check
    * in with the server for `leaseDays` (`null`: never). Without it, devices cannot download.

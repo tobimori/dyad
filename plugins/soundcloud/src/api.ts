@@ -134,13 +134,10 @@ export const searchTracks = (withClientId: Effect.Success<typeof clientIdCache>,
             encrypted: false,
             // The API gives the 100 pixel `-large` variant; `-t500x500` is the same image larger
             artworkUrl: track.artwork_url?.replace("-large.", "-t500x500.") ?? null,
-            // The uploader is the artist only when the label metadata names no other artist
-            artists:
-              track.publisher_metadata?.artist === undefined
-                ? [new CreditedArtist({ id: String(track.user.id), name: track.user.username })]
-                : [],
+            artists: [],
             explicit: track.publisher_metadata?.explicit ?? null,
             bitrate: fullStream(track)?.preset === "aac_160k" ? 160_000 : 96_000,
+            uploader: new CreditedArtist({ id: String(track.user.id), name: track.user.username }),
           }),
       );
   });
