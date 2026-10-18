@@ -170,10 +170,8 @@ export const ytdlpResolver = Effect.gen(function* () {
             "--no-playlist",
             "--js-runtimes",
             "node",
-            // yt-dlp 2026.08.19: the signed-in TV client needs no PO token. One client instead of
-            // the three defaults sends fewer requests with the account.
-            "--extractor-args",
-            "youtube:player_client=tv_downgraded",
+            // yt-dlp 2026.08.19: do not force `tv_downgraded`. It fails with "The page needs to be
+            // reloaded" (yt-dlp#17389), and only the defaults fall back to `web_embedded`.
             "--cookies",
             cookies,
             `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
