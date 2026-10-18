@@ -30,6 +30,7 @@ export const commands = {
   help: command("app.help", "Help", "Other", ["?"], "help"),
   reload: command("app.reload", "Reload", "Other", ["r"]),
   plugins: command("app.plugins", "Plugins", "Other", ["shift+p"]),
+  downloads: command("app.downloads", "Downloads", "Other", ["shift+d"]),
   close: command("app.close", "Close, go back", "Other", ["escape"], "close"),
 
   togglePause: command("playback.toggle", "Play or pause", "Playback", ["space"]),
@@ -71,9 +72,13 @@ export const commands = {
   searchAlbum: command("track.searchAlbum", "Search the album", "Track", []),
   goToArtist: command("track.goToArtist", "Go to the artist", "Track", []),
   goToAlbum: command("track.goToAlbum", "Go to the album", "Track", []),
+  download: command("track.download", "Download", "Track", []),
+  removeDownload: command("track.removeDownload", "Remove download", "Track", []),
   playAll: command("page.playAll", "Play all", "Browse", []),
   shuffleAll: command("page.shuffleAll", "Shuffle all", "Browse", []),
   addAllToQueue: command("page.addAllToQueue", "Add all to queue", "Browse", []),
+  downloadAll: command("page.download", "Download all", "Browse", []),
+  removeAllDownload: command("page.removeDownload", "Remove the download", "Browse", []),
   remove: command("queue.remove", "Remove from queue", "Queue", ["d", "delete"], "remove"),
   clear: command("queue.clear", "Clear, keep current", "Queue", ["c"], "clear"),
 

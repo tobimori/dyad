@@ -1,3 +1,4 @@
+import { DownloadQuality } from "@dyad/domain";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import envPaths from "env-paths";
 
@@ -8,6 +9,8 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   ),
   /** The volume of this device as an output. Missing until it first changes. */
   volume: Schema.optionalKey(Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+  /** For downloads that do not choose their own. Missing until it first changes. */
+  downloadQuality: Schema.optionalKey(DownloadQuality),
 }) {}
 
 const SettingsJson = Schema.fromJsonString(Settings);

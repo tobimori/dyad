@@ -1,16 +1,24 @@
-import { songLine, titleOf } from "@dyad/client-runtime";
-import type { ServerAtoms, SessionClient } from "@dyad/client-runtime";
-import type { AlbumCard, AlbumRef, ArtistRef, PlayContext, SourceSummary } from "@dyad/domain";
+import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
+import type { Downloads, ServerAtoms, SessionClient } from "@dyad/client-runtime";
+import type {
+  AlbumCard,
+  AlbumRef,
+  ArtistRef,
+  DownloadQuality,
+  PlayContext,
+  SourceSummary,
+} from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
 import type { BoxRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
-import { Data, Effect } from "effect";
+import { Data, Effect, SubscriptionRef } from "effect";
 import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
+import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
@@ -72,6 +80,10 @@ export function App(props: {
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly plugins: PluginHost;
+  /** `null` when this device only controls */
+  readonly downloads: typeof Downloads.Service | null;
+  readonly downloadQuality: typeof DownloadQuality.Type;
+  readonly saveDownloadQuality: (quality: typeof DownloadQuality.Type) => void;
 }) {
   const renderer = useRenderer();
   const screen = useTerminalDimensions();
@@ -110,6 +122,7 @@ export function App(props: {
   const playlist = usePlaylist(props.atoms, route);
 
   const main = useRef<BoxRenderable | null>(null);
+  const [downloadQuality, setDownloadQuality] = useState(props.downloadQuality);
   const [view, setView] = useState<"browse" | "nowPlaying" | "visualizer">("browse");
 
   // `sections` never changes, so each render calls the same hooks in the same order
@@ -304,6 +317,51 @@ export function App(props: {
     });
   };
 
+  const downloadActions = (
+    target: Pick<DownloadPin, "kind" | "id" | "title" | "sourceIds">,
+    add: Command,
+    remove: Command,
+  ) => {
+    const downloads = props.downloads;
+    if (downloads === null) return [];
+
+    const noun = target.kind === "song" ? "" : ` ${target.kind}`;
+    const pinned = SubscriptionRef.getUnsafe(downloads.state).pins.some(
+      (pin) => pin.kind === target.kind && pin.id === target.id,
+    );
+    if (pinned) {
+      return [
+        new Action({
+          command: remove,
+          label: `Remove${noun} download`,
+          run: () => {
+            props.run(downloads.unpin(target.kind, target.id));
+            toast("notice", `Removed the download of ${target.title}`);
+          },
+        }),
+      ];
+    }
+
+    const download = (quality: typeof DownloadQuality.Type) => {
+      props.run(downloads.pin(new DownloadPin({ ...target, quality })));
+      toast("notice", `Downloading ${target.title}`);
+    };
+    return [
+      new Action({
+        command: add,
+        label: `Download${noun}`,
+        run: () =>
+          dialog.push(
+            <QualityDialog
+              title={`Download ${target.title}`}
+              current={downloadQuality}
+              onChoose={download}
+            />,
+          ),
+      }),
+    ];
+  };
+
   // No "Go to" for the page that shows now; a source without a ref falls back to a search
   const trackActions = (target: ActionTarget) => {
     const source = target.source;
@@ -364,13 +422,29 @@ export function App(props: {
       );
     }
 
-    return [...list, ...target.sectionActions];
+    const song = {
+      kind: "song" as const,
+      id: source.id,
+      title: titleOf(source),
+      sourceIds: [source.id],
+    };
+    return [
+      ...list,
+      ...downloadActions(song, commands.download, commands.removeDownload),
+      ...target.sectionActions,
+    ];
   };
 
   const albumActions = (album: AlbumCard) => {
     const artistRef = album.artistRef;
     const showsArtist = route instanceof ArtistRoute && route.ref === artistRef;
-    if (artistRef === null || showsArtist) return [];
+    // The downloads read the songs of the album when they run online
+    const download = downloadActions(
+      { kind: "album", id: album.ref, title: album.title, sourceIds: [] },
+      commands.downloadAll,
+      commands.removeAllDownload,
+    );
+    if (artistRef === null || showsArtist) return download;
 
     return [
       new Action({
@@ -378,6 +452,7 @@ export function App(props: {
         label: `Go to artist: ${album.artist ?? "Unknown artist"}`,
         run: () => openArtist(artistRef, album.artist),
       }),
+      ...download,
     ];
   };
 
@@ -392,6 +467,19 @@ export function App(props: {
     if (route instanceof ArtistRoute) return "artist";
     if (route instanceof PlaylistRoute) return "playlist";
     return "library";
+  };
+
+  const pageDownloadActions = () => {
+    const sourceIds = pageSources.map((source) => source.id);
+    if (route instanceof AlbumRoute) {
+      const album = { kind: "album" as const, id: route.ref, title: route.hint, sourceIds };
+      return downloadActions(album, commands.downloadAll, commands.removeAllDownload);
+    }
+    if (route instanceof PlaylistRoute) {
+      const playlist = { kind: "playlist" as const, id: route.id, title: route.hint, sourceIds };
+      return downloadActions(playlist, commands.downloadAll, commands.removeAllDownload);
+    }
+    return [];
   };
 
   const pageActions = () => {
@@ -413,6 +501,7 @@ export function App(props: {
         label: "Add all to queue",
         run: () => player.addToQueue(pageSources, pageContext()),
       }),
+      ...pageDownloadActions(),
     ];
   };
 
@@ -461,6 +550,23 @@ export function App(props: {
   const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [commands.help, () => dialog.push(<HelpDialog />)],
     [commands.plugins, () => dialog.push(<PluginsDialog host={props.plugins} run={props.run} />)],
+    [
+      commands.downloads,
+      () => {
+        if (props.downloads === null) return;
+        dialog.push(
+          <DownloadsDialog
+            downloads={props.downloads}
+            quality={downloadQuality}
+            setQuality={(quality) => {
+              setDownloadQuality(quality);
+              props.saveDownloadQuality(quality);
+            }}
+            run={props.run}
+          />,
+        );
+      },
+    ],
     [
       commands.outputs,
       () =>

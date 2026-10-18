@@ -1,5 +1,5 @@
 import { ServerConnection, deviceOutputId, positionOf, titleOf } from "@dyad/client-runtime";
-import type { SessionClient, SessionView } from "@dyad/client-runtime";
+import type { Downloads, SessionClient, SessionView } from "@dyad/client-runtime";
 import {
   OfflinePlay,
   Playback,
@@ -28,10 +28,11 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
+import type { FileSystem } from "effect";
 import type { HttpClient } from "effect/http";
 
 import { describeFailure } from "../log.ts";
-import { downloadState, downloadedBytes, fetchSource, openTrack } from "./player.ts";
+import { downloadState, downloadedBytes, fetchFile, fetchSource, openTrack } from "./player.ts";
 import type { Fetched, Track } from "./player.ts";
 
 // A smaller difference between the session and the audio is report jitter, not a seek
@@ -129,11 +130,15 @@ const makeEngine = (options: {
   readonly saveVolume: (volume: number) => Effect.Effect<void>;
   /** Keeps a play of offline time until the server has it */
   readonly recordPlay: (play: OfflinePlay) => Effect.Effect<void>;
+  /** A downloaded file plays first, also without the server */
+  readonly downloads: typeof Downloads.Service | null;
 }) =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
     const crypto = yield* Crypto.Crypto;
-    const services = yield* Effect.context<ServerConnection | HttpClient.HttpClient>();
+    const services = yield* Effect.context<
+      ServerConnection | HttpClient.HttpClient | FileSystem.FileSystem
+    >();
     const audio = options.audio;
 
     // Changed only by the fiber of `run`
@@ -159,6 +164,24 @@ const makeEngine = (options: {
     let controlOffline: ((command: typeof SessionCommand.Type) => boolean) | null = null;
 
     const positionNow = () => track?.position() ?? positionMs;
+
+    const downloaded = (entry: QueueEntry) =>
+      options.downloads !== null &&
+      SubscriptionRef.getUnsafe(options.downloads.state).files.has(entry.source.id);
+
+    // A file that went away, for example at the end of its lease, falls back to the server
+    const fetchEntry = (entry: QueueEntry) => {
+      const stream = fetchSource(options.serverUrl, entry.source.id);
+      if (options.downloads === null) return stream;
+      return options.downloads.file(entry.source.id).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => stream,
+            onSome: (file) => fetchFile(file.path, file.format).pipe(Effect.catch(() => stream)),
+          }),
+        ),
+      );
+    };
 
     const stopAudio = Effect.suspend(() => {
       const closing = trackScope;
@@ -219,7 +242,7 @@ const makeEngine = (options: {
             yield* dropBuffer(entry.id);
 
             const scope = yield* Scope.make();
-            const fetching = yield* fetchSource(options.serverUrl, entry.source.id).pipe(
+            const fetching = yield* fetchEntry(entry).pipe(
               Scope.provide(scope),
               Effect.provideContext(services),
               Effect.forkIn(scope),
@@ -404,17 +427,15 @@ const makeEngine = (options: {
               reason === "end" ? "end" : "skip",
               direction,
             );
-            while (
-              target !== undefined &&
-              !complete(buffers.get(target.id)) &&
-              !passed.has(target.id)
-            ) {
+            const playable = (entry: QueueEntry) =>
+              complete(buffers.get(entry.id)) || downloaded(entry);
+            while (target !== undefined && !playable(target) && !passed.has(target.id)) {
               passed.add(target.id);
               target = nextEntry(view.entries, target.id, repeat, "skip", direction);
             }
             // Only the end of an entry plays the same entry again
             const repeats = target?.id === from && reason !== "end";
-            if (repeats || (target !== undefined && !complete(buffers.get(target.id)))) {
+            if (repeats || (target !== undefined && !playable(target))) {
               target = undefined;
             }
 

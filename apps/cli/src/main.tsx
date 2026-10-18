@@ -2,11 +2,14 @@
 import "./sea-assets.ts";
 
 import {
+  Downloads,
   SessionClient,
+  downloadsLayer,
   serverAtoms,
   serverConnectionLayer,
   sessionClientLayer,
 } from "@dyad/client-runtime";
+import type { DownloadQuality } from "@dyad/domain";
 import { ClientPluginContext } from "@dyad/plugin/client";
 import { RegistryProvider } from "@effect/atom-react";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
@@ -16,6 +19,7 @@ import { createRoot } from "@opentui/react";
 import { Cause, Context, Data, Effect, FileSystem, Layer, Option, Path } from "effect";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
+import envPaths from "env-paths";
 
 import { App } from "./app.tsx";
 import { accountCommands } from "./commands/accounts.ts";
@@ -74,7 +78,36 @@ const player = (controller: boolean) =>
     if (Option.isSome(saved)) yield* saveVolume(saved.value);
     const volume = settings.volume ?? Option.getOrElse(saved, () => 1);
 
+    const saveDownloadQuality = (quality: typeof DownloadQuality.Type) =>
+      updateSettings((current) => new Settings({ ...current, downloadQuality: quality })).pipe(
+        Effect.provideContext(services),
+        Effect.tapCause((cause) => Effect.logWarning("Cannot save the download quality", cause)),
+        Effect.provideContext(logServices),
+        Effect.ignore,
+      );
+
     const playLog = yield* openPlayLog(serverUrl);
+    const path = yield* Path.Path;
+    const downloads = controller
+      ? null
+      : Context.get(
+          yield* Layer.build(
+            downloadsLayer({
+              directory: path.join(
+                envPaths("dyad", { suffix: "" }).data,
+                "downloads",
+                encodeURIComponent(serverUrl),
+              ),
+              serverUrl,
+              capabilities,
+            }).pipe(
+              Layer.provide(Layer.succeedContext(connection)),
+              Layer.provide(FetchHttpClient.layer),
+              Layer.provide(logging),
+            ),
+          ),
+          Downloads,
+        );
     const audio = controller
       ? null
       : yield* Effect.acquireRelease(
@@ -86,7 +119,14 @@ const player = (controller: boolean) =>
         ? null
         : Context.get(
             yield* Layer.build(
-              engineLayer({ audio, serverUrl, volume, saveVolume, recordPlay: playLog.add }).pipe(
+              engineLayer({
+                audio,
+                serverUrl,
+                volume,
+                saveVolume,
+                recordPlay: playLog.add,
+                downloads,
+              }).pipe(
                 Layer.provide(Layer.succeedContext(connection)),
                 Layer.provide(FetchHttpClient.layer),
               ),
@@ -158,6 +198,9 @@ const player = (controller: boolean) =>
                       engine={engine}
                       run={run}
                       plugins={plugins}
+                      downloads={downloads}
+                      downloadQuality={settings.downloadQuality ?? "high"}
+                      saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
                     />
                   </DialogProvider>
                 </ToastProvider>

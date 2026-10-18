@@ -7,6 +7,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  FileSystem,
   Scope,
   Semaphore,
   Stream,
@@ -123,7 +124,8 @@ const startDownload = (serverUrl: string, path: string, format: Format, startMs:
 
 /** The whole response of a source. The engine keeps it for the next entries and for offline play. */
 export class Fetched extends Data.Class<{
-  readonly path: string;
+  /** `null` for a downloaded file, which has all audio */
+  readonly path: string | null;
   readonly format: Format;
   readonly download: Download;
 }> {}
@@ -134,21 +136,50 @@ export const downloadState = (fetched: Fetched) =>
 export const downloadedBytes = (fetched: Fetched) =>
   SubscriptionRef.getUnsafe(fetched.download.received).bytes.length;
 
+const decoderOf = (format: AudioFormat) =>
+  decoders.find(
+    ([, candidate]) => candidate.container === format.container && candidate.codec === format.codec,
+  )?.[0];
+
 /** Closing the scope stops the download */
 export const fetchSource = (serverUrl: string, sourceId: string) =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
     const plan = yield* connection.preparePlayback({ sourceId, capabilities });
-    const decoder = decoders.find(
-      ([, format]) =>
-        format.container === plan.format.container && format.codec === plan.format.codec,
-    );
+    const decoder = decoderOf(plan.format);
     if (decoder === undefined) {
       return yield* new PlaybackError({ cause: "The server chose an undeclared format" });
     }
 
-    const download = yield* startDownload(serverUrl, plan.path, decoder[0], 0);
-    return new Fetched({ path: plan.path, format: decoder[0], download });
+    const download = yield* startDownload(serverUrl, plan.path, decoder, 0);
+    return new Fetched({ path: plan.path, format: decoder, download });
+  });
+
+/** Reads a downloaded file into memory, like a complete response */
+export const fetchFile = (path: string, format: AudioFormat) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const decoder = decoderOf(format);
+    if (decoder === undefined) {
+      return yield* new PlaybackError({ cause: "The file has an undeclared format" });
+    }
+
+    const bytes = yield* fs
+      .readFile(path)
+      .pipe(Effect.mapError((cause) => new PlaybackError({ cause })));
+    const received = yield* SubscriptionRef.make(new Received({ bytes, state: "done" }));
+    const tap = new AudioTap({
+      codec: decoder,
+      startMs: 0,
+      bytes: () => bytes,
+      complete: () => true,
+    });
+    const scope = yield* Scope.fork(yield* Effect.scope);
+    return new Fetched({
+      path: null,
+      format: decoder,
+      download: new Download({ startMs: 0, received, scope, tap }),
+    });
   });
 
 export class Track extends Data.Class<{
@@ -268,6 +299,12 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
           return yield* replace(from);
         }
 
+        // A downloaded file has all audio, so the position is after its end
+        if (fetched.path === null) {
+          stopStream();
+          yield* Deferred.succeed(ended, undefined);
+          return;
+        }
         // The old audio plays on until the new response starts
         const next = yield* startDownload(serverUrl, fetched.path, format, ms);
         yield* play(next, startPoint);
