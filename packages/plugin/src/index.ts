@@ -51,6 +51,11 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
 export class ProviderAudio extends Data.Class<{
   /** FFmpeg reads the bytes in sequence, so the container must not need seeks */
   readonly bytes: Stream.Stream<Uint8Array, ProviderError>;
+  /**
+   * `bytes` without the segments that end before `startMs`, for a fast start. Packets keep their
+   * timestamps in the source, like the `tfdt` of fragmented MP4.
+   */
+  readonly bytesFrom?: (startMs: number) => Stream.Stream<Uint8Array, ProviderError>;
   /** CENC content keys in hex by key ID, for encrypted sources. FFmpeg selects the key per sample. */
   readonly decryptionKeys?: Redacted.Redacted<ReadonlyMap<string, string>>;
 }> {}

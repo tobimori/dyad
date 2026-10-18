@@ -7,6 +7,8 @@ class Segment extends Data.Class<{
   readonly url: string;
   /** HTTP `Range` header value. None reads the whole resource. */
   readonly range: Option.Option<string>;
+  /** Where the segment ends in the song. `null` for the init section. */
+  readonly endMs: number | null;
 }> {}
 
 // Quoted values can contain commas
@@ -29,6 +31,8 @@ const parseSegments = (playlistUrl: string, playlist: string) => {
   const segments: Array<Segment> = [];
   let range = Option.none<string>();
   let previousEnd = 0;
+  let durationMs = 0;
+  let endMs = 0;
 
   for (const line of playlist.split(/\r?\n/)) {
     if (line.startsWith("#EXT-X-MAP:")) {
@@ -41,6 +45,7 @@ const parseSegments = (playlistUrl: string, playlist: string) => {
           url: new URL(uri, playlistUrl).href,
           range:
             initRange === undefined ? Option.none() : Option.some(byteRange(initRange, 0).header),
+          endMs: null,
         }),
       );
       continue;
@@ -53,9 +58,15 @@ const parseSegments = (playlistUrl: string, playlist: string) => {
       continue;
     }
 
+    if (line.startsWith("#EXTINF:")) {
+      durationMs = Number.parseFloat(line.slice("#EXTINF:".length)) * 1000;
+      continue;
+    }
+
     if (line === "" || line.startsWith("#")) continue;
 
-    segments.push(new Segment({ url: new URL(line, playlistUrl).href, range }));
+    endMs += durationMs;
+    segments.push(new Segment({ url: new URL(line, playlistUrl).href, range, endMs }));
     range = Option.none();
   }
 

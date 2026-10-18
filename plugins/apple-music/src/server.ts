@@ -135,11 +135,17 @@ export const appleMusicPlugin = new Plugin({
           const play = new SongPlay({ mediaUserToken: token, songId });
           const { segments, decryptionKeys } = yield* Cache.get(playbacks, play);
 
-          const bytes = segmentBytes(segments).pipe(
-            Stream.mapError(toProviderError),
-            Stream.provideContext(services),
-          );
-          return new ProviderAudio({ bytes, decryptionKeys });
+          const read = (selected: typeof segments) =>
+            segmentBytes(selected).pipe(
+              Stream.mapError(toProviderError),
+              Stream.provideContext(services),
+            );
+          return new ProviderAudio({
+            bytes: read(segments),
+            bytesFrom: (startMs) =>
+              read(segments.filter((segment) => segment.endMs === null || segment.endMs > startMs)),
+            decryptionKeys,
+          });
         }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
 
       // Keys that are not in memory, for example after a restart, need the asset again for the

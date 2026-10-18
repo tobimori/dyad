@@ -63,6 +63,8 @@ export class MediaStream extends Data.Class<{
   readonly format: string;
   /** Demuxer options, for example the CENC `decryption_keys`. Redact secret values. */
   readonly options: Readonly<Record<string, string | Redacted.Redacted<string>>>;
+  /** The bytes start inside the source, so the first packet does not give the start of the source */
+  readonly partial?: boolean;
 }> {}
 
 const openAudio = (media: string | MediaStream) =>
@@ -89,7 +91,8 @@ const openAudio = (media: string | MediaStream) =>
     if (stream === undefined) {
       return yield* new MediaError({ input: name, reason: "No audio stream" });
     }
-    return { input, stream, name };
+    const partial = media instanceof MediaStream && media.partial === true;
+    return { input, stream, name, partial };
   });
 
 export const readAudioFile = (path: string) =>
@@ -206,8 +209,8 @@ const muxStream = (
 
 // Positions count from the first sample that a full decode gives. FFmpeg puts the start time of
 // the stream after the encoder priming, for example the MP3 LAME delay or the MP4 edit list.
-const startTimestamp = (stream: AvStream, startMs: number) =>
-  (stream.startTime === AV_NOPTS_VALUE ? 0n : stream.startTime) +
+const startTimestamp = (stream: AvStream, startMs: number, partial: boolean) =>
+  (stream.startTime === AV_NOPTS_VALUE || partial ? 0n : stream.startTime) +
   avRescaleQ(startMs, { num: 1, den: 1000 }, stream.timeBase);
 
 // Lossy frames overlap the frame before them, and an MP3 frame can use 511 bytes of earlier frames.
@@ -257,8 +260,8 @@ const packetsFrom = (name: string, input: Demuxer, stream: AvStream, start: bigi
 export const remuxAudio = (media: string | MediaStream, container: string, startMs = 0) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const { input, stream, name } = yield* openAudio(media);
-      const start = startTimestamp(stream, startMs);
+      const { input, stream, name, partial } = yield* openAudio(media);
+      const start = startTimestamp(stream, startMs, partial);
       // The preroll gets negative timestamps, which the MP4 edit list hides. MP3 and ADTS have no
       // edit list, so their output starts with the preroll.
       const packets = Stream.toAsyncIterable(
@@ -311,9 +314,9 @@ export const remuxAudio = (media: string | MediaStream, container: string, start
 export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const { input, stream, name } = yield* openAudio(media);
+      const { input, stream, name, partial } = yield* openAudio(media);
       const fail = (cause: unknown) => new MediaError({ input: name, reason: String(cause) });
-      const start = startTimestamp(stream, startMs);
+      const start = startTimestamp(stream, startMs, partial);
       // Decoding starts at the preroll before `start`, and `atrim` drops the decoded samples
       // before it. Audio filters count time in samples.
       const startSample = avRescaleQ(start, stream.timeBase, {

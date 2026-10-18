@@ -16,7 +16,8 @@ import {
   UserId,
 } from "@dyad/domain";
 import { MediaStream, encodeFlac, remuxAudio } from "@dyad/media/node";
-import type { ProviderAudio, ProviderError } from "@dyad/plugin";
+import { ProviderAudio } from "@dyad/plugin";
+import type { ProviderError } from "@dyad/plugin";
 import { and, eq } from "drizzle-orm";
 import {
   Clock,
@@ -276,6 +277,8 @@ export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabili
 class SourceAudio extends Data.Class<{
   readonly bytes: Stream.Stream<Uint8Array, ProviderError | PlatformError.PlatformError>;
   readonly decryptionKeys: Redacted.Redacted<ReadonlyMap<string, string>> | undefined;
+  /** The bytes start inside the source */
+  readonly partial: boolean;
 }> {}
 
 // Cached audio plays only with the keys of the asset in the file. Keys of another asset, for
@@ -290,20 +293,24 @@ const cachedAudio = (playable: ProviderPlayback) =>
 
     const bytes = cache.read(file.value);
     if (file.value.keyIds.length === 0) {
-      return Option.some(new SourceAudio({ bytes, decryptionKeys: undefined }));
+      return Option.some(new SourceAudio({ bytes, decryptionKeys: undefined, partial: false }));
     }
     if (playable.keys === undefined) return Option.none();
 
     const decryptionKeys = yield* playable.keys;
     const keys = Redacted.value(decryptionKeys);
     if (!file.value.keyIds.every((keyId) => keys.has(keyId))) return Option.none();
-    return Option.some(new SourceAudio({ bytes, decryptionKeys }));
+    return Option.some(new SourceAudio({ bytes, decryptionKeys, partial: false }));
   });
+
+// Decoders need the packets before the start, see `isEnoughPreroll` in `@dyad/media`
+const prerollMs = 1000;
 
 // The provider resolves before the response starts, so that a failure gives an error status
 const providerStream = <E>(
   playable: ProviderPlayback,
   sourceId: string,
+  startMs: number,
   convert: (media: MediaStream) => Stream.Stream<Uint8Array, E>,
 ) =>
   Effect.gen(function* () {
@@ -311,14 +318,22 @@ const providerStream = <E>(
     const cached = yield* cachedAudio(playable);
     const audio = Option.isSome(cached)
       ? cached.value
-      : yield* Effect.map(
-          playable.resolve,
-          (resolved) =>
-            new SourceAudio({
-              bytes: cache.download(playable.provider, playable.cacheId, resolved),
-              decryptionKeys: resolved.decryptionKeys,
-            }),
-        );
+      : yield* Effect.map(playable.resolve, (resolved) => {
+          // The cache keeps only complete files
+          const from = startMs > 0 ? resolved.bytesFrom : undefined;
+          return new SourceAudio({
+            bytes:
+              from === undefined
+                ? cache.download(playable.provider, playable.cacheId, resolved)
+                : cache.download(
+                    playable.provider,
+                    null,
+                    new ProviderAudio({ bytes: from(Math.max(0, startMs - prerollMs)) }),
+                  ),
+            decryptionKeys: resolved.decryptionKeys,
+            partial: from !== undefined,
+          });
+        });
     // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
     const keys =
       audio.decryptionKeys === undefined ? [] : [...Redacted.value(audio.decryptionKeys)];
@@ -337,7 +352,13 @@ const providerStream = <E>(
           (bytes) => Effect.sync(() => bytes.destroy()),
         );
         return convert(
-          new MediaStream({ name: sourceId, bytes, format: playable.demuxer, options }),
+          new MediaStream({
+            name: sourceId,
+            bytes,
+            format: playable.demuxer,
+            options,
+            partial: audio.partial,
+          }),
         );
       }),
     );
@@ -442,7 +463,7 @@ export const streamRoute = HttpRouter.add(
     const body =
       playable instanceof FilePlayback
         ? convert(playable.path)
-        : yield* providerStream(playable, request.sourceId, convert);
+        : yield* providerStream(playable, request.sourceId, startMs, convert);
 
     return HttpServerResponse.stream(
       body.pipe(

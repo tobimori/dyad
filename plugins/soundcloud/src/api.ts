@@ -182,10 +182,15 @@ export const resolveTrack = (
     }
 
     const services = yield* Effect.context<HttpClient.HttpClient>();
-    const bytes = segmentBytes(segments).pipe(
-      // Errors contain the signed segment URL
-      Stream.mapError(() => new ProviderError({ reason: "Cannot read an audio segment" })),
-      Stream.provideContext(services),
-    );
-    return new ProviderAudio({ bytes });
+    const read = (selected: typeof segments) =>
+      segmentBytes(selected).pipe(
+        // Errors contain the signed segment URL
+        Stream.mapError(() => new ProviderError({ reason: "Cannot read an audio segment" })),
+        Stream.provideContext(services),
+      );
+    return new ProviderAudio({
+      bytes: read(segments),
+      bytesFrom: (startMs) =>
+        read(segments.filter((segment) => segment.endMs === null || segment.endMs > startMs)),
+    });
   });
