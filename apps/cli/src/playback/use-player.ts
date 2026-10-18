@@ -4,7 +4,7 @@ import {
   isTransportCommand,
   positionOf,
 } from "@dyad/client-runtime";
-import type { SessionClient } from "@dyad/client-runtime";
+import type { ListenFeed, SessionClient } from "@dyad/client-runtime";
 import { SessionCommand, skipSeekTarget } from "@dyad/domain";
 import type { OutputId, PlayContext, SourceSegment, SourceSummary } from "@dyad/domain";
 import { Clock, Effect, Fiber, Random, Schedule, Stream, SubscriptionRef } from "effect";
@@ -65,6 +65,8 @@ export function usePlayer(props: {
   readonly session: typeof SessionClient.Service;
   /** `null` when this device only controls */
   readonly engine: typeof Engine.Service | null;
+  /** The audio of a timed output that plays elsewhere, for the visualizer */
+  readonly listen: ListenFeed;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly notify: (message: string) => void;
@@ -223,7 +225,13 @@ export function usePlayer(props: {
     position,
     durationMs,
     /** `null` while the audio plays on another device */
-    tap: () => (current === undefined ? null : (props.engine?.tap(current.id) ?? null)),
+    tap: () => {
+      if (current === undefined) return null;
+      const own = props.engine?.tap(current.id) ?? null;
+      const output = view.outputs.find((candidate) => candidate.id === playback.outputId);
+      const timed = playback.group.length > 0 || output?.kind === "timed";
+      return own ?? (timed ? props.listen : null);
+    },
     /** `null` while the audio plays on another device */
     quality: () => (current === undefined ? null : (props.engine?.quality(current.id) ?? null)),
     /** `reasons`: why a radio suggests each source, by source ID */

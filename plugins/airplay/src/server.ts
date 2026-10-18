@@ -128,7 +128,9 @@ export const airplayOutputs = Effect.fn("AirPlay.outputs")(function* (
     Stream.tap((device) => Effect.sync(() => found.set(device.id, device))),
     Stream.map(() =>
       [...found.values()].flatMap((device) =>
-        raopAccess(device) === "raop" ? [new OutputInfo({ id: device.id, name: device.name })] : [],
+        raopAccess(device) === "raop"
+          ? [new OutputInfo({ id: device.id, name: device.name, host: device.host })]
+          : [],
       ),
     ),
     Stream.changesWith(sameInfos),

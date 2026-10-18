@@ -5,6 +5,7 @@ import {
   Downloads,
   Replica,
   SessionClient,
+  connectTimed,
   downloadsLayer,
   serverAtoms,
   serverConnectionLayer,
@@ -41,6 +42,7 @@ import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
 import { Engine, engineLayer } from "./playback/engine.ts";
 import { capabilities } from "./playback/player.ts";
+import { GroupPlayer } from "./playback/receiver.ts";
 import { pluginTransport } from "./playback/transport.ts";
 import { DialogProvider } from "./ui/dialog.tsx";
 import { ErrorBoundary } from "./ui/error-boundary.tsx";
@@ -144,6 +146,18 @@ const player = (controller: boolean) =>
             Engine,
           );
 
+    // Groups play through the server's renderer: this device plays its part at the server's times
+    let receiver: GroupPlayer | null = null;
+    const timed = yield* connectTimed({
+      serverUrl,
+      deviceToken: token,
+      receiver: audio !== null,
+      onFrame: (frame) => receiver?.push(frame),
+      onFlush: () => receiver?.flush(),
+    }).pipe(Effect.orDie);
+    receiver = audio === null ? null : new GroupPlayer(audio, timed.serverTime);
+    yield* Effect.addFinalizer(() => Effect.sync(() => receiver?.close()));
+
     const sessionServices = yield* Layer.build(
       sessionClientLayer({
         player:
@@ -211,6 +225,7 @@ const player = (controller: boolean) =>
                       atoms={atoms}
                       session={session}
                       engine={engine}
+                      listen={timed.feed}
                       run={run}
                       plugins={plugins}
                       downloads={downloads}

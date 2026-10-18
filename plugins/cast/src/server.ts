@@ -48,12 +48,16 @@ const outputInfos = (devices: ReadonlyArray<UpnpDevice>) =>
 
     return devices.flatMap((device) => {
       if (device.kind !== "sonos" || groups.length === 0) {
-        return [new OutputInfo({ id: device.id, name: device.name })];
+        return [new OutputInfo({ id: device.id, name: device.name, host: device.host })];
       }
       const group = groups.find((candidate) => candidate.coordinatorId === device.id);
       if (group === undefined) return [];
       return [
-        new OutputInfo({ id: device.id, name: [device.name, ...group.otherRooms].join(" + ") }),
+        new OutputInfo({
+          id: device.id,
+          name: [device.name, ...group.otherRooms].join(" + "),
+          host: device.host,
+        }),
       ];
     });
   });

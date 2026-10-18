@@ -11,26 +11,37 @@ export const readSourceInfo = (bytes: Uint8Array, codec: "flac" | "mp3") =>
 
 /**
  * The last received seek point from which a decoder reaches source frame `frame`. Past the
- * received bytes, it is the last point that they hold.
+ * received bytes, it is the last point that they hold. `bytes` starts at byte `start` of the file;
+ * an MP3 seek needs all bytes from the first frame.
  */
-export const findSeekPoint = (bytes: Uint8Array, info: SourceInfo, frame: number) =>
-  info.codec === "flac" ? flacSeekPoint(bytes, frame) : mp3SeekPoint(bytes, info, frame);
+export const findSeekPoint = (bytes: Uint8Array, info: SourceInfo, frame: number, start = 0) => {
+  if (info.codec === "flac") return flacSeekPoint(bytes, info, frame, start);
+  return start > info.dataOffset ? undefined : mp3SeekPoint(bytes, info, frame);
+};
 
 /** Source frames of one file, without encoder priming and padding */
 export class Source extends Data.Class<{
   /** The next `read` continues at source frame `frame` */
   readonly seek: (frame: number) => void;
   /**
-   * Decodes the next part of `bytes`, all bytes received so far. The result is empty when the
-   * source needs more bytes, and `undefined` after its last frame.
+   * Decodes the next part of `bytes`, the received bytes from byte `start` of the file. The result
+   * is empty when the source needs more bytes, and `undefined` after its last frame.
    */
   readonly read: (
     bytes: Uint8Array,
     complete: boolean,
+    start?: number,
   ) => Effect.Effect<Pcm | undefined, DecodeError>;
+  /**
+   * The first byte that the source still needs. 0 when the bytes before the window hold the seek
+   * target, `undefined` while it needs all bytes of the window to find the seek point.
+   */
+  readonly needs: () => number | undefined;
 }> {}
 
 const chunkBytes = 16 * 1024;
+// A seek waits until the bytes reach this far past its point, so that it does not start early
+const seekMarginBytes = 4 * chunkBytes;
 
 /** The decoder lives until the scope closes */
 export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceInfo) {
@@ -45,6 +56,9 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
   // Source frame of the next decoded frame
   let decoded = 0;
   let flushed = false;
+  let rewind = false;
+  // While it waits for bytes past a FLAC seek point, the bytes before the point can go
+  let searchFrom: number | undefined;
 
   // Drops the frames before the target and after the end of the source
   const keep = (pcm: Pcm) => {
@@ -60,13 +74,18 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
     });
   };
 
-  const start = (bytes: Uint8Array, complete: boolean) =>
+  const start = (bytes: Uint8Array, complete: boolean, first: number) =>
     Effect.gen(function* () {
-      const next = findSeekPoint(bytes, info, target);
+      const next = findSeekPoint(bytes, info, target, first);
+      rewind = first > info.dataOffset && (next === undefined || next.frame > target);
+      if (rewind) return false;
+      // An MP3 seek counts frames from the first one, so it keeps all bytes
+      searchFrom = info.codec === "flac" && next !== undefined ? next.offset : undefined;
       if (next === undefined) {
         if (complete) return yield* new DecodeError({ cause: "The file has no audio frame" });
         return false;
       }
+      if (!complete && first + bytes.length - next.offset < seekMarginBytes) return false;
 
       yield* decoder.reset;
       yield* decoder.decode(next.prefix);
@@ -77,13 +96,13 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
       return true;
     });
 
-  const read = (bytes: Uint8Array, complete: boolean) =>
+  const read = (bytes: Uint8Array, complete: boolean, first = 0) =>
     Effect.gen(function* () {
-      if (!started && !(yield* start(bytes, complete))) return empty;
+      if (!started && !(yield* start(bytes, complete, first))) return empty;
 
       while (decoded < end) {
-        if (offset < bytes.length) {
-          const chunk = bytes.subarray(offset, offset + chunkBytes);
+        if (offset < first + bytes.length) {
+          const chunk = bytes.subarray(offset - first, offset - first + chunkBytes);
           offset += chunk.length;
           const pcm = keep(yield* decoder.decode(chunk));
           if (pcm.frames > 0) return pcm;
@@ -103,7 +122,12 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
     seek: (frame) => {
       target = Math.max(0, frame);
       started = false;
+      searchFrom = undefined;
     },
     read,
+    needs: () => {
+      if (started) return offset;
+      return rewind ? 0 : searchFrom;
+    },
   });
 });

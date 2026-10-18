@@ -343,10 +343,10 @@ const outputWithNumber = (current: View, server: Server, arg: string) =>
 const enabledOutputs = (current: View) =>
   current.playback.outputId === null ? [] : [current.playback.outputId, ...current.playback.group];
 
-// As in MPD, enabling a second output plays on both, but only timed outputs can play in sync
+// As in MPD, enabling a second output plays on both, but only groupable outputs can play in sync
 const enableCommand = (current: View, output: Output) => {
   const active = current.outputs.find((each) => each.id === current.playback.outputId);
-  return active?.kind === "timed" && output.kind === "timed"
+  return active?.groupable === true && output.groupable
     ? Command.SetGroup.make({ outputIds: [output.id, ...enabledOutputs(current)] })
     : Command.Transfer.make({ outputId: output.id, play: null });
 };

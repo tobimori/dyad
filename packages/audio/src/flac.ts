@@ -39,18 +39,24 @@ export const readFlacInfo = (bytes: Uint8Array) => {
     dataOffset: info.headerLength,
     delay: 0,
     frames: info.totalFrames === 0 ? undefined : info.totalFrames,
+    prefix: bytes.slice(0, info.headerLength),
   });
 };
 
 // FLAC frames decode independently, so a seek point is the last received frame at or before `target`
-export const flacSeekPoint = (bytes: Uint8Array, target: number) => {
-  const info = streamInfo(bytes);
+export const flacSeekPoint = (
+  bytes: Uint8Array,
+  source: SourceInfo,
+  target: number,
+  start: number,
+) => {
+  const info = streamInfo(source.prefix);
   if (info === undefined) return undefined;
 
   const frameAt = (position: number) => nextFlacFrame(bytes, position, info.blockSize);
 
-  // `low` is always a frame that starts at or before the target
-  let low = info.headerLength;
+  // `low` is always a frame that starts at or before the target, unless the window starts later
+  let low = Math.max(0, info.headerLength - start);
   let high = bytes.length;
   while (high - low > 1) {
     const middle = Math.floor((low + high) / 2);
@@ -66,8 +72,8 @@ export const flacSeekPoint = (bytes: Uint8Array, target: number) => {
   if (frame === undefined) return undefined;
 
   return new SeekPoint({
-    prefix: bytes.subarray(0, info.headerLength),
-    offset: frame.offset,
+    prefix: source.prefix,
+    offset: start + frame.offset,
     frame: frame.sample,
   });
 };

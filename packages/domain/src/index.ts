@@ -32,6 +32,7 @@ export * from "./library-view.ts";
 export * from "./primitives.ts";
 export * from "./session.ts";
 export * from "./sync.ts";
+export * from "./timed.ts";
 
 export const HttpUrl = Schema.URLFromString.check(
   Schema.makeFilter((url) =>
@@ -589,6 +590,8 @@ export class Output extends Schema.Class<Output>("Output")({
   muted: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   /** A `timed` output plays this much later than the others in its group, or earlier when negative */
   delayMs: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
+  /** Can play in a group, in sync with the other members. Chromecast and plain UPnP cannot. */
+  groupable: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 }) {}
 
 /** Removes `remove` entries at `index`, then inserts `insert` there */
@@ -661,8 +664,8 @@ export const SessionCommand = Schema.TaggedUnion({
   /** `play: null` keeps the state. The session leaves its group. */
   Transfer: { outputId: OutputId, play: Schema.NullOr(Schema.Boolean) },
   /**
-   * Plays on all `outputIds` in sync. Only `timed` outputs. Outputs that play already continue, and
-   * the others join; without one, it is a `Transfer`.
+   * Plays on all `outputIds` in sync. Only `groupable` outputs. Outputs that play already continue,
+   * and the others join; without one, it is a `Transfer`.
    */
   SetGroup: { outputIds: Schema.NonEmptyArray(OutputId).check(Schema.isMaxLength(32)) },
   SetOutputDelay: {

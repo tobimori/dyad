@@ -188,6 +188,7 @@ export const readMp3Info = (bytes: Uint8Array) => {
     dataOffset: tagged ? first.offset + first.frame.length : first.offset,
     delay: gapless.delay,
     frames: gapless.frames,
+    prefix: new Uint8Array(0),
   });
 };
 

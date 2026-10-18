@@ -36,7 +36,7 @@ export function OutputsDialog(props: {
         value: output.id,
         title: `${members.includes(output.id) ? "▶ " : ""}${output.name}${output.id === own ? " (this device)" : ""}`,
         detail: [
-          output.kind === "timed" ? "sync" : "",
+          output.groupable ? "sync" : "no sync",
           output.muted ? "Muted" : "",
           output.volume === null ? "" : `${Math.round(output.volume * 100)}%`,
         ]
@@ -51,16 +51,16 @@ export function OutputsDialog(props: {
     props.setVolume(output.id, output.volume + direction * volumeStep);
   };
 
-  // Only timed outputs play in sync, so the group keeps only those
+  // Only groupable outputs play in sync, so the group keeps only those
   const toggleGroup = () => {
     const output = view.outputs.find((candidate) => candidate.id === highlighted);
-    if (output?.kind !== "timed") return;
-    const timed = members.filter((id) =>
-      view.outputs.some((candidate) => candidate.id === id && candidate.kind === "timed"),
+    if (output?.groupable !== true) return;
+    const groupable = members.filter((id) =>
+      view.outputs.some((candidate) => candidate.id === id && candidate.groupable),
     );
-    const [first, ...rest] = timed.includes(output.id)
-      ? timed.filter((id) => id !== output.id)
-      : [output.id, ...timed];
+    const [first, ...rest] = groupable.includes(output.id)
+      ? groupable.filter((id) => id !== output.id)
+      : [output.id, ...groupable];
     if (first !== undefined) props.group([first, ...rest]);
   };
 

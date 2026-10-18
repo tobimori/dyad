@@ -25,6 +25,7 @@ import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./
 import { mediaCacheLayer } from "./media-cache.ts";
 import { outputsLayer } from "./outputs.ts";
 import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
+import { receiversLayer } from "./receivers.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { recommendersLayer } from "./recommenders.ts";
@@ -41,6 +42,7 @@ import {
   unpairServer,
 } from "./peers.ts";
 import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
+import { timedRoute } from "./timed-route.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
 import { listPlaylistEntries } from "./user-library.ts";
 import { prepareVideo, videoRoute } from "./video.ts";
@@ -72,6 +74,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       mediaCacheLayer,
       musicbrainzLookupsLayer,
       outputsLayer,
+      receiversLayer,
       syncHubLayer,
       serverPairingCodesLayer,
       tracklistsServiceLayer,
@@ -158,6 +161,7 @@ export const serverRoutes = Layer.unwrap(
       ),
       HttpRouter.add("GET", "/health", HttpServerResponse.text("ok")),
       streamRoute,
+      timedRoute,
       videoRoute,
       downloadRoute,
       peerRoutes,

@@ -1,13 +1,14 @@
 import { openSource, readSourceInfo } from "@dyad/audio";
 import type { DecodeError, Source, SourceInfo } from "@dyad/audio";
+import { ListenFeed } from "@dyad/client-runtime";
 import { SampleRing } from "@dyad/visualizer";
-import { Data, Effect, Exit, Scope } from "effect";
+import { Clock, Data, Effect, Exit, Scope } from "effect";
 
 /**
  * One response of the audio output, for the visualizer. It decodes the bytes a second time, until
  * the PCM engine can give its samples.
  */
-export class AudioTap extends Data.Class<{
+export class ResponseTap extends Data.Class<{
   readonly codec: "flac" | "mp3";
   /** Source time of the first frame of the response */
   readonly startMs: number;
@@ -16,12 +17,17 @@ export class AudioTap extends Data.Class<{
   readonly complete: () => boolean;
 }> {}
 
+/** What the visualizer shows: a response that this device plays, or the audio of a timed output */
+export type AudioTap = ResponseTap | ListenFeed;
+
+const listenRate = 44100;
+
 // The analyzer reads 2048 samples before the position, so a jump starts the decoder a bit earlier
 const leadSeconds = 0.25;
 const aheadSeconds = 1;
 
 class Opened extends Data.Class<{
-  readonly tap: AudioTap;
+  readonly tap: ResponseTap;
   readonly info: SourceInfo;
   readonly source: Source;
   readonly scope: Scope.Closeable;
@@ -31,13 +37,16 @@ class Opened extends Data.Class<{
 export class AudioFeed {
   // One decode step can give 8 s of low bit rate MP3, so the ring must hold more than that
   readonly ring = new SampleRing(1 << 20);
-  private tap: AudioTap | null = null;
+  private tap: ResponseTap | null = null;
   private opened: Opened | null = null;
   private busy = false;
   private seekNeeded = true;
+  // The ring frame of a listen block is its local play time in frames
+  private listenEpoch = -1;
 
   /** Starts the next decode step and gives the ring frame of `positionMs` */
   update(tap: AudioTap, positionMs: number) {
+    if (tap instanceof ListenFeed) return this.listen(tap);
     if (tap !== this.tap) {
       this.close();
       this.tap = tap;
@@ -64,6 +73,24 @@ export class AudioFeed {
     return frame;
   }
 
+  // Writes the blocks that arrived and gives the ring frame of now
+  private listen(feed: ListenFeed) {
+    this.close();
+    const nowUs = Number(Effect.runSync(Clock.monotonicTimeNanos) / 1000n);
+    const ring = this.ring;
+    if (feed.epoch !== this.listenEpoch) {
+      this.listenEpoch = feed.epoch;
+      ring.reset(0, listenRate);
+    }
+    for (const block of feed.take(nowUs)) {
+      // Clock corrections move a block by a few frames, which is no gap
+      const frame = Math.round((block.atUs * listenRate) / 1_000_000);
+      if (Math.abs(frame - ring.end) > 8) ring.reset(frame, listenRate);
+      ring.write([block.samples], block.samples.length);
+    }
+    return (nowUs * listenRate) / 1_000_000;
+  }
+
   close() {
     const opened = this.opened;
     this.opened = null;
@@ -85,7 +112,7 @@ export class AudioFeed {
     );
   }
 
-  private open(tap: AudioTap) {
+  private open(tap: ResponseTap) {
     const info = readSourceInfo(tap.bytes(), tap.codec);
     if (info === undefined) return;
     this.run(

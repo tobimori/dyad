@@ -10,6 +10,8 @@ export class SourceInfo extends Data.Class<{
   readonly delay: number;
   /** Source frames without priming and padding, if the header says */
   readonly frames: number | undefined;
+  /** For FLAC, the metadata, which a decoder reads before the frames */
+  readonly prefix: Uint8Array;
 }> {}
 
 /** A decoder that reads `prefix`, then the received bytes from `offset`, starts at `frame` */

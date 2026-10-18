@@ -1,5 +1,11 @@
 import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
-import type { Downloads, Replica, ServerAtoms, SessionClient } from "@dyad/client-runtime";
+import type {
+  Downloads,
+  ListenFeed,
+  Replica,
+  ServerAtoms,
+  SessionClient,
+} from "@dyad/client-runtime";
 import { ArtistPage, RadioStart, segmentIndexAt } from "@dyad/domain";
 import type {
   AlbumCard,
@@ -84,6 +90,7 @@ export function App(props: {
   readonly session: typeof SessionClient.Service;
   /** `null` when this device only controls */
   readonly engine: typeof Engine.Service | null;
+  readonly listen: ListenFeed;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly plugins: PluginHost;
@@ -109,6 +116,7 @@ export function App(props: {
   const player = usePlayer({
     session: props.session,
     engine: props.engine,
+    listen: props.listen,
     run: props.run,
     notify: (message) => toast("error", message),
     inform: (message) => toast("notice", message),

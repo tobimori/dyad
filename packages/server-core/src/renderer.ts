@@ -80,6 +80,62 @@ const inputWindow = 3;
 // Spans stay this long after they are sent, for the position
 const spanHistoryFrames = 30 * timelineRate;
 
+// An entry keeps its bytes from a little before the read position to this far after it. A 2 hour
+// FLAC set would else hold about 700 MB.
+const aheadBytes = 16 * 1024 * 1024;
+const behindBytes = 1024 * 1024;
+// The kept bytes move to a new buffer only after this many bytes can go
+const compactBytes = 4 * 1024 * 1024;
+
+// The track needs bytes that the entry dropped, so the input starts again
+class Rewound extends Data.TaggedError("Rewound")<{}> {}
+
+// The bytes of one entry from byte `start` of its file
+class ByteWindow {
+  bytes = new Uint8Array(1 << 20);
+  length = 0;
+  start = 0;
+  complete = false;
+  // `Source.needs` of the track that reads the entry. 0 before a track reads it.
+  needs: number | undefined = 0;
+
+  reset() {
+    this.bytes = new Uint8Array(1 << 20);
+    this.length = 0;
+    this.start = 0;
+    this.complete = false;
+  }
+
+  // Moves the kept bytes to a new buffer when enough can go or when `extra` more bytes do not fit
+  compact(extra = 0) {
+    const keepFrom =
+      this.needs === undefined ? this.start : Math.max(this.start, this.needs - behindBytes);
+    const drop = Math.min(this.length, keepFrom - this.start);
+    if (drop < compactBytes && this.length + extra <= this.bytes.length) return;
+    const kept = this.length - drop;
+    const moved = new Uint8Array(Math.max(1 << 20, (kept + extra) * 2));
+    moved.set(this.bytes.subarray(drop, this.length));
+    this.bytes = moved;
+    this.start += drop;
+    this.length = kept;
+  }
+
+  append(chunk: Uint8Array) {
+    this.compact(chunk.length);
+    this.bytes.set(chunk, this.length);
+    this.length += chunk.length;
+  }
+
+  // A seek point search that gives no position keeps all bytes
+  full() {
+    return this.needs !== undefined && this.start + this.length - this.needs > aheadBytes;
+  }
+
+  rewound() {
+    return this.needs !== undefined && this.needs < this.start;
+  }
+}
+
 const nowUs = Effect.map(Clock.monotonicTimeNanos, (nanos) => Number(nanos / 1000n));
 
 const sleepUntil = (us: number) =>
@@ -183,33 +239,44 @@ export const openSessionRenderer = <E, F>(
         const ready = yield* Deferred.make<Entry, E | F>();
         const loading = Effect.gen(function* () {
           const audio = yield* input(entry);
-          let bytes = new Uint8Array(1 << 20);
-          let length = 0;
-          let complete = false;
+          const window = new ByteWindow();
           const loaded = new Entry({
             id: String(entry.id),
             codec: audio.codec,
             album: entry.source.albumRef ?? undefined,
-            bytes: () => bytes.subarray(0, length),
-            complete: () => complete,
+            bytes: () => window.bytes.subarray(0, window.length),
+            start: () => window.start,
+            complete: () => window.complete,
+            needs: (offset) => {
+              window.needs = offset;
+            },
             loudness: audio.loudness,
           });
           resolved.set(entry.id, loaded);
           yield* Deferred.succeed(ready, loaded);
           yield* locked(syncPlayer);
 
-          yield* Stream.runForEach(audio.bytes, (chunk) =>
-            Effect.sync(() => {
-              if (length + chunk.length > bytes.length) {
-                const grown = new Uint8Array(Math.max(bytes.length * 2, length + chunk.length));
-                grown.set(bytes.subarray(0, length));
-                bytes = grown;
-              }
-              bytes.set(chunk, length);
-              length += chunk.length;
-            }),
+          const waitWhileFull = Effect.gen(function* () {
+            while (window.full()) {
+              if (window.rewound()) return yield* new Rewound();
+              window.compact();
+              yield* Effect.sleep("20 millis");
+            }
+            if (window.rewound()) return yield* new Rewound();
+          });
+          const fill = Effect.gen(function* () {
+            window.reset();
+            yield* Stream.runForEach(audio.bytes, (chunk) =>
+              Effect.sync(() => window.append(chunk)).pipe(Effect.andThen(waitWhileFull)),
+            );
+            window.complete = true;
+            while (!window.rewound()) yield* Effect.sleep("50 millis");
+            return yield* new Rewound();
+          });
+          return yield* fill.pipe(
+            Effect.catchTag("Rewound", () => Effect.void),
+            Effect.forever,
           );
-          complete = true;
         }).pipe(
           Effect.catch((cause) =>
             Deferred.fail(ready, cause).pipe(

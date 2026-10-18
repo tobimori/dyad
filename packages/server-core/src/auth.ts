@@ -278,6 +278,21 @@ export const removeDevice = (deviceId: DeviceId) =>
     yield* (yield* Sessions).removeDevice(principal.userId, deviceId);
   });
 
+/** The device of a device token */
+export const principalOf = (token: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const tokenHash = yield* sha256(token);
+    const [row] = yield* db
+      .select({ id: device.id, userId: device.userId })
+      .from(device)
+      .where(eq(device.tokenHash, tokenHash))
+      .limit(1)
+      .pipe(orDieOnDatabaseError("authenticate"));
+    if (row === undefined) return yield* new Unauthorized();
+    return new Principal({ userId: UserId.make(row.userId), deviceId: DeviceId.make(row.id) });
+  });
+
 export const authenticationLayer = Layer.effect(
   Authentication,
   Effect.gen(function* () {
@@ -288,20 +303,7 @@ export const authenticationLayer = Layer.effect(
         const header = headers.authorization ?? "";
         if (!header.startsWith("Bearer ")) return yield* new Unauthorized();
 
-        const db = yield* Database;
-        const tokenHash = yield* sha256(header.slice("Bearer ".length));
-        const [row] = yield* db
-          .select({ id: device.id, userId: device.userId })
-          .from(device)
-          .where(eq(device.tokenHash, tokenHash))
-          .limit(1)
-          .pipe(orDieOnDatabaseError("authenticate"));
-        if (row === undefined) return yield* new Unauthorized();
-
-        const principal = new Principal({
-          userId: UserId.make(row.userId),
-          deviceId: DeviceId.make(row.id),
-        });
+        const principal = yield* principalOf(header.slice("Bearer ".length));
         return yield* Effect.provideService(effect, CurrentPrincipal, principal);
       }).pipe(Effect.provide(services));
   }),

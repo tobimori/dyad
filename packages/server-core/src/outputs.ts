@@ -11,6 +11,12 @@ export class StreamPort extends Context.Service<StreamPort, number>()(
   "@dyad/server-core/StreamPort",
 ) {}
 
+class Found extends Data.Class<{
+  readonly id: OutputId;
+  readonly info: OutputInfo;
+  readonly timed: boolean;
+}> {}
+
 class Holder extends Data.Class<{
   readonly userId: UserId;
   /** Runs when another session opens the output */
@@ -53,20 +59,49 @@ const makeOutputs = Effect.gen(function* () {
   const isTimed = (id: OutputId) =>
     registrations.get(locate(id).registration) instanceof TimedOutputs;
 
-  const list = () =>
+  const found = () =>
     [...discovered].flatMap(([registration, infos]) =>
-      infos.map((info) => {
-        const id = OutputId.make(`${registration}:${info.id}`);
-        return new Output({
-          id,
-          kind: registrations.get(registration) instanceof TimedOutputs ? "timed" : "url",
-          name: info.name,
-          volume: volumes.get(id) ?? null,
-          muted: mutes.get(id) ?? false,
-          delayMs: delays.get(id) ?? 0,
-        });
-      }),
+      infos.map(
+        (info) =>
+          new Found({
+            id: OutputId.make(`${registration}:${info.id}`),
+            info,
+            timed: registrations.get(registration) instanceof TimedOutputs,
+          }),
+      ),
     );
+
+  // A device on one address, for example a Sonos with UPnP and AirPlay, shows as its URL output.
+  // It plays alone over its URL output and in a group over its timed twin.
+  const twinOf = (id: OutputId) => {
+    const all = found();
+    const host = all.find((each) => each.id === id && !each.timed)?.info.host;
+    return host === undefined
+      ? undefined
+      : all.find((each) => each.timed && each.info.host === host)?.id;
+  };
+
+  /** Whether the output can play in a group, itself or through its timed twin */
+  const groupable = (id: OutputId) => isTimed(id) || twinOf(id) !== undefined;
+
+  const list = () => {
+    const all = found();
+    const urlHosts = new Set(all.flatMap((each) => (each.timed ? [] : [each.info.host])));
+    return all
+      .filter((each) => !each.timed || !urlHosts.has(each.info.host))
+      .map(
+        ({ id, info, timed }) =>
+          new Output({
+            id,
+            kind: timed ? "timed" : "url",
+            name: info.name,
+            volume: volumes.get(id) ?? null,
+            muted: mutes.get(id) ?? false,
+            delayMs: delays.get(id) ?? 0,
+            groupable: timed || twinOf(id) !== undefined,
+          }),
+      );
+  };
 
   /** Keeps the outputs of `registration` up to date until the scope closes */
   const follow = (registration: string, outputs: UrlOutputs | TimedOutputs) =>
@@ -146,15 +181,19 @@ const makeOutputs = Effect.gen(function* () {
     Effect.sync(() => volumes.set(id, volume)).pipe(Effect.andThen(notify));
 
   /**
-   * Opens the timed output like `open`. A timed device reports no volume, so the volume that the
-   * core set last applies again.
+   * Opens the timed output, or the timed twin of a URL output, like `open`. A timed device reports
+   * no volume, so the volume that the core set last applies again.
    */
   const openTimed = (
     id: OutputId,
     holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
   ) =>
     Effect.gen(function* () {
-      const { outputs, nativeId } = yield* hold(id, holder);
+      const target = isTimed(id) ? id : twinOf(id);
+      if (target === undefined) return yield* kindError;
+      yield* hold(id, holder);
+      const { registration, nativeId } = locate(target);
+      const outputs = registrations.get(registration);
       if (!(outputs instanceof TimedOutputs)) return yield* kindError;
 
       const output = yield* outputs.open(nativeId);
@@ -194,6 +233,7 @@ const makeOutputs = Effect.gen(function* () {
     follow,
     has,
     isTimed,
+    groupable,
     list,
     open,
     openTimed,

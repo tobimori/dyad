@@ -18,6 +18,7 @@ import {
 
 import { sourceAnalysis } from "./audio-analysis.ts";
 import { Outputs } from "./outputs.ts";
+import { Receivers } from "./receivers.ts";
 import { FilePlayback, choosePlayableSource, providerStream } from "./playback.ts";
 import { Ended, EntryFailed, EntryStarted, RenderInput, openSessionRenderer } from "./renderer.ts";
 import { OutputReport } from "./url-output.ts";
@@ -100,6 +101,7 @@ export const driveTimedOutputs = (options: {
 }) =>
   Effect.gen(function* () {
     const outputs = yield* Outputs;
+    const receivers = yield* Receivers;
     const scope = yield* Scope.fork(yield* Effect.scope);
     const services = yield* Effect.context<Effect.Services<ReturnType<typeof renderInput>>>();
     const desired = yield* SubscriptionRef.make(options.desired);
@@ -135,12 +137,17 @@ export const driveTimedOutputs = (options: {
     const openMember = (id: OutputId) =>
       Effect.gen(function* () {
         const memberScope = yield* Scope.fork(scope);
-        const exit = yield* outputs
-          .openTimed(id, {
-            userId: options.userId,
-            taken: closeMember(id).pipe(Effect.andThen(options.taken(id))),
-          })
-          .pipe(Effect.timeout(openTimeout), Scope.provide(memberScope), Effect.exit);
+        const opening = receivers.has(options.userId, id)
+          ? receivers.open(options.userId, id)
+          : outputs.openTimed(id, {
+              userId: options.userId,
+              taken: closeMember(id).pipe(Effect.andThen(options.taken(id))),
+            });
+        const exit = yield* opening.pipe(
+          Effect.timeout(openTimeout),
+          Scope.provide(memberScope),
+          Effect.exit,
+        );
         if (Exit.isFailure(exit)) {
           failed.add(id);
           yield* Scope.close(memberScope, exit);
@@ -267,6 +274,22 @@ export const driveTimedOutputs = (options: {
       ),
     );
 
+    // Visualizers of the user follow the output that the session names, with its delay
+    yield* renderer.addOutput(
+      "listen",
+      new TimedOutput({
+        leadMs: 0,
+        write: (playAtUs, pcm) => {
+          const { outputId } = SubscriptionRef.getUnsafe(desired).playback;
+          const delayMs = outputId === null ? 0 : outputs.delayOf(outputId);
+          return receivers.feed(options.userId, playAtUs + delayMs * 1000, pcm);
+        },
+        flush: receivers.flushListeners(options.userId),
+        setVolume: () => Effect.void,
+        setMedia: () => Effect.void,
+        closed: Effect.never,
+      }),
+    );
     yield* Effect.forkIn(followEvents, scope);
     yield* Stream.merge(
       SubscriptionRef.changes(desired).pipe(Stream.as(apply)),

@@ -44,6 +44,7 @@ import {
 import { insertPlay } from "./history.ts";
 import { Outputs } from "./outputs.ts";
 import { hintPrefetch } from "./playback.ts";
+import { Receivers, deviceOutput } from "./receivers.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSessions, saveSession } from "./session-store.ts";
 import { continueRadio } from "./radio.ts";
@@ -63,8 +64,6 @@ const timedWindow = 8;
 
 type Event = typeof SessionEvent.Type;
 type Command = typeof SessionCommand.Type;
-
-const deviceOutput = (deviceId: DeviceId) => OutputId.make(`device:${deviceId}`);
 
 const emptyState = new SessionState({
   entries: [],
@@ -134,6 +133,7 @@ const makeSession = (
   Effect.gen(function* () {
     const services = yield* Effect.context<Database | Crypto.Crypto>();
     const urlOutputs = yield* Outputs;
+    const receivers = yield* Receivers;
     const driverServices =
       yield* Effect.context<Effect.Services<ReturnType<typeof driveUrlOutput>>>();
     const timedServices =
@@ -184,7 +184,8 @@ const makeSession = (
             name: player.name,
             volume: player.volume,
             muted: false,
-            delayMs: 0,
+            delayMs: urlOutputs.delayOf(id),
+            groupable: receivers.has(userId, id),
           }),
       ),
       ...urlOutputs.list(),
@@ -192,6 +193,17 @@ const makeSession = (
 
     const available = (outputId: OutputId) =>
       state.players.has(outputId) || urlOutputs.has(outputId);
+
+    const groupable = (outputId: OutputId) =>
+      state.players.has(outputId)
+        ? receivers.has(userId, outputId)
+        : urlOutputs.has(outputId) && urlOutputs.groupable(outputId);
+
+    // A group always plays through the renderer. A URL output or a device alone plays by itself.
+    const timedRoute = () => {
+      const { outputId, group } = state.playback;
+      return outputId !== null && (group.length > 0 || urlOutputs.isTimed(outputId));
+    };
 
     const broadcastOutputs = () =>
       broadcast(SessionEvent.cases.OutputsChanged.make({ outputs: outputs() }));
@@ -349,11 +361,11 @@ const makeSession = (
     const syncUrlOutput: Effect.Effect<void> = Effect.gen(function* () {
       const { outputId } = state.playback;
       const driver = Option.getOrUndefined(state.urlDriver);
-      if (driver !== undefined && driver.outputId !== outputId) {
+      if (driver !== undefined && (driver.outputId !== outputId || timedRoute())) {
         state.urlDriver = Option.none();
         yield* driver.close(true);
       }
-      if (outputId === null) return;
+      if (outputId === null || timedRoute()) return;
 
       const { entryId, repeat } = state.playback;
       const desired = new UrlDesired({
@@ -394,8 +406,7 @@ const makeSession = (
 
     // Like `syncUrlOutput`. One driver serves all outputs of the group.
     const syncTimedOutput: Effect.Effect<void> = Effect.gen(function* () {
-      const { outputId } = state.playback;
-      const timed = outputId !== null && urlOutputs.isTimed(outputId);
+      const timed = timedRoute();
       const driver = Option.getOrUndefined(state.timedDriver);
       if (driver !== undefined && !timed) {
         state.timedDriver = Option.none();
@@ -770,7 +781,7 @@ const makeSession = (
               const first = command.outputIds[0];
               const all = [...new Set(command.outputIds)];
               const rest = all.slice(1);
-              if (!all.every((id) => urlOutputs.isTimed(id) && urlOutputs.has(id))) {
+              if (!all.every(groupable)) {
                 return yield* fail("output_unavailable");
               }
 
@@ -786,7 +797,7 @@ const makeSession = (
 
           SetOutputDelay: (command) =>
             Effect.gen(function* () {
-              if (!urlOutputs.isTimed(command.outputId)) return yield* fail("output_unavailable");
+              if (!groupable(command.outputId)) return yield* fail("output_unavailable");
               // Its outputs change gives the new delay to all sessions
               yield* urlOutputs.setDelay(command.outputId, command.delayMs);
               return [];
@@ -1040,7 +1051,10 @@ const makeSession = (
 
       // The device played on while it was away, and nobody changed the transport since
       const adopts =
-        resume !== null && resume.revision >= playback.revision && indexOf(resume.entryId) !== -1;
+        resume !== null &&
+        playback.group.length === 0 &&
+        resume.revision >= playback.revision &&
+        indexOf(resume.entryId) !== -1;
       if (adopts) {
         // An entry that ended on the device offline has a complete play, as after a natural end
         if (playback.entryId !== null && resume.advanced.includes(playback.entryId)) {
@@ -1101,7 +1115,10 @@ const makeSession = (
 
           state.players.delete(outputId);
           broadcastOutputs();
-          if (state.playback.outputId === outputId) setPlayback({ lost: true });
+          // In a group, the renderer finds that the device is gone
+          if (state.playback.outputId === outputId && state.playback.group.length === 0) {
+            setPlayback({ lost: true });
+          }
         }),
       );
 
@@ -1151,7 +1168,14 @@ const makeSession = (
     const removeDevice = (deviceId: DeviceId) =>
       modify((now) =>
         Effect.sync(() => {
-          if (state.playback.outputId === deviceOutput(deviceId)) dropOutput(now);
+          const removed = deviceOutput(deviceId);
+          const { outputId, group } = state.playback;
+          if (group.includes(removed)) setPlayback({ group: group.filter((id) => id !== removed) });
+          else if (outputId === removed) {
+            const [first, ...rest] = group;
+            if (first === undefined) dropOutput(now);
+            else setPlayback({ outputId: first, group: rest });
+          }
           for (const connection of state.connections) {
             if (connection.deviceId === deviceId) Queue.endUnsafe(connection.events);
           }
@@ -1303,7 +1327,7 @@ const makeSessions = Effect.gen(function* () {
 
   // Plugin outputs belong to the household, so every session lists them
   yield* Effect.forkScoped(
-    Stream.runForEach((yield* Outputs).changes, () =>
+    Stream.runForEach(Stream.merge((yield* Outputs).changes, (yield* Receivers).changes), () =>
       Effect.forEach(sessions.values(), (session) => session.refreshOutputs, { discard: true }),
     ),
   );

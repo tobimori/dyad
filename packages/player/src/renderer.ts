@@ -18,9 +18,12 @@ export class Entry extends Data.Class<{
   readonly codec: "flac" | "mp3";
   /** Adjacent entries of one album join gapless, also with crossfade on */
   readonly album: string | undefined;
-  /** All bytes received so far */
+  /** The received bytes that the entry keeps, from byte `start()` of the file */
   readonly bytes: () => Uint8Array;
+  readonly start?: () => number;
   readonly complete: () => boolean;
+  /** The first byte that the track still needs, as `Source.needs` gives it */
+  readonly needs?: (offset: number | undefined) => void;
   /** Without it, the entry plays 8 dB quieter */
   readonly loudness: Loudness | undefined;
   /** Without it, DJ mode joins the entry by crossfade */
@@ -139,8 +142,19 @@ class Start extends Data.Class<{
   readonly tempo?: TempoMap;
 }> {}
 
-const readInfo = (entry: Entry) => {
+// An entry can drop its first bytes after the header was read
+const infos = new WeakMap<Entry, SourceInfo>();
+
+const infoOf = (entry: Entry) => {
+  const known = infos.get(entry);
+  if (known !== undefined || (entry.start?.() ?? 0) > 0) return known;
   const info = readSourceInfo(entry.bytes(), entry.codec);
+  if (info !== undefined) infos.set(entry, info);
+  return info;
+};
+
+const readInfo = (entry: Entry) => {
+  const info = infoOf(entry);
   if (info === undefined && entry.complete()) {
     return Effect.fail(new EntryError({ entry: entry.id, cause: "The file has no audio header" }));
   }
@@ -356,7 +370,7 @@ export const openRenderer = Effect.gen(function* () {
     const { resampler } = lane;
     const end = resampler.outputAt(resampler.inputEnd);
     const last = lane.tracks.at(-1)!;
-    const info = readSourceInfo(entry.bytes(), entry.codec);
+    const info = infoOf(entry);
     const entryFrames =
       info?.frames === undefined
         ? Number.POSITIVE_INFINITY
@@ -439,8 +453,9 @@ export const openRenderer = Effect.gen(function* () {
     Effect.gen(function* () {
       const track = lane.tracks.at(-1)!;
       const pcm = yield* track.source
-        .read(track.entry.bytes(), track.entry.complete())
+        .read(track.entry.bytes(), track.entry.complete(), track.entry.start?.() ?? 0)
         .pipe(Effect.mapError((cause) => new EntryError({ entry: track.entry.id, cause })));
+      track.entry.needs?.(track.source.needs());
 
       if (pcm !== undefined) {
         lane.resampler.push(pcm.channels, pcm.frames, track.gain);

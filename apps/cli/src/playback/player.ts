@@ -17,7 +17,7 @@ import {
 } from "effect";
 import { HttpClient } from "effect/http";
 
-import { AudioTap } from "../visualizer/audio-feed.ts";
+import { ResponseTap } from "../visualizer/audio-feed.ts";
 
 class PlaybackError extends Data.TaggedError("PlaybackError")<{ readonly cause: unknown }> {}
 
@@ -92,7 +92,7 @@ class Download extends Data.Class<{
   readonly received: SubscriptionRef.SubscriptionRef<Received>;
   /** Closing it stops the request */
   readonly scope: Scope.Closeable;
-  readonly tap: AudioTap;
+  readonly tap: ResponseTap;
 }> {}
 
 type Format = (typeof decoders)[number][0];
@@ -115,7 +115,7 @@ const startDownload = (serverUrl: string, path: string, format: Format, startMs:
       new Received({ bytes: new Uint8Array(0), state: "loading" }),
     );
     yield* Effect.forkIn(download(response.stream, received), scope);
-    const tap = new AudioTap({
+    const tap = new ResponseTap({
       codec: format,
       startMs,
       bytes: () => SubscriptionRef.getUnsafe(received).bytes,
@@ -176,7 +176,7 @@ export const fetchFile = (path: string, format: AudioFormat, audio: AudioQuality
       .readFile(path)
       .pipe(Effect.mapError((cause) => new PlaybackError({ cause })));
     const received = yield* SubscriptionRef.make(new Received({ bytes, state: "done" }));
-    const tap = new AudioTap({
+    const tap = new ResponseTap({
       codec: decoder,
       startMs: 0,
       bytes: () => bytes,
@@ -204,7 +204,7 @@ export class Track extends Data.Class<{
   readonly seek: (ms: number) => Effect.Effect<void>;
   readonly ended: Effect.Effect<void, PlaybackError>;
   /** The response that plays now, for the visualizer */
-  readonly tap: () => AudioTap;
+  readonly tap: () => ResponseTap;
   readonly quality: string;
 }> {}
 

@@ -117,9 +117,11 @@ const failureText = (error: Option.Option<unknown>, title: string) => {
   return `Cannot play ${title}`;
 };
 
+// In a group, the server's renderer plays the audio of this device too
 const isMine = (view: SessionView) =>
   view.deviceId !== null &&
   view.playback.outputId === deviceOutputId(view.deviceId) &&
+  view.playback.group.length === 0 &&
   !view.superseded;
 
 const makeEngine = (options: {
