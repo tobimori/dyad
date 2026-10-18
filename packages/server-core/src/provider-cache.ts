@@ -9,6 +9,7 @@ import { sourceId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import { providerAlbumRef, providerArtistRef } from "./refs.ts";
+import { parseVersionTitle, parsedCredit, versionedTitle } from "./version-titles.ts";
 
 // Results of played sources do not expire, because `source` has no artwork and no ISRC. The TTL
 // only limits the size of the cache.
@@ -30,12 +31,28 @@ export class CachedSource extends Data.Class<{
 export const cachedSummary = (item: CachedSource, providerName: string) => {
   const artist = item.source.artists[0] ?? item.source.uploader;
   const albumId = item.source.albumId;
+  const { uploader } = item.source;
+  // Only providers with `uploads` report an uploader. The same parse as `writeSource`.
+  const parsed =
+    uploader === null
+      ? null
+      : parseVersionTitle({
+          title: item.source.title,
+          uploader: uploader.name,
+          artists:
+            item.source.artist === null || item.source.artist === uploader.name
+              ? []
+              : [item.source.artist],
+        });
 
   return new SourceSummary({
     id: item.sourceId,
     provider: item.provider,
-    title: item.source.title,
-    artist: item.source.artist,
+    title: parsed === null ? item.source.title : versionedTitle(parsed),
+    artist:
+      parsed === null || parsed.artists.length === 0
+        ? item.source.artist
+        : parsedCredit(parsed.artists, parsed.featured).name,
     album: item.source.album,
     durationMs: item.source.durationMs,
     codec: item.source.codec,

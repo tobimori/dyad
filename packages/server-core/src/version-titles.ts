@@ -93,6 +93,17 @@ const kindLabels = {
 } satisfies Record<typeof VersionKind.Type, string>;
 
 /** The base title and one group for each version, for example `Rote Flaggen (Fatekkt Remix)` */
+/** `A, B & C feat. D`. No name has an artist ID until a resolver links it. */
+export const parsedCredit = (main: ReadonlyArray<string>, guests: ReadonlyArray<string>) => {
+  const joined = (names: ReadonlyArray<string>, last: string) =>
+    names.map((name, index) => {
+      if (index === names.length - 1) return { id: null, name, joinPhrase: last };
+      return { id: null, name, joinPhrase: index === names.length - 2 ? " & " : ", " };
+    });
+  const artists = [...joined(main, guests.length > 0 ? " feat. " : ""), ...joined(guests, "")];
+  return { name: artists.map((name) => name.name + name.joinPhrase).join(""), artists };
+};
+
 export const versionedTitle = (parsed: ParsedTitle) =>
   [
     parsed.title,

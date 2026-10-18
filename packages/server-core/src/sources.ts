@@ -25,7 +25,12 @@ import type { CachedSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
 import { touchGroups } from "./sync-counter.ts";
-import { parseVersionTitle, parserRevision, versionedTitle } from "./version-titles.ts";
+import {
+  parseVersionTitle,
+  parsedCredit,
+  parserRevision,
+  versionedTitle,
+} from "./version-titles.ts";
 
 // Projection columns before replication assigns revisions
 const projection = { policyVersion: 1, revision: 0 };
@@ -61,17 +66,6 @@ const artistCounts = (keys: ReadonlyArray<string>) =>
     for (const row of [...catalog, ...searched.flat()]) ids.get(row.nameKey ?? "")?.add(row.id);
     return new Map([...ids].map(([key, found]) => [key, found.size]));
   });
-
-// `A, B & C feat. D`. No name has an artist ID until a resolver links it.
-const parsedCredit = (main: ReadonlyArray<string>, guests: ReadonlyArray<string>) => {
-  const joined = (names: ReadonlyArray<string>, last: string) =>
-    names.map((name, index) => {
-      if (index === names.length - 1) return { id: null, name, joinPhrase: last };
-      return { id: null, name, joinPhrase: index === names.length - 2 ? " & " : ", " };
-    });
-  const artists = [...joined(main, guests.length > 0 ? " feat. " : ""), ...joined(guests, "")];
-  return { name: artists.map((name) => name.name + name.joinPhrase).join(""), artists };
-};
 
 const assertParsedTitle = (
   recordingId: string,
