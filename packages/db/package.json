@@ -19,12 +19,18 @@
       "types": "./src/node.ts",
       "development": "./src/node.ts",
       "default": "./dist/node.js"
+    },
+    "./client": {
+      "types": "./src/client/index.ts",
+      "development": "./src/client/index.ts",
+      "default": "./dist/client/index.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "generate": "drizzle-kit generate --name"
+    "generate": "drizzle-kit generate --name",
+    "generate-client": "node scripts/generate-client-migration.ts"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "catalog:",

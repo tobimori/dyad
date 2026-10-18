@@ -1,0 +1,37 @@
+[
+  {
+    "name": "20261018115351_client_replica",
+    "folderMillis": 1792324431000,
+    "hash": "36ca0b96c9d41c31e6b7239eba822370698ce19151ff44c0210902bde836b82e",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `client_state` (\n\t`key` text PRIMARY KEY,\n\t`value` text NOT NULL\n);\n",
+      "\nCREATE TABLE `library_item` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`origin` text NOT NULL,\n\t`added_at` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`deleted` integer NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE TABLE `library_remote_track` (\n\t`user_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`recording_id` text NOT NULL,\n\t`remote_id` text NOT NULL,\n\t`catalog_id` text,\n\t`source_id` text,\n\t`raw_title` text NOT NULL,\n\t`raw_artist` text,\n\t`raw_album` text,\n\t`raw_duration_ms` integer,\n\t`seen_at` integer NOT NULL,\n\tCONSTRAINT `library_remote_track_pk` PRIMARY KEY(`user_id`, `provider`, `recording_id`)\n);\n",
+      "\nCREATE TABLE `play_event` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`device_id` text NOT NULL,\n\t`source_id` text NOT NULL,\n\t`recording_id` text,\n\t`started_at` integer NOT NULL,\n\t`played_ms` integer NOT NULL,\n\t`completed` integer NOT NULL,\n\t`context` text NOT NULL,\n\t`scrobbled` integer DEFAULT false NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE TABLE `playlist` (\n\t`id` text PRIMARY KEY,\n\t`owner_id` text NOT NULL,\n\t`name` text NOT NULL,\n\t`origin` text,\n\t`created_at` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`deleted` integer NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE TABLE `playlist_entry` (\n\t`id` text PRIMARY KEY,\n\t`playlist_id` text NOT NULL,\n\t`recording_id` text NOT NULL,\n\t`position` text NOT NULL,\n\t`added_at` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`deleted` integer NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE TABLE `recording` (\n\t`id` text PRIMARY KEY,\n\t`title` text,\n\t`artist_credit_id` text,\n\t`duration_ms` integer,\n\t`disambiguation` text,\n\t`artist_name` text,\n\t`album` text,\n\t`artwork_url` text,\n\t`explicit` integer,\n\t`merged_into_id` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `source` (\n\t`id` text PRIMARY KEY,\n\t`provider` text NOT NULL,\n\t`external_id` text NOT NULL,\n\t`kind` text NOT NULL,\n\t`recording_id` text,\n\t`track_id` text,\n\t`raw_title` text,\n\t`raw_artist` text,\n\t`raw_album` text,\n\t`raw_duration_ms` integer,\n\t`availability` text DEFAULT 'available' NOT NULL,\n\t`checked_at` integer,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `source_key` (\n\t`source_id` text PRIMARY KEY,\n\t`album_artist_key` text,\n\t`artist_key` text,\n\t`album_key` text\n);\n",
+      "\nCREATE TABLE `source_variant` (\n\t`id` text PRIMARY KEY,\n\t`source_id` text NOT NULL,\n\t`codec` text NOT NULL,\n\t`container` text NOT NULL,\n\t`sample_rate` integer,\n\t`bit_depth` integer,\n\t`channels` integer,\n\t`bitrate` integer,\n\t`lossless` integer NOT NULL,\n\t`encrypted` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `sync_queue` (\n\t`mutation_id` integer PRIMARY KEY,\n\t`mutation` text NOT NULL\n);\n",
+      "\nCREATE TABLE `sync_scope` (\n\t`scope` text PRIMARY KEY,\n\t`change_seq` integer NOT NULL,\n\t`row_key` text,\n\t`loaded_at` integer\n);\n",
+      "\nCREATE INDEX `library_item_user_idx` ON `library_item` (`user_id`,`deleted`);",
+      "\nCREATE INDEX `library_item_entity_idx` ON `library_item` (`entity_id`);",
+      "\nCREATE INDEX `library_item_change_idx` ON `library_item` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `play_event_user_started_idx` ON `play_event` (`user_id`,`started_at`);",
+      "\nCREATE INDEX `play_event_change_idx` ON `play_event` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `playlist_owner_idx` ON `playlist` (`owner_id`,`deleted`);",
+      "\nCREATE INDEX `playlist_entry_playlist_idx` ON `playlist_entry` (`playlist_id`,`deleted`);",
+      "\nCREATE INDEX `playlist_entry_change_idx` ON `playlist_entry` (`playlist_id`,`change_seq`);",
+      "\nCREATE INDEX `recording_artist_credit_idx` ON `recording` (`artist_credit_id`);",
+      "\nCREATE INDEX `recording_merged_into_idx` ON `recording` (`merged_into_id`);",
+      "\nCREATE INDEX `recording_revision_idx` ON `recording` (`revision`);",
+      "\nCREATE UNIQUE INDEX `source_provider_idx` ON `source` (`provider`,`external_id`);",
+      "\nCREATE INDEX `source_recording_idx` ON `source` (`recording_id`);",
+      "\nCREATE INDEX `source_track_idx` ON `source` (`track_id`);",
+      "\nCREATE INDEX `source_variant_source_idx` ON `source_variant` (`source_id`);"
+    ]
+  }
+]
