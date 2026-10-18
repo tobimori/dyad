@@ -42,10 +42,13 @@ import {
 } from "effect";
 
 import { insertPlay } from "./history.ts";
+import { Outputs } from "./outputs.ts";
 import { hintPrefetch } from "./playback.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSessions, saveSession } from "./session-store.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
+import { UrlDesired, driveUrlOutput } from "./url-output.ts";
+import type { UrlDriver, UrlReport } from "./url-output.ts";
 
 const maxEntries = 10_000;
 // An output that plays and sends no report for this long is lost
@@ -123,6 +126,9 @@ const makeSession = (
 ) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<Database | Crypto.Crypto>();
+    const urlOutputs = yield* Outputs;
+    const driverServices =
+      yield* Effect.context<Effect.Services<ReturnType<typeof driveUrlOutput>>>();
     const lock = yield* Semaphore.make(1);
     // Changed only under `lock`
     const state = {
@@ -144,17 +150,26 @@ const makeSession = (
       ended: Option.none<EntryId>(),
       // The sources of the last prefetch hint, joined
       prefetched: "",
+      // Set while the output is a URL output
+      urlDriver: Option.none<UrlDriver>(),
+      // A play on a URL output counts for the device that sent the last command
+      commandDevice: Option.none<DeviceId>(),
     };
 
     const broadcast = (event: Event) => {
       for (const connection of state.connections) Queue.offerUnsafe(connection.events, event);
     };
 
-    const outputs = () =>
-      [...state.players].map(
+    const outputs = () => [
+      ...[...state.players].map(
         ([id, player]) =>
           new Output({ id, kind: "device", name: player.name, volume: player.volume }),
-      );
+      ),
+      ...urlOutputs.list(),
+    ];
+
+    const available = (outputId: OutputId) =>
+      state.players.has(outputId) || urlOutputs.has(outputId);
 
     const broadcastOutputs = () =>
       broadcast(SessionEvent.cases.OutputsChanged.make({ outputs: outputs() }));
@@ -201,7 +216,7 @@ const makeSession = (
         rate: 0,
         revision: state.playback.revision + 1,
         outputId,
-        lost: outputId !== null && !state.players.has(outputId),
+        lost: outputId !== null && !available(outputId),
       });
 
     const stop = (entryId: EntryId | null, now: number) =>
@@ -217,7 +232,7 @@ const makeSession = (
     // The sender plays when the output is offline and the sender can play (Spotify Connect)
     const claimOutput = (deviceId: DeviceId) => {
       const current = state.playback.outputId;
-      if (current !== null && state.players.has(current)) return current;
+      if (current !== null && available(current)) return current;
 
       const own = deviceOutput(deviceId);
       return state.players.has(own) ? own : current;
@@ -268,11 +283,14 @@ const makeSession = (
         const entry = currentEntry();
         const output =
           playback.outputId === null ? undefined : state.players.get(playback.outputId);
-        if (Option.isNone(state.play) && playback.rate === 1 && entry && output) {
+        const deviceId =
+          output?.connection.deviceId ??
+          (Option.isSome(state.urlDriver) ? Option.getOrUndefined(state.commandDevice) : undefined);
+        if (Option.isNone(state.play) && playback.rate === 1 && entry && deviceId) {
           state.play = Option.some(
             new OpenPlay({
               entry,
-              deviceId: output.connection.deviceId,
+              deviceId,
               startedAt: now,
               playedMs: 0,
               resumedAt: now,
@@ -292,6 +310,31 @@ const makeSession = (
       const entries = [first, second].filter((entry) => entry && entry.id !== entryId);
       return [...new Set(entries.flatMap((entry) => entry?.source.id ?? []))];
     };
+
+    // A session from the database opens its URL output only at its first change, so that it does
+    // not take the output from another session
+    const syncUrlOutput: Effect.Effect<void> = Effect.gen(function* () {
+      const { outputId } = state.playback;
+      const driver = Option.getOrUndefined(state.urlDriver);
+      if (driver !== undefined && driver.outputId !== outputId) {
+        state.urlDriver = Option.none();
+        yield* driver.close(true);
+      }
+      if (outputId === null) return;
+
+      const desired = new UrlDesired({ playback: state.playback, entry: currentEntry() });
+      if (Option.isSome(state.urlDriver)) return yield* state.urlDriver.value.desire(desired);
+      if (!urlOutputs.has(outputId)) return;
+
+      const created: UrlDriver = yield* driveUrlOutput({
+        userId,
+        outputId,
+        desired,
+        report: (received) => reportOutput(created, received),
+        taken: Effect.suspend(() => outputTaken(created)),
+      }).pipe(Effect.provideContext(driverServices));
+      state.urlDriver = Option.some(created);
+    });
 
     // Runs `change` under the lock and publishes the new playback once
     const modify = <A, E>(change: (now: number) => Effect.Effect<A, E>) =>
@@ -315,6 +358,7 @@ const makeSession = (
             if (state.playback.revision !== before.revision) {
               state.reportDeadline = now + lostAfterMs;
             }
+            yield* syncUrlOutput;
             broadcast(
               SessionEvent.cases.PlaybackChanged.make({
                 serverTime: now,
@@ -597,7 +641,7 @@ const makeSession = (
 
           Transfer: (command) =>
             Effect.gen(function* () {
-              if (!state.players.has(command.outputId)) return yield* fail("output_unavailable");
+              if (!available(command.outputId)) return yield* fail("output_unavailable");
 
               if (command.play ?? playback.state === "playing") {
                 const entry =
@@ -624,7 +668,16 @@ const makeSession = (
           SetVolume: (command) =>
             Effect.gen(function* () {
               const player = state.players.get(command.outputId);
-              if (player === undefined) return yield* fail("output_unavailable");
+              if (player === undefined) {
+                // Its status gives the new volume to all sessions
+                const output = urlOutputs.opened(command.outputId);
+                if (output === undefined) return yield* fail("output_unavailable");
+                yield* output.setVolume(command.volume).pipe(
+                  Effect.catch((error) => Effect.logWarning("Cannot set the volume", error.reason)),
+                  Effect.forkDetach,
+                );
+                return [];
+              }
 
               state.players.set(
                 command.outputId,
@@ -660,6 +713,7 @@ const makeSession = (
     ) =>
       modify((now) =>
         Effect.gen(function* () {
+          state.commandDevice = Option.some(deviceId);
           const remembered = state.requests.get(request.requestId);
           if (remembered !== undefined) return yield* remembered.exit;
 
@@ -691,7 +745,7 @@ const makeSession = (
         readonly generation: number;
         readonly revision: number;
         readonly entryId: EntryId;
-        readonly state: "playing" | "paused" | "buffering" | "ended" | "failed";
+        readonly state: UrlReport["state"];
         readonly positionMs: number;
         readonly volume: number;
       },
@@ -700,85 +754,109 @@ const makeSession = (
         Effect.sync(() => {
           const outputId = deviceOutput(deviceId);
           const player = state.players.get(outputId);
-          const playback = state.playback;
-          if (player?.generation !== received.generation || playback.outputId !== outputId) return;
+          if (player?.generation !== received.generation) return;
+          if (state.playback.outputId !== outputId) return;
 
-          state.reportDeadline = now + lostAfterMs;
-          if (playback.lost) setPlayback({ lost: false });
           if (received.volume !== player.volume) {
             state.players.set(outputId, new Player({ ...player, volume: received.volume }));
             broadcastOutputs();
           }
-          if (received.revision !== playback.revision) return;
-
-          const current = playback.entryId;
-          const next = nextEntry(state.entries, current, playback.repeat, "end");
-          const anchor = { positionMs: received.positionMs, at: now };
-
-          Match.value(received.state).pipe(
-            Match.when("playing", () => {
-              // The output started the next entry by itself
-              if (received.entryId !== current && received.entryId !== next?.id) return;
-
-              state.failures = 0;
-              // Small drift keeps the anchor, so that regular reports do not publish
-              const expected = positionAt(playback, now);
-              const drift = Math.abs(expected - received.positionMs);
-              const moving = playback.state === "playing" && playback.rate === 1;
-              if (received.entryId === current && moving && drift < 1000) return;
-
-              // Under repeat, the output can also start the same entry again by itself
-              const durationMs = currentEntry()?.source.durationMs ?? null;
-              const loops =
-                next?.id === current &&
-                moving &&
-                durationMs !== null &&
-                expected > durationMs - 5000 &&
-                received.positionMs < 5000;
-              if (received.entryId !== current || loops) {
-                state.ended = Option.fromNullishOr(current);
-              }
-              setPlayback({ state: "playing", entryId: received.entryId, rate: 1, ...anchor });
-            }),
-            Match.whenOr("paused", "buffering", (reported) => {
-              if (received.entryId !== current) return;
-              setPlayback({
-                ...anchor,
-                rate: 0,
-                state: reported === "paused" ? "paused" : playback.state,
-              });
-            }),
-            Match.when("ended", () => {
-              if (received.entryId !== current) return;
-              state.ended = Option.some(current);
-              if (next === undefined) stop(null, now);
-              else setPlayback({ entryId: next.id, positionMs: 0, at: now, rate: 0 });
-            }),
-            Match.when("failed", () => {
-              const index = indexOf(received.entryId);
-              const entry = state.entries[index];
-              if (received.entryId !== current || entry === undefined) return;
-
-              spliceQueue([
-                new QueueSplice({
-                  index,
-                  remove: 1,
-                  insert: [new QueueEntry({ ...entry, unplayable: true })],
-                }),
-              ]);
-              state.failures += 1;
-
-              const following = nextEntry(state.entries, current, playback.repeat, "skip");
-              if (following === undefined || state.failures >= state.entries.length) {
-                stop(current, now);
-                return;
-              }
-              start(following.id, 0, now, outputId);
-            }),
-            Match.exhaustive,
-          );
+          applyReport(outputId, received, now);
         }),
       );
+
+    const reportOutput = (driver: UrlDriver, received: UrlReport) =>
+      modify((now) =>
+        Effect.sync(() => {
+          const outputId = state.playback.outputId;
+          if (Option.getOrUndefined(state.urlDriver) !== driver || outputId === null) return;
+          applyReport(outputId, received, now);
+        }),
+      );
+
+    // A report of the output that plays, from its device or from its URL driver
+    const applyReport = (
+      outputId: OutputId,
+      received: {
+        readonly revision: number;
+        readonly entryId: EntryId;
+        readonly state: UrlReport["state"];
+        readonly positionMs: number;
+      },
+      now: number,
+    ) => {
+      const playback = state.playback;
+      state.reportDeadline = now + lostAfterMs;
+      if (playback.lost) setPlayback({ lost: false });
+      if (received.revision !== playback.revision) return;
+
+      const current = playback.entryId;
+      const next = nextEntry(state.entries, current, playback.repeat, "end");
+      const anchor = { positionMs: received.positionMs, at: now };
+
+      Match.value(received.state).pipe(
+        Match.when("playing", () => {
+          // The output started the next entry by itself
+          if (received.entryId !== current && received.entryId !== next?.id) return;
+
+          state.failures = 0;
+          // Small drift keeps the anchor, so that regular reports do not publish
+          const expected = positionAt(playback, now);
+          const drift = Math.abs(expected - received.positionMs);
+          const moving = playback.state === "playing" && playback.rate === 1;
+          if (received.entryId === current && moving && drift < 1000) return;
+
+          // Under repeat, the output can also start the same entry again by itself
+          const durationMs = currentEntry()?.source.durationMs ?? null;
+          const loops =
+            next?.id === current &&
+            moving &&
+            durationMs !== null &&
+            expected > durationMs - 5000 &&
+            received.positionMs < 5000;
+          if (received.entryId !== current || loops) {
+            state.ended = Option.fromNullishOr(current);
+          }
+          setPlayback({ state: "playing", entryId: received.entryId, rate: 1, ...anchor });
+        }),
+        Match.whenOr("paused", "buffering", (reported) => {
+          if (received.entryId !== current) return;
+          setPlayback({
+            ...anchor,
+            rate: 0,
+            state: reported === "paused" ? "paused" : playback.state,
+          });
+        }),
+        Match.when("ended", () => {
+          if (received.entryId !== current) return;
+          state.ended = Option.some(current);
+          if (next === undefined) stop(null, now);
+          else setPlayback({ entryId: next.id, positionMs: 0, at: now, rate: 0 });
+        }),
+        Match.when("failed", () => {
+          const index = indexOf(received.entryId);
+          const entry = state.entries[index];
+          if (received.entryId !== current || entry === undefined) return;
+
+          spliceQueue([
+            new QueueSplice({
+              index,
+              remove: 1,
+              insert: [new QueueEntry({ ...entry, unplayable: true })],
+            }),
+          ]);
+          state.failures += 1;
+
+          const following = nextEntry(state.entries, current, playback.repeat, "skip");
+          if (following === undefined || state.failures >= state.entries.length) {
+            stop(current, now);
+            return;
+          }
+          start(following.id, 0, now, outputId);
+        }),
+        Match.exhaustive,
+      );
+    };
 
     const addPlayer = (
       connection: Connection,
@@ -872,22 +950,38 @@ const makeSession = (
         return Stream.fromQueue(events);
       });
 
+    // The session pauses where it is and has no output
+    const dropOutput = (now: number) => {
+      const playback = state.playback;
+      setPlayback({
+        state: playback.state === "stopped" ? "stopped" : "paused",
+        positionMs: positionAt(playback, now),
+        at: now,
+        rate: 0,
+        revision: playback.revision + 1,
+        outputId: null,
+        lost: false,
+      });
+    };
+
+    // Another session or another controller took the URL output
+    const outputTaken = (driver: UrlDriver) =>
+      modify((now) =>
+        Effect.gen(function* () {
+          if (Option.getOrUndefined(state.urlDriver) !== driver) return;
+          state.urlDriver = Option.none();
+          yield* driver.close(false);
+          dropOutput(now);
+        }),
+      );
+
+    const refreshOutputs = lock.withPermits(1)(Effect.sync(broadcastOutputs));
+
     /** Pauses the session when the device is the output, and ends the device's streams */
     const removeDevice = (deviceId: DeviceId) =>
       modify((now) =>
         Effect.sync(() => {
-          const playback = state.playback;
-          if (playback.outputId === deviceOutput(deviceId)) {
-            setPlayback({
-              state: playback.state === "stopped" ? "stopped" : "paused",
-              positionMs: positionAt(playback, now),
-              at: now,
-              rate: 0,
-              revision: playback.revision + 1,
-              outputId: null,
-              lost: false,
-            });
-          }
+          if (state.playback.outputId === deviceOutput(deviceId)) dropOutput(now);
           for (const connection of state.connections) {
             if (connection.deviceId === deviceId) Queue.endUnsafe(connection.events);
           }
@@ -943,7 +1037,16 @@ const makeSession = (
         }),
       );
 
-    return { connect, control, report, removeDevice, tick, endOpenPlay, changes };
+    return {
+      connect,
+      control,
+      report,
+      removeDevice,
+      refreshOutputs,
+      tick,
+      endOpenPlay,
+      changes,
+    };
   });
 
 type Session = Effect.Success<ReturnType<typeof makeSession>>;
@@ -975,6 +1078,13 @@ const makeSessions = Effect.gen(function* () {
 
   for (const [userId, state] of yield* loadSessions)
     sessions.set(userId, yield* create(userId, state));
+
+  // Plugin outputs belong to the household, so every session lists them
+  yield* Effect.forkScoped(
+    Stream.runForEach((yield* Outputs).changes, () =>
+      Effect.forEach(sessions.values(), (session) => session.refreshOutputs, { discard: true }),
+    ),
+  );
 
   const save = (userId: UserId, session: Session, all: boolean) =>
     session.changes(all).pipe(

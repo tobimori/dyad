@@ -9,6 +9,7 @@ import { FetchHttpClient, HttpClient, HttpClientError, HttpClientRequest } from 
 import type { Jobs } from "./jobs.ts";
 import { syncLibraryRoot } from "./library.ts";
 import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
+import { Outputs } from "./outputs.ts";
 import { Popularities, Providers } from "./providers.ts";
 
 // A second registration of a key would replace the first, and closing either plugin scope would
@@ -78,6 +79,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
       const providers = yield* Providers;
       const popularities = yield* Popularities;
       const musicbrainzLookups = yield* MusicBrainzLookups;
+      const outputs = yield* Outputs;
       const services = yield* Effect.context<
         | Database
         | ReplicaDatabase
@@ -109,6 +111,15 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         },
         musicbrainz: {
           add: (lookup) => register(musicbrainzLookups, musicbrainzLookupKey, lookup),
+        },
+        outputs: {
+          // `device:<DeviceId>` is the output ID of a Dyad device
+          add: (id, urlOutputs) =>
+            id === "device" || id.includes(":")
+              ? Effect.die(new Error(`"${id}" is not a valid output ID`))
+              : register(outputs.registrations, id, urlOutputs).pipe(
+                  Effect.andThen(outputs.follow(id, urlOutputs)),
+                ),
         },
       });
 

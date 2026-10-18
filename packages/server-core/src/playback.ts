@@ -9,6 +9,7 @@ import {
   AudioFormat,
   CurrentPrincipal,
   DeviceId,
+  OutputId,
   PlaybackCapabilities,
   PlaybackPlan,
   PlaybackUnavailable,
@@ -34,6 +35,7 @@ import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import { fromHex, hex, variantId } from "./ids.ts";
 import { MediaCache, PrefetchItem } from "./media-cache.ts";
+import { Outputs } from "./outputs.ts";
 import { SourceFormat, audioContainer, choosePlayback, contentTypes } from "./playback-formats.ts";
 import { cachedProviderSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
@@ -64,9 +66,9 @@ class StreamGrant extends Data.Class<{
   readonly sourceId: string;
   readonly format: AudioFormat;
   readonly userId: UserId;
-  // The device that prepared the stream. The stream route checks that it still exists, so removing
-  // the device ends its URLs.
-  readonly deviceId: DeviceId;
+  // The device that prepared the stream, or the output that plays it. The stream route checks that
+  // the device still exists or that the user's session still holds the output.
+  readonly holder: DeviceId | OutputId;
   readonly expiresAt: number;
 }> {}
 
@@ -77,7 +79,7 @@ const grantMessage = (grant: StreamGrant) =>
       grant.format.container,
       grant.format.codec,
       grant.userId,
-      grant.deviceId,
+      grant.holder,
       grant.expiresAt,
     ].join("\n"),
   );
@@ -234,27 +236,41 @@ const choosePlayableSource = (
     return { playable, choice };
   });
 
-export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabilities) =>
+/**
+ * A signed stream URL for `holder`. It stops working when the device is removed, or when the
+ * user's session no longer holds the output.
+ */
+export const streamPlan = (
+  sourceId: string,
+  userId: UserId,
+  holder: DeviceId | OutputId,
+  capabilities: PlaybackCapabilities,
+) =>
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    const { choice } = yield* choosePlayableSource(sourceId, principal.userId, capabilities);
+    const { choice } = yield* choosePlayableSource(sourceId, userId, capabilities);
 
     const grant = new StreamGrant({
       sourceId,
       format: choice.format,
-      userId: principal.userId,
-      deviceId: principal.deviceId,
+      userId,
+      holder,
       expiresAt: (yield* Clock.currentTimeMillis) + streamLifetimeMs,
     });
     const search = new URLSearchParams({
       container: grant.format.container,
       codec: grant.format.codec,
       user: grant.userId,
-      device: grant.deviceId,
+      holder: grant.holder,
       expires: String(grant.expiresAt),
       signature: yield* signGrant(grant),
     });
     return new PlaybackPlan({ format: choice.format, path: `/stream/${sourceId}?${search}` });
+  });
+
+export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabilities) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentPrincipal;
+    return yield* streamPlan(sourceId, principal.userId, principal.deviceId, capabilities);
   });
 
 class SourceAudio extends Data.Class<{
@@ -367,7 +383,7 @@ const StreamRequest = Schema.Struct({
   container: AudioContainer,
   codec: AudioCodec,
   user: UserId,
-  device: DeviceId,
+  holder: Schema.Union([DeviceId, OutputId]),
   expires: Schema.FiniteFromString,
   signature: Schema.String,
   // Not in the signature: any start of a granted stream is allowed
@@ -385,7 +401,7 @@ export const streamRoute = HttpRouter.add(
       sourceId: request.sourceId,
       format: new AudioFormat({ container: request.container, codec: request.codec }),
       userId: request.user,
-      deviceId: request.device,
+      holder: request.holder,
       expiresAt: request.expires,
     });
     const valid = yield* verifyGrant(grant, request.signature);
@@ -393,12 +409,15 @@ export const streamRoute = HttpRouter.add(
     if (!valid || grant.expiresAt < now) return HttpServerResponse.empty({ status: 403 });
 
     const db = yield* Database;
-    const [grantDevice] = yield* db
-      .select({ id: device.id })
-      .from(device)
-      .where(and(eq(device.id, grant.deviceId), eq(device.userId, grant.userId)))
-      .limit(1);
-    if (grantDevice === undefined) return HttpServerResponse.empty({ status: 403 });
+    const holds = Schema.is(DeviceId)(grant.holder)
+      ? yield* db
+          .select({ id: device.id })
+          .from(device)
+          .where(and(eq(device.id, grant.holder), eq(device.userId, grant.userId)))
+          .limit(1)
+          .pipe(Effect.map((rows) => rows.length > 0))
+      : (yield* Outputs).heldBy(grant.holder) === grant.userId;
+    if (!holds) return HttpServerResponse.empty({ status: 403 });
 
     // A stream URL is stateless. Recheck the selected output against the current source.
     const { playable, choice } = yield* choosePlayableSource(

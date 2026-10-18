@@ -21,6 +21,7 @@ import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
 import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { mediaCacheLayer } from "./media-cache.ts";
+import { outputsLayer } from "./outputs.ts";
 import { prefetch, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
@@ -32,6 +33,7 @@ import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.
 export { catalogLayer } from "./catalog-backfill.ts";
 export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
+export { StreamPort } from "./outputs.ts";
 export { pluginLayer } from "./plugin.ts";
 
 export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescriptor>()(
@@ -49,6 +51,7 @@ export const coreServicesLayer = sessionsLayer.pipe(
       providerCacheSweepLayer,
       mediaCacheLayer,
       musicbrainzLookupsLayer,
+      outputsLayer,
     ),
   ),
   Layer.provideMerge(jobsLayer),

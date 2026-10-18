@@ -1,6 +1,7 @@
-import type { AccountLinkFailed, BrowserLogin } from "@dyad/domain";
+import type { AccountLinkFailed, AudioFormat, BrowserLogin } from "@dyad/domain";
 import { Data, Effect, Schema } from "effect";
 import type { FileSystem, Path, Redacted, Scope, Stream } from "effect";
+import type { NonEmptyReadonlyArray } from "effect/Array";
 import type { HttpClient } from "effect/http";
 
 /** One artist of a credit, with the ID that the provider or MusicBrainz gives it */
@@ -200,6 +201,66 @@ export class PopularityHit extends Data.Class<{
   readonly popularity: number;
 }> {}
 
+/** The core logs `reason`, so it must not contain secrets or stream URLs */
+export class OutputError extends Data.TaggedError("OutputError")<{
+  readonly reason: string;
+}> {}
+
+export class OutputInfo extends Data.Class<{
+  /** Stable for the device, for example the UPnP UDN */
+  readonly id: string;
+  readonly name: string;
+}> {}
+
+export class UrlStatus extends Data.Class<{
+  readonly state: "stopped" | "buffering" | "playing" | "paused";
+  /** The URL that the device has loaded, also when another controller loaded it */
+  readonly url: string | null;
+  /** Position in the stream at `url` */
+  readonly positionMs: number;
+  /** From 0 to 1 */
+  readonly volume: number | null;
+}> {}
+
+export class UrlMedia extends Data.Class<{
+  readonly url: string;
+  readonly contentType: string;
+  readonly title: string | null;
+  readonly artist: string | null;
+  readonly album: string | null;
+  readonly artworkUrl: string | null;
+  /** Length of the stream at `url` */
+  readonly durationMs: number | null;
+}> {}
+
+/** A device that pulls a stream URL from the server, for example a Sonos speaker */
+export class UrlOutput extends Data.Class<{
+  /** The formats that the device decodes. The core selects one for each stream. */
+  readonly formats: NonEmptyReadonlyArray<AudioFormat>;
+  /** Local address of the connection to the device. The device opens stream URLs at this address. */
+  readonly localAddress: string;
+  /** Replaces the current item and plays it */
+  readonly load: (media: UrlMedia) => Effect.Effect<void, OutputError>;
+  readonly play: Effect.Effect<void, OutputError>;
+  readonly pause: Effect.Effect<void, OutputError>;
+  readonly stop: Effect.Effect<void, OutputError>;
+  /** `volume` is from 0 to 1 */
+  readonly setVolume: (volume: number) => Effect.Effect<void, OutputError>;
+  /**
+   * The current status first, then each change, and at least every 5 seconds while it plays. Fails
+   * when the device does not answer.
+   */
+  readonly status: Stream.Stream<UrlStatus, OutputError>;
+}> {}
+
+/** Devices of one protocol that pull stream URLs, for example UPnP renderers */
+export class UrlOutputs extends Data.Class<{
+  /** The current devices, again after each change */
+  readonly discover: Stream.Stream<ReadonlyArray<OutputInfo>>;
+  /** Opens a device of the last `discover` list until the scope closes */
+  readonly open: (id: string) => Effect.Effect<UrlOutput, OutputError, Scope.Scope>;
+}> {}
+
 export class PluginContext extends Data.Class<{
   readonly library: {
     /**
@@ -230,6 +291,13 @@ export class PluginContext extends Data.Class<{
   readonly musicbrainz: {
     /** Supplies the MusicBrainz lookups of matching. Setup fails if another plugin supplied them. */
     readonly add: (lookup: MusicBrainzLookup) => Effect.Effect<void, never, Scope.Scope>;
+  };
+  readonly outputs: {
+    /**
+     * Adds the outputs of one protocol. `id` prefixes each output ID, so it must never change; it
+     * must be unique, not `device`, and without `:`.
+     */
+    readonly add: (id: string, outputs: UrlOutputs) => Effect.Effect<void, never, Scope.Scope>;
   };
 }> {}
 

@@ -13,6 +13,7 @@ import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
 import {
   MediaCacheConfig,
   ServerIdentity,
+  StreamPort,
   catalogLayer,
   coreServicesLayer,
   librarySyncLayer,
@@ -49,6 +50,7 @@ export const serverLayer = Layer.unwrap(
       directory: path.join(dataDirectory, "media"),
       maxBytes: mediaCacheBytes,
     });
+    const streamPort = Layer.succeed(StreamPort, port);
     const identity = Layer.effect(
       ServerIdentity,
       ReplicaDatabase.use((value) =>
@@ -95,7 +97,8 @@ export const serverLayer = Layer.unwrap(
       HttpRouter.serve(routes).pipe(
         Layer.provide(
           NodeHttpServer.layer(() => createServer(), {
-            host: "127.0.0.1",
+            // Speakers on the LAN open stream URLs
+            host: "0.0.0.0",
             port,
             // RPC WebSockets stay open, so the default 20 second grace period always runs out
             gracefulShutdownTimeout: "500 millis",
@@ -106,6 +109,7 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(
         coreServicesLayer.pipe(
           Layer.provide(mediaCacheConfig),
+          Layer.provide(streamPort),
           Layer.provideMerge(hlcClock),
           Layer.provideMerge(database),
         ),
