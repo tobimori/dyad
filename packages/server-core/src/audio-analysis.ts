@@ -1,6 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- FFmpeg reads cached bytes from a Node stream
-import { Readable } from "node:stream";
-
 import { audioAnalysis, libraryRoot, localFile, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { AudioAnalysis } from "@dyad/domain";
@@ -8,7 +5,6 @@ import { BeatAnalysis, MediaStream, measureAudio } from "@dyad/media/node";
 import { BeatGrid, Camelot, DjAnalysis } from "@dyad/player";
 import { and, eq, inArray, isNull, ne, notInArray, or } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Path, Redacted, Schema, Stream } from "effect";
-import type { Scope } from "effect";
 
 import { Jobs } from "./jobs.ts";
 import { MediaCache } from "./media-cache.ts";
@@ -66,7 +62,7 @@ export const sourceDjAnalysis = (sourceId: string) =>
 class Target extends Data.Class<{
   readonly variantId: string;
   readonly asset: string;
-  readonly media: Effect.Effect<string | MediaStream, never, Scope.Scope>;
+  readonly media: string | MediaStream;
 }> {}
 
 const assetOf = (file: CachedAudio) => file.keyIds.join("-");
@@ -85,26 +81,6 @@ export const audioAnalysisLayer = Layer.effectDiscard(
     const keys = new Map<string, Redacted.Redacted<ReadonlyMap<string, string>>>();
     // Variants that did not decode since the start
     const failed = new Set<string>();
-
-    const cachedMedia = (file: CachedAudio, container: string) =>
-      Effect.gen(function* () {
-        // `node-av` 6.1.1 does not close a `Readable` input
-        const bytes = yield* Effect.acquireRelease(
-          Effect.sync(() => Readable.fromWeb(Stream.toReadableStream(cache.read(file)))),
-          (bytes) => Effect.sync(() => bytes.destroy()),
-        );
-        // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
-        const fileKeys = keys.get(file.variantId);
-        const options =
-          fileKeys === undefined
-            ? {}
-            : {
-                decryption_keys: Redacted.make(
-                  [...Redacted.value(fileKeys)].map(([kid, key]) => `${kid}=${key}`).join(":"),
-                ),
-              };
-        return new MediaStream({ name: file.variantId, bytes, format: container, options });
-      });
 
     const nextTarget = Effect.gen(function* () {
       const files = yield* cache.list;
@@ -136,7 +112,12 @@ export const audioAnalysisLayer = Layer.effectDiscard(
             new Target({
               variantId: file.variantId,
               asset: assetOf(file),
-              media: cachedMedia(file, variant.container),
+              media: new MediaStream({
+                name: file.variantId,
+                bytes: cache.read(file),
+                format: variant.container,
+                decryptionKeys: keys.get(file.variantId),
+              }),
             }),
           ];
         });
@@ -162,7 +143,7 @@ export const audioAnalysisLayer = Layer.effectDiscard(
       return new Target({
         variantId: local.variantId,
         asset: "",
-        media: Effect.succeed(path.join(local.root, local.file)),
+        media: path.join(local.root, local.file),
       });
     });
 
@@ -171,7 +152,7 @@ export const audioAnalysisLayer = Layer.effectDiscard(
       if (target === undefined) return;
 
       const startedAt = yield* Clock.currentTimeMillis;
-      const measured = yield* Effect.scoped(Effect.flatMap(target.media, measureAudio)).pipe(
+      const measured = yield* measureAudio(target.media).pipe(
         Effect.tapError((error) =>
           Effect.logWarning("Cannot analyze audio").pipe(
             Effect.annotateLogs({ variantId: target.variantId, reason: error.reason }),

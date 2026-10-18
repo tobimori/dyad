@@ -54,18 +54,15 @@ const bitDepthOf = (parameters: CodecParameters) => {
   return null;
 };
 
-/**
- * A byte stream for FFmpeg. The caller owns `bytes` and closes it after the media stream ends. A
- * media stream that stops early destroys `bytes`.
- */
+/** A byte stream for FFmpeg. The media stream stops `bytes` when it ends. */
 export class MediaStream extends Data.Class<{
   /** Names the input in errors. A provider stream can come from a signed URL, so use an ID. */
   readonly name: string;
-  readonly bytes: Readable;
+  readonly bytes: Stream.Stream<Uint8Array, unknown>;
   /** FFmpeg demuxer name, for example `mov` */
   readonly format: string;
-  /** Demuxer options, for example the CENC `decryption_keys`. Redact secret values. */
-  readonly options: Readonly<Record<string, string | Redacted.Redacted<string>>>;
+  /** CENC keys by key ID */
+  readonly decryptionKeys: Redacted.Redacted<ReadonlyMap<string, string>> | undefined;
   /** The bytes start inside the source, so the first packet does not give the start of the source */
   readonly partial?: boolean;
 }> {}
@@ -73,19 +70,34 @@ export class MediaStream extends Data.Class<{
 const openAudio = (media: string | MediaStream) =>
   Effect.gen(function* () {
     const name = media instanceof MediaStream ? media.name : media;
+    const { bytes, open } =
+      media instanceof MediaStream
+        ? yield* Effect.map(
+            // `node-av` 6.1.1 does not close a `Readable` input. Destroying it stops `media.bytes`.
+            Effect.acquireRelease(
+              Effect.sync(() => Readable.fromWeb(Stream.toReadableStream(media.bytes))),
+              (bytes) => Effect.sync(() => bytes.destroy()),
+            ),
+            (bytes) => ({
+              bytes,
+              open: () => {
+                // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
+                const keys =
+                  media.decryptionKeys === undefined
+                    ? []
+                    : [...Redacted.value(media.decryptionKeys)];
+                const options =
+                  keys.length === 0
+                    ? {}
+                    : { decryption_keys: keys.map(([kid, key]) => `${kid}=${key}`).join(":") };
+                return Demuxer.open(bytes, { format: media.format, options });
+              },
+            }),
+          )
+        : { bytes: undefined, open: () => Demuxer.open(media) };
     const input = yield* Effect.acquireRelease(
       Effect.tryPromise({
-        try: () => {
-          if (!(media instanceof MediaStream)) return Demuxer.open(media);
-
-          const options = Object.fromEntries(
-            Object.entries(media.options).map(([key, value]) => [
-              key,
-              Redacted.isRedacted(value) ? Redacted.value(value) : value,
-            ]),
-          );
-          return Demuxer.open(media.bytes, { format: media.format, options });
-        },
+        try: open,
         catch: (cause) => new MediaError({ input: name, reason: String(cause) }),
       }),
       (input) => Effect.promise(() => input.close()),
@@ -95,7 +107,7 @@ const openAudio = (media: string | MediaStream) =>
       return yield* new MediaError({ input: name, reason: "No audio stream" });
     }
     const partial = media instanceof MediaStream && media.partial === true;
-    return { input, stream, name, partial };
+    return { input, stream, name, bytes, partial };
   });
 
 export const readAudioFile = (path: string) =>
@@ -171,7 +183,7 @@ const writePackets = (
 // Finalizers run in reverse order: the producer stops, then the muxer closes, then the caller's
 // decoder and input close. `writePackets` does not close the muxer when a write fails.
 const muxStream = (
-  media: string | MediaStream,
+  { name, bytes }: { readonly name: string; readonly bytes: Readable | undefined },
   muxer: { readonly format: string; readonly options?: Record<string, string> },
   run: (
     output: Muxer,
@@ -179,7 +191,6 @@ const muxStream = (
   ) => Pick<PipelineControl, "stop" | "completion">,
 ) =>
   Effect.gen(function* () {
-    const name = media instanceof MediaStream ? media.name : media;
     const body = new PassThrough();
     // A native write holds a libuv worker until this callback returns, so it never waits for
     // `drain`. `writePackets` waits before each packet instead.
@@ -213,7 +224,7 @@ const muxStream = (
         if (!body.destroyed) body.destroy(new Error("Playback closed"));
         // A native read that waits for bytes holds a libuv worker, and the pipeline completes only
         // after it returns. The end of the bytes returns it.
-        if (media instanceof MediaStream) media.bytes.destroy();
+        bytes?.destroy();
         return control.completion.catch(() => undefined);
       }),
     );
@@ -280,7 +291,7 @@ const packetsFrom = (name: string, input: Demuxer, stream: AvStream, start: bigi
 export const remuxAudio = (media: string | MediaStream, container: string, startMs = 0) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const { input, stream, name, partial } = yield* openAudio(media);
+      const { input, stream, name, bytes, partial } = yield* openAudio(media);
       const start = startTimestamp(stream, startMs, partial);
       // The preroll gets negative timestamps, which the MP4 edit list hides. MP3 and ADTS have no
       // edit list, so their output starts with the preroll.
@@ -316,7 +327,7 @@ export const remuxAudio = (media: string | MediaStream, container: string, start
           }),
           (filter) => Effect.sync(() => filter.close()),
         );
-        return yield* muxStream(media, muxer, (output, drained) =>
+        return yield* muxStream({ name, bytes }, muxer, (output, drained) =>
           writePackets(
             output,
             output.addStream(stream, { bsf: filter }),
@@ -326,7 +337,7 @@ export const remuxAudio = (media: string | MediaStream, container: string, start
         );
       }
 
-      return yield* muxStream(media, muxer, (output, drained) =>
+      return yield* muxStream({ name, bytes }, muxer, (output, drained) =>
         writePackets(output, output.addStream(stream), packets, drained),
       );
     }),
@@ -339,7 +350,7 @@ export const remuxAudio = (media: string | MediaStream, container: string, start
 export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const { input, stream, name, partial } = yield* openAudio(media);
+      const { input, stream, name, bytes, partial } = yield* openAudio(media);
       const fail = (cause: unknown) => new MediaError({ input: name, reason: String(cause) });
       const start = startTimestamp(stream, startMs, partial);
       // Decoding starts at the preroll before `start`, and `atrim` drops the decoded samples
@@ -374,7 +385,7 @@ export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
           decoder.frames(Stream.toAsyncIterable(packetsFrom(name, input, stream, start))),
         ),
       );
-      return yield* muxStream(media, { format: "flac" }, (output, drained) =>
+      return yield* muxStream({ name, bytes }, { format: "flac" }, (output, drained) =>
         writePackets(output, output.addStream(stream, { encoder }), packets, drained),
       );
     }),

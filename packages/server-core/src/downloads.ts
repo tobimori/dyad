@@ -21,13 +21,14 @@ import { and, eq, inArray } from "drizzle-orm";
 import { Array as Arr, Clock, Data, Effect, Option, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
-import { fromHex, hex } from "./ids.ts";
 import {
   FilePlayback,
   ProviderPlayback,
-  StreamKey,
   findPlayableSource,
+  hasDevice,
   providerStream,
+  signGrant,
+  verifyGrant,
 } from "./playback.ts";
 import { choosePlayback, contentTypes, streamingCodecs } from "./playback-formats.ts";
 import type { SourceFormat } from "./playback-formats.ts";
@@ -166,20 +167,16 @@ class DownloadGrant extends Data.Class<{
   readonly expiresAt: number;
 }> {}
 
-// The first line keeps a stream signature from working as a download signature
-const grantMessage = (grant: DownloadGrant) =>
-  new TextEncoder().encode(
-    [
-      "download",
-      grant.sourceId,
-      grant.quality,
-      grant.format.container,
-      grant.format.codec,
-      grant.userId,
-      grant.deviceId,
-      grant.expiresAt,
-    ].join("\n"),
-  );
+const grantLines = (grant: DownloadGrant) => [
+  "download",
+  grant.sourceId,
+  grant.quality,
+  grant.format.container,
+  grant.format.codec,
+  grant.userId,
+  grant.deviceId,
+  grant.expiresAt,
+];
 
 export const prepareDownload = (
   sourceId: string,
@@ -188,7 +185,6 @@ export const prepareDownload = (
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const key = yield* StreamKey;
     const principal = yield* CurrentPrincipal;
     const { audio, choice, leaseDays } = yield* downloadSource(
       sourceId,
@@ -215,9 +211,6 @@ export const prepareDownload = (
       deviceId: principal.deviceId,
       expiresAt: now + urlLifetimeMs,
     });
-    const signature = yield* Effect.promise(() =>
-      globalThis.crypto.subtle.sign("HMAC", key, grantMessage(grant)),
-    );
     const search = new URLSearchParams({
       quality,
       container: grant.format.container,
@@ -225,7 +218,7 @@ export const prepareDownload = (
       user: grant.userId,
       device: grant.deviceId,
       expires: String(grant.expiresAt),
-      signature: hex(new Uint8Array(signature)),
+      signature: yield* signGrant(grantLines(grant)),
     });
     const encode = choice.encode;
     const flac = encode?.codec === "flac";
@@ -330,7 +323,6 @@ export const downloadRoute = HttpRouter.add(
   "/download/:sourceId",
   Effect.gen(function* () {
     const request = yield* HttpRouter.schemaParams(DownloadRequest);
-    const key = yield* StreamKey;
     const grant = new DownloadGrant({
       sourceId: request.sourceId,
       quality: request.quality,
@@ -339,19 +331,12 @@ export const downloadRoute = HttpRouter.add(
       deviceId: request.device,
       expiresAt: request.expires,
     });
-    const valid = yield* Effect.promise(() =>
-      globalThis.crypto.subtle.verify("HMAC", key, fromHex(request.signature), grantMessage(grant)),
-    );
-    const now = yield* Clock.currentTimeMillis;
-    if (!valid || grant.expiresAt < now) return HttpServerResponse.empty({ status: 403 });
-
-    const db = yield* Database;
-    const [holder] = yield* db
-      .select({ id: device.id })
-      .from(device)
-      .where(and(eq(device.id, grant.deviceId), eq(device.userId, grant.userId)))
-      .limit(1);
-    if (holder === undefined) return HttpServerResponse.empty({ status: 403 });
+    if (
+      !(yield* verifyGrant(grantLines(grant), grant.expiresAt, request.signature)) ||
+      !(yield* hasDevice(grant.userId, grant.deviceId))
+    ) {
+      return HttpServerResponse.empty({ status: 403 });
+    }
 
     // The URL is stateless, so the choice repeats against the current source and policy
     const { playable, choice } = yield* downloadSource(

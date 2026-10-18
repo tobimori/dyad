@@ -1,6 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- FFmpeg reads provider bytes from a Node stream
-import { Readable } from "node:stream";
-
 import { device, libraryRoot, localFile, source, sourceVariant } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
@@ -75,34 +72,56 @@ class StreamGrant extends Data.Class<{
   readonly expiresAt: number;
 }> {}
 
-const grantMessage = (grant: StreamGrant) =>
-  new TextEncoder().encode(
-    [
-      grant.sourceId,
-      grant.format.container,
-      grant.format.codec,
-      grant.userId,
-      grant.holder,
-      grant.expiresAt,
-    ].join("\n"),
-  );
+const grantMessage = (lines: ReadonlyArray<string | number>) =>
+  new TextEncoder().encode(lines.join("\n"));
 
-const signGrant = (grant: StreamGrant) =>
+/**
+ * Signs the lines of a URL grant. Each route other than `/stream` starts its lines with its own
+ * prefix, so that its signatures do not work for another route.
+ */
+export const signGrant = (lines: ReadonlyArray<string | number>) =>
   Effect.gen(function* () {
     const key = yield* StreamKey;
     const signature = yield* Effect.promise(() =>
-      globalThis.crypto.subtle.sign("HMAC", key, grantMessage(grant)),
+      globalThis.crypto.subtle.sign("HMAC", key, grantMessage(lines)),
     );
     return hex(new Uint8Array(signature));
   });
 
-const verifyGrant = (grant: StreamGrant, signature: string) =>
+/** True when `signature` signs `lines` and the grant has not expired */
+export const verifyGrant = (
+  lines: ReadonlyArray<string | number>,
+  expiresAt: number,
+  signature: string,
+) =>
   Effect.gen(function* () {
     const key = yield* StreamKey;
-    return yield* Effect.promise(() =>
-      globalThis.crypto.subtle.verify("HMAC", key, fromHex(signature), grantMessage(grant)),
+    const valid = yield* Effect.promise(() =>
+      globalThis.crypto.subtle.verify("HMAC", key, fromHex(signature), grantMessage(lines)),
     );
+    return valid && expiresAt >= (yield* Clock.currentTimeMillis);
   });
+
+/** True when the device still exists and belongs to the user */
+export const hasDevice = (userId: UserId, deviceId: DeviceId) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const rows = yield* db
+      .select({ id: device.id })
+      .from(device)
+      .where(and(eq(device.id, deviceId), eq(device.userId, userId)))
+      .limit(1);
+    return rows.length > 0;
+  });
+
+const grantLines = (grant: StreamGrant) => [
+  grant.sourceId,
+  grant.format.container,
+  grant.format.codec,
+  grant.userId,
+  grant.holder,
+  grant.expiresAt,
+];
 
 export class FilePlayback extends Data.Class<{
   readonly format: SourceFormat;
@@ -294,7 +313,7 @@ export const streamPlan = (
       user: grant.userId,
       holder: grant.holder,
       expires: String(grant.expiresAt),
-      signature: yield* signGrant(grant),
+      signature: yield* signGrant(grantLines(grant)),
     });
     return new PlaybackPlan({
       format: choice.format,
@@ -371,32 +390,13 @@ export const providerStream = <E>(
             partial: from !== undefined,
           });
         });
-    // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
-    const keys =
-      audio.decryptionKeys === undefined ? [] : [...Redacted.value(audio.decryptionKeys)];
-    const options =
-      keys.length === 0
-        ? {}
-        : {
-            decryption_keys: Redacted.make(keys.map(([kid, key]) => `${kid}=${key}`).join(":")),
-          };
-
-    return Stream.unwrap(
-      Effect.gen(function* () {
-        // `node-av` 6.1.1 does not close a `Readable` input. Destroying it stops the download.
-        const bytes = yield* Effect.acquireRelease(
-          Effect.sync(() => Readable.fromWeb(Stream.toReadableStream(audio.bytes))),
-          (bytes) => Effect.sync(() => bytes.destroy()),
-        );
-        return convert(
-          new MediaStream({
-            name: sourceId,
-            bytes,
-            format: playable.demuxer,
-            options,
-            partial: audio.partial,
-          }),
-        );
+    return convert(
+      new MediaStream({
+        name: sourceId,
+        bytes: audio.bytes,
+        format: playable.demuxer,
+        decryptionKeys: audio.decryptionKeys,
+        partial: audio.partial,
       }),
     );
   });
@@ -459,18 +459,11 @@ export const streamRoute = HttpRouter.add(
       holder: request.holder,
       expiresAt: request.expires,
     });
-    const valid = yield* verifyGrant(grant, request.signature);
-    const now = yield* Clock.currentTimeMillis;
-    if (!valid || grant.expiresAt < now) return HttpServerResponse.empty({ status: 403 });
-
-    const db = yield* Database;
+    if (!(yield* verifyGrant(grantLines(grant), grant.expiresAt, request.signature))) {
+      return HttpServerResponse.empty({ status: 403 });
+    }
     const holds = Schema.is(DeviceId)(grant.holder)
-      ? yield* db
-          .select({ id: device.id })
-          .from(device)
-          .where(and(eq(device.id, grant.holder), eq(device.userId, grant.userId)))
-          .limit(1)
-          .pipe(Effect.map((rows) => rows.length > 0))
+      ? yield* hasDevice(grant.userId, grant.holder)
       : (yield* Outputs).heldBy(grant.holder) === grant.userId;
     if (!holds) return HttpServerResponse.empty({ status: 403 });
 

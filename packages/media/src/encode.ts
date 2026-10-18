@@ -49,7 +49,7 @@ export const encodeAudio = (
 ) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const { input, stream, name, partial } = yield* openAudio(media);
+      const { input, stream, name, bytes, partial } = yield* openAudio(media);
       const fail = (cause: unknown) => new MediaError({ input: name, reason: String(cause) });
       // Drops the encoder priming of the source, like `encodeFlac`
       const start = startTimestamp(stream, 0, partial);
@@ -92,7 +92,7 @@ export const encodeAudio = (
       );
       const options = muxerOptions(output.container);
       return yield* muxStream(
-        media,
+        { name, bytes },
         options === undefined
           ? { format: output.container }
           : { format: output.container, options },
