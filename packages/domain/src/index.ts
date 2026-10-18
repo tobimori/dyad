@@ -1,6 +1,7 @@
 import { Context, Effect, Schema } from "effect";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 
+export * from "./library-view.ts";
 export * from "./session.ts";
 
 export const HttpUrl = Schema.URLFromString.check(

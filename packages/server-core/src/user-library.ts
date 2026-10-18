@@ -7,14 +7,7 @@ import {
   source,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import {
-  CurrentPrincipal,
-  LibraryEntry,
-  PlaylistEntry,
-  PlaylistNotFound,
-  PlaylistSummary,
-  RecordingId,
-} from "@dyad/domain";
+import { CurrentPrincipal, PlaylistNotFound, PlaylistSummary, libraryView } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import { HlcClock } from "@dyad/sync";
 import { and, asc, count, eq, inArray, or } from "drizzle-orm";
@@ -201,9 +194,8 @@ export const removeOrigin = (userId: string, origin: string) =>
     yield* removePlaylists(userId, origin, new Set());
   });
 
-// The canonical recording is `coalesce(merged_into_id, id)`. A bound recording without a row is its
-// own root.
-const resolveRecordings = (userId: UserId, boundIds: ReadonlyArray<string>) =>
+// The canonical recording is `coalesce(merged_into_id, id)`
+const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const db = yield* Database;
 
@@ -211,28 +203,18 @@ const resolveRecordings = (userId: UserId, boundIds: ReadonlyArray<string>) =>
       .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
       .from(recording)
       .where(inArray(recording.id, boundIds));
-    const rootOf = new Map(boundIds.map((id) => [id, id]));
-    for (const row of bound) rootOf.set(row.id, row.mergedIntoId ?? row.id);
+    const rootOf = new Map(bound.map((row) => [row.id, row.mergedIntoId ?? row.id]));
+    const roots = [...new Set(boundIds.map((id) => rootOf.get(id) ?? id))];
 
     // Other recordings in the same groups can bring sources that the user did not save
-    const roots = [...new Set(rootOf.values())];
-    const members = yield* db
-      .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
+    const recordings = yield* db
+      .select()
       .from(recording)
       .where(or(inArray(recording.id, roots), inArray(recording.mergedIntoId, roots)));
-    const groupOf = new Map(rootOf);
-    for (const row of members) groupOf.set(row.id, row.mergedIntoId ?? row.id);
-
-    const canonical = new Map(
-      (yield* db.select().from(recording).where(inArray(recording.id, roots))).map((row) => [
-        row.id,
-        row,
-      ]),
-    );
 
     const sources = yield* playableSources(
       userId,
-      inArray(source.recordingId, [...groupOf.keys()]),
+      inArray(source.recordingId, [...new Set([...boundIds, ...recordings.map((row) => row.id)])]),
     );
     const remoteTracks = yield* db
       .select()
@@ -244,54 +226,15 @@ const resolveRecordings = (userId: UserId, boundIds: ReadonlyArray<string>) =>
         ),
       );
 
-    // Local files first, then lossless sources
-    const sourcesByRoot = new Map<string, Array<(typeof sources)[number]>>();
-    const ranked = sources.toSorted(
-      (a, b) =>
-        Number(b.source.provider === "local") - Number(a.source.provider === "local") ||
-        Number(b.variant.lossless) - Number(a.variant.lossless),
-    );
-    for (const row of ranked) {
-      const root = groupOf.get(row.source.recordingId ?? "");
-      if (root === undefined) continue;
-
-      const group = sourcesByRoot.get(root) ?? [];
-      group.push(row);
-      sourcesByRoot.set(root, group);
-    }
-
-    const remoteByRoot = new Map(
-      remoteTracks.map((row) => [rootOf.get(row.recordingId) ?? row.recordingId, row]),
-    );
-
-    // Without the provider's library data, the likely reason is a provider that the user did not link
-    const unavailableReason = (remote: typeof libraryRemoteTrack.$inferSelect | undefined) => {
-      if (remote === undefined || remote.sourceId !== null) return "account_required" as const;
-      return remote.catalogId === null ? ("library_only" as const) : ("not_in_catalog" as const);
-    };
-
-    // The canonical recording first, then the best source, then the provider's library data
-    const describe = (root: string) => {
-      const candidates = sourcesByRoot.get(root) ?? [];
-      const best = candidates[0];
-      const remote = remoteByRoot.get(root);
-      const fields = canonical.get(root);
-
-      return {
-        recordingId: RecordingId.make(root),
-        title: fields?.title ?? best?.source.rawTitle ?? remote?.rawTitle ?? null,
-        artist: fields?.artistName ?? best?.source.rawArtist ?? remote?.rawArtist ?? null,
-        album: fields?.album ?? best?.source.rawAlbum ?? remote?.rawAlbum ?? null,
-        durationMs:
-          fields?.durationMs ?? best?.source.rawDurationMs ?? remote?.rawDurationMs ?? null,
-        artworkUrl: fields?.artworkUrl ?? best?.artworkUrl ?? null,
-        source: best === undefined ? null : sourceSummary(best),
-        sourceCount: candidates.length,
-        unavailable: best === undefined ? unavailableReason(remote) : null,
-      };
-    };
-
-    return { rootOf, describe };
+    return libraryView({
+      recordings,
+      sources: sources.map((row) => ({
+        recordingId: row.source.recordingId,
+        lossless: row.variant.lossless,
+        summary: sourceSummary(row),
+      })),
+      remoteTracks,
+    });
   });
 
 export const listLibrary = Effect.gen(function* () {
@@ -302,26 +245,11 @@ export const listLibrary = Effect.gen(function* () {
     .select({ entityId: libraryItem.entityId, addedAt: libraryItem.addedAt })
     .from(libraryItem)
     .where(and(eq(libraryItem.userId, principal.userId), eq(libraryItem.deleted, false)));
-  const { rootOf, describe } = yield* resolveRecordings(
+  const view = yield* loadLibraryView(
     principal.userId,
     items.map((item) => item.entityId),
   );
-
-  // An item from several origins, or two saved versions of one recording, gives one entry
-  const addedAtByRoot = new Map<string, number>();
-  for (const item of items) {
-    const root = rootOf.get(item.entityId) ?? item.entityId;
-    addedAtByRoot.set(root, Math.min(addedAtByRoot.get(root) ?? item.addedAt, item.addedAt));
-  }
-
-  return [...addedAtByRoot]
-    .map(([root, addedAt]) => new LibraryEntry({ ...describe(root), addedAt }))
-    .toSorted(
-      (a, b) =>
-        (a.artist ?? "").localeCompare(b.artist ?? "") ||
-        (a.album ?? "").localeCompare(b.album ?? "") ||
-        (a.title ?? "").localeCompare(b.title ?? ""),
-    );
+  return view.libraryEntries(items);
 });
 
 export const listPlaylists = Effect.gen(function* () {
@@ -376,17 +304,9 @@ export const listPlaylistEntries = (playlistId: string) =>
       .from(playlistEntry)
       .where(and(eq(playlistEntry.playlistId, playlistId), eq(playlistEntry.deleted, false)))
       .orderBy(asc(playlistEntry.position), asc(playlistEntry.id));
-    const { rootOf, describe } = yield* resolveRecordings(
+    const view = yield* loadLibraryView(
       principal.userId,
       entries.map((entry) => entry.recordingId),
     );
-
-    return entries.map(
-      (entry) =>
-        new PlaylistEntry({
-          ...describe(rootOf.get(entry.recordingId) ?? entry.recordingId),
-          addedAt: entry.addedAt,
-          entryId: entry.id,
-        }),
-    );
+    return view.playlistEntries(entries);
   });
