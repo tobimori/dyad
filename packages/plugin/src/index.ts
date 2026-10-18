@@ -258,9 +258,11 @@ export class Provider extends Data.Class<{
   readonly home?: (
     credentials: Credentials,
   ) => Effect.Effect<ReadonlyArray<ProviderShelf>, ProviderError>;
-  /** Users must link an account before they can search or play the provider */
+  /** Without `optional`, users must link an account before they can search or play the provider */
   readonly account?: {
     readonly login: BrowserLogin;
+    /** Users can also search and play without an account */
+    readonly optional?: true;
     /** Checks the credentials with the provider and returns the account name to show */
     readonly link: (credentials: Credentials) => Effect.Effect<string, AccountLinkFailed>;
   };

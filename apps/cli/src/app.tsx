@@ -17,6 +17,7 @@ import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { AccountsDialog } from "./component/dialog-accounts.tsx";
 import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
 import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
@@ -550,6 +551,13 @@ export function App(props: {
   const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [commands.help, () => dialog.push(<HelpDialog />)],
     [commands.plugins, () => dialog.push(<PluginsDialog host={props.plugins} run={props.run} />)],
+    [
+      commands.accounts,
+      () => {
+        if (client === null) return;
+        dialog.push(<AccountsDialog connection={client} run={props.run} />);
+      },
+    ],
     [
       commands.downloads,
       () => {

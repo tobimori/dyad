@@ -3,11 +3,12 @@ import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
 import { detailsCache, provider, resolveTrack, searchTracks } from "./api.ts";
+import { browserLogin, readFanName } from "./login.ts";
 import { readBand, readRelease } from "./pages.ts";
 
 /**
  * Searches the public Bandcamp catalog and plays the public 128 kbps MP3 streams. Bandcamp needs
- * no account for this.
+ * no account for this, so the account is optional.
  */
 export const bandcampPlugin = new Plugin({
   id: "dyad.bandcamp",
@@ -27,6 +28,11 @@ export const bandcampPlugin = new Plugin({
           metadataPriority: 20,
           uploads: true,
           download: { leaseDays: 30 },
+          account: {
+            login: browserLogin,
+            link: (credentials) => readFanName(credentials).pipe(Effect.provide(services)),
+            optional: true,
+          },
         }),
       );
     }),

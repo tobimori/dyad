@@ -31,6 +31,7 @@ export const commands = {
   reload: command("app.reload", "Reload", "Other", ["r"]),
   plugins: command("app.plugins", "Plugins", "Other", ["shift+p"]),
   downloads: command("app.downloads", "Downloads", "Other", ["shift+d"]),
+  accounts: command("app.accounts", "Provider accounts", "Other", ["shift+l"]),
   close: command("app.close", "Close, go back", "Other", ["escape"], "close"),
 
   togglePause: command("playback.toggle", "Play or pause", "Playback", ["space"]),

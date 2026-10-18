@@ -33,7 +33,10 @@ class UsableProvider extends Data.Class<{
   readonly credentials: Credentials;
 }> {}
 
-/** The providers that need no account, and the providers of which the user linked an account */
+/**
+ * The providers that need no account or have an optional one, and the providers of which the user
+ * linked an account
+ */
 export const usableProviders = (userId: UserId) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -48,12 +51,14 @@ export const usableProviders = (userId: UserId) =>
 
     const usable = new Map<string, UsableProvider>();
     for (const [id, provider] of providers) {
-      if (provider.account === undefined) {
+      const values = linked.get(id);
+      if (
+        provider.account === undefined ||
+        (values === undefined && provider.account.optional === true)
+      ) {
         usable.set(id, new UsableProvider({ provider, credentials: new Map() }));
         continue;
       }
-
-      const values = linked.get(id);
       if (values === undefined) continue;
 
       const stored = yield* Schema.decodeUnknownEffect(StoredCredentials)(values).pipe(
