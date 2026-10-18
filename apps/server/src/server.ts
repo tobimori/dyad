@@ -24,6 +24,7 @@ import {
   hlcClockFromDatabase,
   librarySyncLayer,
   pluginLayer,
+  peerSyncLayer,
   recommendationsLayer,
   serverRoutes,
   tracklistsLayer,
@@ -69,7 +70,7 @@ export const serverLayer = Layer.unwrap(
         Schema.decodeEffect(ServerDescriptor)({
           ...value,
           protocolVersion: 1,
-          capabilities: { replication: false, playback: true, providerSync: false },
+          capabilities: { replication: true, playback: true, providerSync: false },
         }),
       ),
     );
@@ -96,10 +97,15 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(identity),
     );
     return Layer.mergeAll(
-      // The first library imports, ISRC lookups, tracklist reads and scrobbles need what the plugins add
-      Layer.mergeAll(librarySyncLayer, catalogLayer, tracklistsLayer, recommendationsLayer).pipe(
-        Layer.provide(pluginLayer(builtinPlugins, packageJson.version)),
-      ),
+      // The first library imports, ISRC lookups, tracklist reads and scrobbles need what the plugins
+      // add. Rows from peers need the providers too: their metadata priority ranks assertions.
+      Layer.mergeAll(
+        librarySyncLayer,
+        catalogLayer,
+        tracklistsLayer,
+        recommendationsLayer,
+        peerSyncLayer,
+      ).pipe(Layer.provide(pluginLayer(builtinPlugins, packageJson.version))),
       HttpRouter.serve(routes).pipe(
         Layer.provide(
           NodeHttpServer.layer(() => createServer(), {

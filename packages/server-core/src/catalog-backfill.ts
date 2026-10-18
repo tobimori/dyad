@@ -1,5 +1,5 @@
 import { catalogAssertion, job, localFile, providerItem, source, sourceVariant } from "@dyad/db";
-import { Database } from "@dyad/db/node";
+import { Database, ReplicaDatabase } from "@dyad/db/node";
 import { ProviderSource } from "@dyad/plugin";
 import { and, asc, eq, gt } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -25,6 +25,7 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const jobs = yield* Jobs;
+    const identity = yield* ReplicaDatabase;
 
     const rows = yield* db
       .select({
@@ -53,11 +54,36 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
             return yield* writeProviderSource(row.source.provider, cached.value);
           }
 
+          const local = row.source.provider === "local";
+          const boundId = yield* boundRecordingId(row.source.provider, row.source.externalId);
+          // Without the file or the provider cache, the raw columns would replace the values of the
+          // server replica that wrote the source with nulls. That replica writes it again.
+          if (row.tags === null) {
+            const ownId = yield* assertionId({
+              entityType: "recording",
+              entityId: boundId,
+              field: "title",
+              origin: local ? "local" : "provider",
+              originRef: local ? row.source.id : `${row.source.provider}:${row.source.externalId}`,
+            });
+            const [own] = yield* db
+              .select({ author: catalogAssertion.authorReplicaId })
+              .from(catalogAssertion)
+              .where(eq(catalogAssertion.id, ownId));
+            if (own !== undefined && own.author !== identity.replicaId) return;
+          }
+
           const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
-          const { id: _id, sourceId: _sourceId, ...variant } = row.variant;
+          const {
+            id: _id,
+            sourceId: _sourceId,
+            hlc: _hlc,
+            changeSeq: _seq,
+            ...variant
+          } = row.variant;
           const parseId = yield* assertionId({
             entityType: "recording",
-            entityId: yield* boundRecordingId(row.source.provider, row.source.externalId),
+            entityId: boundId,
             field: "title",
             origin: "parse",
             originRef: `${row.source.provider}:${row.source.externalId}`,

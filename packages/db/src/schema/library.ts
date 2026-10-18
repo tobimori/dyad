@@ -31,6 +31,7 @@ export const libraryItem = sqliteTable(
     index("library_item_user_idx").on(table.userId, table.deleted),
     index("library_item_entity_idx").on(table.entityId),
     index("library_item_change_idx").on(table.userId, table.changeSeq),
+    index("library_item_seq_idx").on(table.changeSeq),
   ],
 );
 
@@ -59,7 +60,10 @@ export const playlist = sqliteTable(
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
     changeSeq,
   },
-  (table) => [index("playlist_owner_idx").on(table.ownerId, table.deleted)],
+  (table) => [
+    index("playlist_owner_idx").on(table.ownerId, table.deleted),
+    index("playlist_seq_idx").on(table.changeSeq),
+  ],
 );
 
 export const playlistEntry = sqliteTable(
@@ -81,5 +85,6 @@ export const playlistEntry = sqliteTable(
   (table) => [
     index("playlist_entry_playlist_idx").on(table.playlistId, table.deleted),
     index("playlist_entry_change_idx").on(table.playlistId, table.changeSeq),
+    index("playlist_entry_seq_idx").on(table.changeSeq),
   ],
 );

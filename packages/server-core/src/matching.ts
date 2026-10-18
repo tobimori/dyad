@@ -9,7 +9,7 @@ import { Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
 import { isrcRecordingId, mergeId, musicbrainzRecordingId } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
-import { touchGroups } from "./sync-counter.ts";
+import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 
 /** The MusicBrainz lookups that a plugin supplies. One plugin at most. */
 export class MusicBrainzLookups extends Context.Service<
@@ -79,10 +79,15 @@ const writeEdge = (edge: Edge) =>
       authorUserId: null,
       hlc: yield* clock.next,
     };
-    yield* db
-      .insert(entityMerge)
-      .values(values)
-      .onConflictDoUpdate({ target: entityMerge.id, set: values });
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        const row = { ...values, changeSeq: yield* nextChangeSeq };
+        yield* db
+          .insert(entityMerge)
+          .values(row)
+          .onConflictDoUpdate({ target: entityMerge.id, set: row });
+      }),
+    );
     return true;
   });
 
@@ -444,10 +449,11 @@ export const decideMerge = (
     };
     yield* db.transaction(() =>
       Effect.gen(function* () {
+        const row = { ...values, changeSeq: yield* nextChangeSeq };
         yield* db
           .insert(entityMerge)
-          .values(values)
-          .onConflictDoUpdate({ target: entityMerge.id, set: values });
+          .values(row)
+          .onConflictDoUpdate({ target: entityMerge.id, set: row });
         yield* projectRecordings(yield* resolveRoots([pair.fromId]));
       }),
     );

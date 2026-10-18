@@ -68,5 +68,23 @@
     "hash": "84d625a919ade8b1dd906b9a83f42b85871c2752a060876c2f7fe96925d79f36",
     "bps": true,
     "sql": ["ALTER TABLE `playlist` ADD `link_state` text;"]
+  },
+  {
+    "name": "20261018165401_add_source_clocks",
+    "folderMillis": 1792342441000,
+    "hash": "b6bf42a1e4c35fe1bc0093e7ac79c1b530682e370543ae4283f630861f00ab69",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `source` ADD `hlc` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `source` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `source_variant` ADD `hlc` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `source_variant` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nCREATE INDEX `library_item_seq_idx` ON `library_item` (`change_seq`);",
+      "\nCREATE INDEX `play_event_seq_idx` ON `play_event` (`change_seq`);",
+      "\nCREATE INDEX `playlist_seq_idx` ON `playlist` (`change_seq`);",
+      "\nCREATE INDEX `playlist_entry_seq_idx` ON `playlist_entry` (`change_seq`);",
+      "\nCREATE INDEX `source_change_idx` ON `source` (`change_seq`);",
+      "\nCREATE INDEX `source_variant_change_idx` ON `source_variant` (`change_seq`);"
+    ]
   }
 ]

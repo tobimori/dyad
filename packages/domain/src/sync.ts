@@ -403,3 +403,152 @@ export class UpgradeRequired extends Schema.TaggedError<UpgradeRequired>()("Upgr
 
 /** Another device uses this replica ID. The client makes a new replica. */
 export class ReplicaMismatch extends Schema.TaggedError<ReplicaMismatch>()("ReplicaMismatch", {}) {}
+
+// Server replicas also exchange the catalog input and the sources
+
+/** An HLC, or empty for a source row from before server replication */
+const SourceClock = Schema.Union([HybridLogicalClock, Schema.Literal("")]);
+
+export class CatalogAssertionRow extends Schema.Class<CatalogAssertionRow>("CatalogAssertionRow")({
+  table: Schema.Literal("catalog_assertion"),
+  id: Uuid,
+  workspaceId: Uuid,
+  entityType: Schema.String,
+  entityId: Schema.String,
+  field: Schema.String,
+  /** JSON. Null states that the origin has no value. */
+  value: Schema.Unknown,
+  origin: Schema.Literals(["admin", "musicbrainz", "provider", "local", "match", "parse"]),
+  originRef: Schema.String,
+  originRevision: Schema.NullOr(Schema.String),
+  evidence: Schema.Unknown,
+  confidence: Schema.Finite,
+  authorUserId: Schema.NullOr(Schema.String),
+  authorReplicaId: Schema.String,
+  hlc: HybridLogicalClock,
+  retracted: Schema.Boolean,
+  schemaVersion: Schema.Int,
+}) {}
+
+export class EntityMergeRow extends Schema.Class<EntityMergeRow>("EntityMergeRow")({
+  table: Schema.Literal("entity_merge"),
+  id: Uuid,
+  entityType: Schema.Literals(["artist", "recording", "release_group", "release", "track"]),
+  fromId: Schema.String,
+  intoId: Schema.String,
+  decision: Schema.Literals(["merge", "reject"]),
+  origin: Schema.Literals(["system", "admin"]),
+  method: Schema.Literals(["mbid_tag", "isrc", "mapper", "manual"]),
+  confidence: Schema.Finite,
+  evidence: Schema.Unknown,
+  authorUserId: Schema.NullOr(Schema.String),
+  hlc: HybridLogicalClock,
+}) {}
+
+export class SourceInputRow extends Schema.Class<SourceInputRow>("SourceInputRow")({
+  table: Schema.Literal("source"),
+  ...SourceRow.fields,
+  hlc: SourceClock,
+}) {}
+
+export class SourceVariantInputRow extends Schema.Class<SourceVariantInputRow>(
+  "SourceVariantInputRow",
+)({
+  table: Schema.Literal("source_variant"),
+  ...SourceVariantRow.fields,
+  hlc: SourceClock,
+}) {}
+
+/** One row of the catalog input that server replicas exchange. Clients never receive it. */
+export const CatalogInputRow = Schema.Union([
+  CatalogAssertionRow,
+  EntityMergeRow,
+  SourceInputRow,
+  SourceVariantInputRow,
+]);
+export type CatalogInputRow = typeof CatalogInputRow.Type;
+
+/** One row that a server replica sends to another, without its `change_seq` */
+export const PeerRow = Schema.Union([SyncRow, CatalogInputRow]);
+export type PeerRow = typeof PeerRow.Type;
+
+/** A position in the rows of a server, in `(change_seq, table, id)` order */
+export class PeerCursor extends Schema.Class<PeerCursor>("PeerCursor")({
+  changeSeq: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** `<table>:<id>` of the last row when a page ended inside the rows of `changeSeq` */
+  rowKey: Schema.NullOr(Schema.String),
+}) {}
+
+export class PeerPullRequest extends Schema.Class<PeerPullRequest>("PeerPullRequest")({
+  protocolVersion: Schema.Int,
+  /** The last epoch of the peer that the caller saw. Another epoch starts from the beginning. */
+  epoch: Schema.NullOr(Uuid),
+  cursor: PeerCursor,
+}) {}
+
+export class PeerPullResponse extends Schema.Class<PeerPullResponse>("PeerPullResponse")({
+  replicaId: ReplicaId,
+  workspaceId: WorkspaceId,
+  epoch: Uuid,
+  rows: Schema.Array(PeerRow),
+  cursor: PeerCursor,
+  more: Schema.Boolean,
+}) {}
+
+export class PeerPushRequest extends Schema.Class<PeerPushRequest>("PeerPushRequest")({
+  protocolVersion: Schema.Int,
+  rows: Schema.Array(PeerRow).check(Schema.isMaxLength(1000)),
+}) {}
+
+export class PeerRedeemRequest extends Schema.Class<PeerRedeemRequest>("PeerRedeemRequest")({
+  code: Schema.String.check(Schema.isMaxLength(20)),
+  /** The replica that redeems the code */
+  replicaId: ReplicaId,
+  /** The workspace of the redeeming replica. `null`: it joins the workspace of this server. */
+  workspaceId: Schema.NullOr(WorkspaceId),
+  protocolVersion: Schema.Int,
+}) {}
+
+/** The admin who made the pairing code. A server that joins makes its first admin with this ID. */
+export class PeerAdmin extends Schema.Class<PeerAdmin>("PeerAdmin")({
+  id: UserId,
+  username: Schema.String,
+  role: Schema.Literals(["admin", "member"]),
+}) {}
+
+export class PeerLink extends Schema.Class<PeerLink>("PeerLink")({
+  /** The redeeming server keeps it secret. The other server stores only its hash. */
+  token: Schema.String,
+  replicaId: ReplicaId,
+  workspaceId: WorkspaceId,
+  admin: PeerAdmin,
+}) {}
+
+/** A paired server replica, as an admin sees it */
+export class ServerPeer extends Schema.Class<ServerPeer>("ServerPeer")({
+  replicaId: ReplicaId,
+  /** Set when this server connects to the peer, null when the peer connects to this server */
+  url: Schema.NullOr(Schema.String),
+  /** This server pulls from and pushes to the peer */
+  connects: Schema.Boolean,
+  /** The peer connects to this server with a token */
+  accepts: Schema.Boolean,
+  syncedAt: Schema.NullOr(Schema.Number),
+  /** For example `unreachable`, or `revoked` after the peer unpaired */
+  error: Schema.NullOr(Schema.String),
+}) {}
+
+export class ServerPairingFailed extends Schema.TaggedError<ServerPairingFailed>()(
+  "ServerPairingFailed",
+  {
+    reason: Schema.Literals([
+      "not_admin",
+      "invalid_code",
+      "workspace_mismatch",
+      "same_server",
+      "unreachable",
+      "upgrade_required",
+      "not_found",
+    ]),
+  },
+) {}

@@ -59,10 +59,10 @@ const pbkdf2 = (password: string, salt: Uint8Array, iterations: number) =>
     return new Uint8Array(bits);
   });
 
-const randomBytes = (size: number) =>
+export const randomBytes = (size: number) =>
   Crypto.Crypto.use((crypto) => crypto.randomBytes(size)).pipe(Effect.orDie);
 
-const hashPassword = (password: string) =>
+export const hashPassword = (password: string) =>
   Effect.gen(function* () {
     const salt = yield* randomBytes(16);
     const hash = yield* pbkdf2(password, salt, passwordIterations);
@@ -78,7 +78,7 @@ const verifyPassword = (password: string, stored: string) =>
     return equalSecrets(hex(hash), expected);
   });
 
-const sha256 = (value: string) =>
+export const sha256 = (value: string) =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(value));
@@ -88,14 +88,14 @@ const sha256 = (value: string) =>
 // No 0, O, 1 or I, so that a code read from a screen is typed correctly
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-const randomCode = Effect.gen(function* () {
+export const randomCode = Effect.gen(function* () {
   const bytes = yield* randomBytes(8);
   // 256 is a multiple of the 32 characters, so each character has the same probability
   const characters = Array.from(bytes, (byte) => codeAlphabet[byte % codeAlphabet.length]);
   return `${characters.slice(0, 4).join("")}-${characters.slice(4).join("")}`;
 });
 
-const normalizeCode = (code: string) => {
+export const normalizeCode = (code: string) => {
   const characters = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
   return `${characters.slice(0, 4)}-${characters.slice(4)}`;
 };

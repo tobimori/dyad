@@ -32,7 +32,7 @@ import {
 import { normalizeArtist, normalizeText } from "./normalize.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
-import { touchGroups } from "./sync-counter.ts";
+import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 
 const readKind = "tracklist.read";
 const field = "tracklist";
@@ -113,10 +113,15 @@ const assertTracklist = (
       retracted: false,
       schemaVersion: 1,
     };
-    yield* db
-      .insert(catalogAssertion)
-      .values(row)
-      .onConflictDoUpdate({ target: catalogAssertion.id, set: row });
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        const values = { ...row, changeSeq: yield* nextChangeSeq };
+        yield* db
+          .insert(catalogAssertion)
+          .values(values)
+          .onConflictDoUpdate({ target: catalogAssertion.id, set: values });
+      }),
+    );
     return id;
   });
 
@@ -124,10 +129,15 @@ const retract = (ids: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     if (ids.length === 0) return;
     const db = yield* Database;
-    yield* db
-      .update(catalogAssertion)
-      .set({ retracted: true, hlc: yield* (yield* HlcClock).next })
-      .where(inArray(catalogAssertion.id, [...ids]));
+    const hlc = yield* (yield* HlcClock).next;
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        yield* db
+          .update(catalogAssertion)
+          .set({ retracted: true, hlc, changeSeq: yield* nextChangeSeq })
+          .where(inArray(catalogAssertion.id, [...ids]));
+      }),
+    );
   });
 
 const tracklistAssertions = (sourceId: string) =>
@@ -359,6 +369,13 @@ const deriveWithCopies = (sourceId: string) =>
       deriveSegments(id).pipe(Effect.map((derived) => (derived ? [id] : []))),
     );
     return changed.flat();
+  });
+
+/** Makes the segments again after tracklist assertions came from another server replica */
+export const deriveTracklists = (sourceIds: Iterable<string>) =>
+  Effect.gen(function* () {
+    const changed = yield* Effect.forEach(new Set(sourceIds), deriveWithCopies);
+    yield* Effect.forEach(new Set(changed.flat()), publish, { discard: true });
   });
 
 // `ID - ID` and similar are tracks that the DJ does not name

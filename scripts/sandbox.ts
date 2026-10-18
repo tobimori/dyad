@@ -15,6 +15,7 @@ import {
   FileSystem,
   Option,
   Path,
+  Redacted,
   Schedule,
   Schema,
 } from "effect";
@@ -31,7 +32,8 @@ const serverCommand = Effect.gen(function* () {
   const path = yield* Path.Path;
   const repositoryRoot = path.dirname(import.meta.dirname);
   const main = path.join(repositoryRoot, "apps/server/src/main.ts");
-  return { repositoryRoot, arguments: ["--conditions=development", main] };
+  const join = path.join(repositoryRoot, "apps/server/src/join.ts");
+  return { repositoryRoot, join, arguments: ["--conditions=development", main] };
 });
 
 const toneFiles = [
@@ -135,6 +137,42 @@ const isRunning = (pid: number) =>
     Effect.orElseSucceed(() => false),
   );
 
+// The other sandbox makes a pairing code, and this server joins its workspace before its first start
+const joinWorkspace = Effect.fn(function* (
+  peerFolder: string,
+  dataDirectory: string,
+  password: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const command = yield* serverCommand;
+  const peer = yield* readSandboxFile(peerFolder);
+  const token = Redacted.make((yield* fs.readFileString(peer.tokenFile)).trim());
+
+  const pairing = yield* Effect.gen(function* () {
+    return yield* (yield* ServerConnection).createServerPairingCode();
+  }).pipe(
+    Effect.provide(serverConnectionLayer(serverUrl(peer), Option.some(token))),
+    Effect.scoped,
+  );
+  const exitCode = yield* spawner.exitCode(
+    ChildProcess.make(
+      process.execPath,
+      ["--conditions=development", command.join, serverUrl(peer), pairing.code],
+      {
+        cwd: command.repositoryRoot,
+        env: { DYAD_DATA_DIR: dataDirectory, DYAD_JOIN_PASSWORD: password },
+        extendEnv: true,
+        stdout: "inherit",
+        stderr: "inherit",
+      },
+    ),
+  );
+  if (exitCode !== 0) {
+    return yield* new SandboxError({ message: `The join failed with exit code ${exitCode}` });
+  }
+});
+
 // The server logs the setup code before it accepts connections
 const readSetupCode = Effect.fn(function* (logFile: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -157,12 +195,18 @@ const start = Command.make(
       Flag.withDescription("Use this folder as DYAD_LIBRARY_DIR (default: an empty folder)"),
       Flag.optional,
     ),
+    join: Flag.Directory("join", { mustExist: true }).pipe(
+      Flag.withDescription(
+        "Join the workspace of the server of this sandbox folder and pair with it, instead of a new setup",
+      ),
+      Flag.optional,
+    ),
     tones: Flag.Boolean("tones").pipe(
       Flag.withDescription("Put three short tagged FLAC files into the empty library folder"),
       Flag.withDefault(false),
     ),
   },
-  ({ from, library, tones }) =>
+  ({ from, join, library, tones }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -170,6 +214,9 @@ const start = Command.make(
 
       if (tones && Option.isSome(library)) {
         return yield* new SandboxError({ message: "Use --tones or --library, not both" });
+      }
+      if (Option.isSome(join) && Option.isSome(from)) {
+        return yield* new SandboxError({ message: "Use --join or --from, not both" });
       }
 
       const folder = yield* fs.makeTempDirectory({ prefix: "dyad-sandbox-" });
@@ -193,6 +240,9 @@ const start = Command.make(
         yield* fs.writeFileString(tokenFile, token, { mode: 0o600 });
         yield* Console.log(`Copied ${from.value}; the token signs in as ${username}`);
       }
+
+      const password = Hex.encode(yield* crypto.randomBytes(16));
+      if (Option.isSome(join)) yield* joinWorkspace(join.value, dataDirectory, password);
 
       const port = yield* freePort;
       const pid = yield* startServer(logFile, {
@@ -223,13 +273,15 @@ const start = Command.make(
 
         if (Option.isSome(from)) return;
 
-        const password = Hex.encode(yield* crypto.randomBytes(16));
-        const session = yield* connection.setup({
-          setupCode: yield* readSetupCode(logFile),
-          username: "sandbox",
-          password,
-          deviceName: "sandbox",
-        });
+        // A joined server has the admin of the other sandbox, with its own password
+        const session = Option.isSome(join)
+          ? yield* connection.login({ username: "sandbox", password, deviceName: "sandbox" })
+          : yield* connection.setup({
+              setupCode: yield* readSetupCode(logFile),
+              username: "sandbox",
+              password,
+              deviceName: "sandbox",
+            });
         yield* fs.writeFileString(tokenFile, session.token, { mode: 0o600 });
         yield* fs.writeFileString(
           path.join(folder, "credentials.json"),

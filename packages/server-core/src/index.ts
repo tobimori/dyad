@@ -32,6 +32,14 @@ import { radio } from "./radio.ts";
 import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { listSources } from "./sources.ts";
+import {
+  createServerPairingCode,
+  listServerPeers,
+  pairServer,
+  peerRoutes,
+  serverPairingCodesLayer,
+  unpairServer,
+} from "./peers.ts";
 import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
 import { listPlaylistEntries } from "./user-library.ts";
@@ -42,6 +50,7 @@ export { hlcClockFromDatabase } from "./clock.ts";
 export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { StreamPort } from "./outputs.ts";
+export { JoinFailed, joinWorkspace, peerSyncLayer } from "./peers.ts";
 export { pluginLayer } from "./plugin.ts";
 export { recommendationsLayer } from "./recommenders.ts";
 export { tracklistsLayer } from "./tracklists.ts";
@@ -64,6 +73,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       musicbrainzLookupsLayer,
       outputsLayer,
       syncHubLayer,
+      serverPairingCodesLayer,
       tracklistsServiceLayer,
     ),
   ),
@@ -132,6 +142,12 @@ export const serverRoutes = Layer.unwrap(
         ),
       hideTracklist: ({ sourceId, hidden }) =>
         hideTracklist(sourceId, hidden).pipe(orDieOnDatabaseError("hideTracklist")),
+      createServerPairingCode: () =>
+        createServerPairingCode.pipe(orDieOnDatabaseError("createServerPairingCode")),
+      pairServer: (payload) => pairServer(payload).pipe(orDieOnDatabaseError("pairServer")),
+      listServerPeers: () => listServerPeers.pipe(orDieOnDatabaseError("listServerPeers")),
+      unpairServer: ({ replicaId }) =>
+        unpairServer(replicaId).pipe(orDieOnDatabaseError("unpairServer")),
     });
 
     return Layer.mergeAll(
@@ -144,6 +160,7 @@ export const serverRoutes = Layer.unwrap(
       streamRoute,
       videoRoute,
       downloadRoute,
+      peerRoutes,
       RpcServer.layerHttp({ group: ServerRpc, path: "/rpc" }).pipe(
         Layer.provide(handlers),
         Layer.provide(authenticationLayer),

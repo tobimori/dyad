@@ -1,5 +1,7 @@
 import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+import { changeSeq } from "./change-seq.ts";
+
 /** One field value of one entity from one origin. Replicated in the workspace scope. */
 export const catalogAssertion = sqliteTable(
   "catalog_assertion",
@@ -32,9 +34,11 @@ export const catalogAssertion = sqliteTable(
     // Withdrawn, and ignored by resolution. A null value instead states that there is no value.
     retracted: integer("retracted", { mode: "boolean" }).notNull().default(false),
     schemaVersion: integer("schema_version").notNull(),
+    changeSeq,
   },
   (table) => [
     index("catalog_assertion_entity_idx").on(table.entityType, table.entityId, table.field),
     index("catalog_assertion_origin_idx").on(table.originRef),
+    index("catalog_assertion_change_idx").on(table.changeSeq),
   ],
 );

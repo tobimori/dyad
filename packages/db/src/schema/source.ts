@@ -7,7 +7,11 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+import { changeSeq } from "./change-seq.ts";
 import { projection } from "./projection.ts";
+
+// Server replicas exchange sources: the newer `hlc` wins. Empty for rows from before replication.
+const sourceHlc = () => text("hlc").notNull().default("");
 
 // Shared source metadata. Access and file locations belong to replicas; see `local.ts`.
 
@@ -35,11 +39,14 @@ export const source = sqliteTable(
       .default("available"),
     checkedAt: integer("checked_at"),
     ...projection,
+    hlc: sourceHlc(),
+    changeSeq,
   },
   (table) => [
     uniqueIndex("source_provider_idx").on(table.provider, table.externalId),
     index("source_recording_idx").on(table.recordingId),
     index("source_track_idx").on(table.trackId),
+    index("source_change_idx").on(table.changeSeq),
   ],
 );
 
@@ -56,8 +63,13 @@ export const sourceVariant = sqliteTable(
     bitrate: integer("bitrate"),
     lossless: integer("lossless", { mode: "boolean" }).notNull(),
     encrypted: integer("encrypted", { mode: "boolean" }).notNull(),
+    hlc: sourceHlc(),
+    changeSeq,
   },
-  (table) => [index("source_variant_source_idx").on(table.sourceId)],
+  (table) => [
+    index("source_variant_source_idx").on(table.sourceId),
+    index("source_variant_change_idx").on(table.changeSeq),
+  ],
 );
 
 /**

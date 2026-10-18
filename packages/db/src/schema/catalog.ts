@@ -1,5 +1,6 @@
 import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+import { changeSeq } from "./change-seq.ts";
 import { projection } from "./projection.ts";
 
 // Canonical catalog tables are projections of `catalog_assertion` rows. Every server replica makes
@@ -220,10 +221,12 @@ export const entityMerge = sqliteTable(
     authorUserId: text("author_user_id"),
     // Newer row with the same ID wins
     hlc: text("hlc").notNull(),
+    changeSeq,
   },
   (table) => [
     index("entity_merge_from_idx").on(table.entityType, table.fromId),
     index("entity_merge_into_idx").on(table.entityType, table.intoId),
+    index("entity_merge_change_idx").on(table.changeSeq),
   ],
 );
 

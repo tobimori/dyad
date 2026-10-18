@@ -1,5 +1,7 @@
 import { PlayEventRow, PlaylistEntryRow, PlaylistRow } from "@dyad/domain";
 import type {
+  CatalogAssertionRow,
+  CatalogInputRow,
   HybridLogicalClock,
   PlaylistLink,
   PlaylistLinkState,
@@ -159,3 +161,31 @@ export const applyChange = (current: SyncRow | undefined, change: SyncChange) =>
           : Option.none<SyncRow>(),
     }),
   );
+
+const parseVersion = (revision: string | null) => Number(revision?.replace("parse:v", "") ?? 0);
+
+// Between `parse` assertions, a newer parser wins first, so that a replica with an older parser
+// cannot overwrite a newer parse. Then the newer HLC wins.
+const assertionOrder = (row: CatalogAssertionRow) =>
+  [row.origin === "parse" ? parseVersion(row.originRevision) : 0, row.hlc] as const;
+
+/**
+ * Merges a catalog input row from another server replica into the stored row of the same table
+ * and ID. The newer write wins. `None`: the stored row stays.
+ */
+export const mergeCatalogRow = (
+  current: CatalogInputRow | undefined,
+  incoming: CatalogInputRow,
+) => {
+  if (current === undefined) return Option.some(incoming);
+  if (current.table !== incoming.table) return Option.none<CatalogInputRow>();
+
+  if (current.table === "catalog_assertion" && incoming.table === "catalog_assertion") {
+    const [currentParse, currentHlc] = assertionOrder(current);
+    const [incomingParse, incomingHlc] = assertionOrder(incoming);
+    const newer =
+      incomingParse > currentParse || (incomingParse === currentParse && incomingHlc > currentHlc);
+    return newer ? Option.some<CatalogInputRow>(incoming) : Option.none<CatalogInputRow>();
+  }
+  return incoming.hlc > current.hlc ? Option.some(incoming) : Option.none<CatalogInputRow>();
+};

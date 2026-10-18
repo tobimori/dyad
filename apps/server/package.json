@@ -9,6 +9,7 @@
     "dev:tailscale": "portless --tailscale",
     "dev:app": "node --conditions=development --env-file=.env.development --env-file-if-exists=.env.local --watch src/main.ts",
     "start": "node dist/main.mjs",
+    "join": "node --conditions=development src/join.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

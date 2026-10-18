@@ -31,5 +31,6 @@ export const playEvent = sqliteTable(
     // Search ranking reads the recent plays of one user
     index("play_event_user_started_idx").on(table.userId, table.startedAt),
     index("play_event_change_idx").on(table.userId, table.changeSeq),
+    index("play_event_seq_idx").on(table.changeSeq),
   ],
 );

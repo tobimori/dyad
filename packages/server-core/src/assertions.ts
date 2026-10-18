@@ -8,7 +8,7 @@ import { Effect, Option, Schema } from "effect";
 
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
-import { touchGroups } from "./sync-counter.ts";
+import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { MashupPart, ParsedTitle, TitleSeries, TitleVersion } from "./version-titles.ts";
 
 const schemaVersion = 1;
@@ -120,36 +120,44 @@ export const assertRecording = (
       );
     });
 
-    yield* Effect.forEach(
-      changed,
-      (assertion) =>
-        Effect.gen(function* () {
-          const row = {
-            id: assertion.id,
-            workspaceId: identity.workspaceId,
-            entityType: "recording",
-            entityId: recordingId,
-            field: assertion.field,
-            value: assertion.value,
-            origin,
-            originRef,
-            originRevision,
-            evidence,
-            confidence,
-            authorReplicaId: identity.replicaId,
-            hlc: yield* clock.next,
-            retracted: false,
-            schemaVersion,
-          };
-          yield* db
-            .insert(catalogAssertion)
-            .values(row)
-            .onConflictDoUpdate({ target: catalogAssertion.id, set: row });
-        }),
-      { discard: true },
-    );
+    if (changed.length === 0) return false;
 
-    return changed.length > 0;
+    // Peers pull the rows after a `change_seq`, so the value and the rows commit together
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        const changeSeq = yield* nextChangeSeq;
+        yield* Effect.forEach(
+          changed,
+          (assertion) =>
+            Effect.gen(function* () {
+              const row = {
+                id: assertion.id,
+                workspaceId: identity.workspaceId,
+                entityType: "recording",
+                entityId: recordingId,
+                field: assertion.field,
+                value: assertion.value,
+                origin,
+                originRef,
+                originRevision,
+                evidence,
+                confidence,
+                authorReplicaId: identity.replicaId,
+                hlc: yield* clock.next,
+                retracted: false,
+                schemaVersion,
+                changeSeq,
+              };
+              yield* db
+                .insert(catalogAssertion)
+                .values(row)
+                .onConflictDoUpdate({ target: catalogAssertion.id, set: row });
+            }),
+          { discard: true },
+        );
+      }),
+    );
+    return true;
   });
 
 // Resolution policy v1. Users curate local tags. MusicBrainz titles are in the original script, where

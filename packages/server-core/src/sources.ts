@@ -11,6 +11,7 @@ import { Database } from "@dyad/db/node";
 import { CurrentPrincipal, RecordingId, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
+import { HlcClock } from "@dyad/sync";
 import { and, eq, getColumns, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
@@ -24,7 +25,7 @@ import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
-import { touchGroups } from "./sync-counter.ts";
+import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import {
   parseVersionTitle,
   parsedCredit,
@@ -150,7 +151,7 @@ export const writeSource = (
     /** The account that uploaded the source, for providers with `uploads` */
     readonly uploader: CreditedArtist | null;
   },
-  variant: Omit<typeof sourceVariant.$inferInsert, "id" | "sourceId">,
+  variant: Omit<typeof sourceVariant.$inferInsert, "id" | "sourceId" | "hlc" | "changeSeq">,
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -201,6 +202,17 @@ export const writeSource = (
             })
             .returning({ id: sourceVariant.id }),
         ]);
+
+        // Other server replicas take the newer write of a source or variant
+        const [, sourceWritten = [], variantWritten = []] = written;
+        if (sourceWritten.length > 0 || variantWritten.length > 0) {
+          const stamp = { hlc: yield* (yield* HlcClock).next, changeSeq: yield* nextChangeSeq };
+          if (sourceWritten.length > 0)
+            yield* tx.update(source).set(stamp).where(eq(source.id, id));
+          if (variantWritten.length > 0) {
+            yield* tx.update(sourceVariant).set(stamp).where(eq(sourceVariant.id, variantRow.id));
+          }
+        }
 
         // A file asserts as its source, so that copies of the same audio on two replicas agree
         const local = item.provider === "local";

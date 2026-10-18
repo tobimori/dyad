@@ -10,9 +10,16 @@ import {
   WorkspaceId,
 } from "./primitives.ts";
 import {
+  PeerLink,
+  PeerPullRequest,
+  PeerPullResponse,
+  PeerPushRequest,
+  PeerRedeemRequest,
   PlaylistLink,
   PlaylistLinkState,
   ReplicaMismatch,
+  ServerPairingFailed,
+  ServerPeer,
   SyncHint,
   SyncPullRequest,
   SyncPullResponse,
@@ -911,9 +918,54 @@ const UserRpc = RpcGroup.make(
     payload: { sourceId: Schema.String.check(Schema.isUUID()), hidden: Schema.Boolean },
     error: TracklistEditFailed,
   }),
+  // Admin only. A code that another server redeems once to pair with this server.
+  Rpc.make("createServerPairingCode", { success: PairingCode, error: ServerPairingFailed }),
+  // Admin only. Redeems a code of the server at `url`, which must be in the same workspace. This
+  // server then pulls from and pushes to it.
+  Rpc.make("pairServer", {
+    payload: { url: HttpUrl, code: Schema.String.check(Schema.isMaxLength(20)) },
+    success: ServerPeer,
+    error: ServerPairingFailed,
+  }),
+  Rpc.make("listServerPeers", { success: Schema.Array(ServerPeer), error: ServerPairingFailed }),
+  // Admin only. Removes the pairing on both servers when the peer is reachable. Replicated data
+  // stays.
+  Rpc.make("unpairServer", { payload: { replicaId: ReplicaId }, error: ServerPairingFailed }),
 ).middleware(Authentication);
 
 export class ServerRpc extends PublicRpc.merge(UserRpc) {}
+
+/** The server replica of an authenticated peer request */
+export class CurrentPeer extends Context.Service<CurrentPeer, ReplicaId>()(
+  "@dyad/domain/CurrentPeer",
+) {}
+
+/** Requires the `authorization: Bearer <server token>` header from `peerRedeem` */
+export class PeerAuthentication extends RpcMiddleware.Service<
+  PeerAuthentication,
+  { provides: CurrentPeer }
+>()("@dyad/domain/PeerAuthentication", { error: Unauthorized, requiredForClient: true }) {}
+
+/** Calls between paired server replicas, at `/peer`. Device tokens do not work here. */
+export class PeerRpc extends RpcGroup.make(
+  Rpc.make("peerRedeem", {
+    payload: PeerRedeemRequest,
+    success: PeerLink,
+    error: Schema.Union([ServerPairingFailed, UpgradeRequired]),
+  }),
+).merge(
+  RpcGroup.make(
+    // The rows of all scopes after the cursor. Pull again while `more` is true.
+    Rpc.make("peerPull", {
+      payload: PeerPullRequest,
+      success: PeerPullResponse,
+      error: UpgradeRequired,
+    }),
+    Rpc.make("peerPush", { payload: PeerPushRequest, error: UpgradeRequired }),
+    // Forgets the token of the caller
+    Rpc.make("peerRevoke", {}),
+  ).middleware(PeerAuthentication),
+) {}
 
 export class WorkerDescriptor extends Schema.Class<WorkerDescriptor>("WorkerDescriptor")({
   execution: Schema.Literal("worker"),
