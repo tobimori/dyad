@@ -14,6 +14,7 @@
     "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
     "@dyad/media": "workspace:*",
+    "@dyad/player": "workspace:*",
     "@dyad/plugin": "workspace:*",
     "@dyad/sync": "workspace:*",
     "drizzle-orm": "catalog:",

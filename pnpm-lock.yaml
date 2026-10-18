@@ -430,6 +430,9 @@ importers:
       '@dyad/media':
         specifier: workspace:*
         version: link:../media
+      '@dyad/player':
+        specifier: workspace:*
+        version: link:../player
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../plugin
