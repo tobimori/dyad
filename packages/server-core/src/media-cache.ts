@@ -10,6 +10,7 @@ import {
   Layer,
   Option,
   Path,
+  PubSub,
   Redacted,
   Scope,
   Semaphore,
@@ -31,6 +32,12 @@ export class CachedAudio extends Data.Class<{
   readonly keyIds: ReadonlyArray<string>;
   readonly size: number;
   readonly modifiedAt: number;
+}> {}
+
+/** A complete file and the keys that decrypt it. The keys exist only in memory. */
+export class ReadyAudio extends Data.Class<{
+  readonly file: CachedAudio;
+  readonly decryptionKeys: Redacted.Redacted<ReadonlyMap<string, string>> | undefined;
 }> {}
 
 export class PrefetchItem extends Data.Class<{
@@ -76,6 +83,8 @@ const makeMediaCache = Effect.gen(function* () {
   // Items whose prefetch did not give a file. A hint tries them again after they leave all hints.
   const failed = new Set<string>();
   const scheduling = yield* Semaphore.make(1);
+  // Each committed file, and each cached file that playback decrypts
+  const ready = yield* PubSub.unbounded<ReadyAudio>();
 
   const filePath = (file: { readonly variantId: string; readonly keyIds: ReadonlyArray<string> }) =>
     path.join(directory, fileName(file));
@@ -263,9 +272,16 @@ const makeMediaCache = Effect.gen(function* () {
 
           const replaced = files.get(variantId);
           const now = yield* Clock.currentTimeMillis;
-          files.set(
+          const committed = new CachedAudio({
             variantId,
-            new CachedAudio({ variantId, keyIds, size: state.size, modifiedAt: now }),
+            keyIds,
+            size: state.size,
+            modifiedAt: now,
+          });
+          files.set(variantId, committed);
+          yield* PubSub.publish(
+            ready,
+            new ReadyAudio({ file: committed, decryptionKeys: audio.decryptionKeys }),
           );
           // The provider replaced the asset, so the earlier file has other key IDs
           if (replaced !== undefined && filePath(replaced) !== target) {
@@ -375,7 +391,16 @@ const makeMediaCache = Effect.gen(function* () {
       yield* schedule;
     });
 
-  return { find, read, download, hint };
+  /** The complete files. Unlike `find`, it does not change the eviction order. */
+  const list = Effect.sync(() => [...files.values()]);
+
+  /** Publishes the cached file to `ready`, when playback has its keys */
+  const decrypted = (
+    file: CachedAudio,
+    decryptionKeys: Redacted.Redacted<ReadonlyMap<string, string>>,
+  ) => PubSub.publish(ready, new ReadyAudio({ file, decryptionKeys }));
+
+  return { find, read, download, hint, list, ready, decrypted };
 });
 
 /**

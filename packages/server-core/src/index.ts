@@ -15,6 +15,7 @@ import {
   removeDevice,
   setup,
 } from "./auth.ts";
+import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { listRecentPlays } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
@@ -41,7 +42,7 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescri
 ) {}
 
 /** Replica services that plugins and routes share */
-export const coreServicesLayer = sessionsLayer.pipe(
+export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLayer).pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       providersLayer,

@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Replica-local tables. Not replicated: paths and library roots belong to this replica.
 
@@ -31,10 +31,6 @@ export const localFile = sqliteTable(
     artistKey: text("artist_key"),
     albumKey: text("album_key"),
     fingerprint: text("fingerprint"),
-    loudnessLufs: real("loudness_lufs"),
-    truePeak: real("true_peak"),
-    trackGain: real("track_gain"),
-    albumGain: real("album_gain"),
     scannedAt: integer("scanned_at").notNull(),
   },
   (table) => [

@@ -5,6 +5,7 @@ import type { AudioFile } from "@dyad/media/node";
 import { eq } from "drizzle-orm";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path } from "effect";
 
+import { requestAnalysis } from "./audio-analysis.ts";
 import { normV1 } from "./normalize.ts";
 import { tagIdentifiers, writeSource } from "./sources.ts";
 import type { Tags } from "./sources.ts";
@@ -130,6 +131,8 @@ export const syncLibraryRoot = (rootPath: string, paths: ReadonlyArray<string>) 
     yield* Effect.forEach(missing, (row) => db.delete(localFile).where(eq(localFile.id, row.id)), {
       discard: true,
     });
+
+    if (results.includes("imported")) yield* requestAnalysis;
 
     yield* Effect.logInfo("Library synced").pipe(
       Effect.annotateLogs({

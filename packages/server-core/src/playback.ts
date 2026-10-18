@@ -34,6 +34,7 @@ import {
 } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
+import { sourceAnalysis } from "./audio-analysis.ts";
 import { fromHex, hex, variantId } from "./ids.ts";
 import { MediaCache, PrefetchItem } from "./media-cache.ts";
 import { Outputs } from "./outputs.ts";
@@ -265,7 +266,11 @@ export const streamPlan = (
       expires: String(grant.expiresAt),
       signature: yield* signGrant(grant),
     });
-    return new PlaybackPlan({ format: choice.format, path: `/stream/${sourceId}?${search}` });
+    return new PlaybackPlan({
+      format: choice.format,
+      path: `/stream/${sourceId}?${search}`,
+      analysis: yield* sourceAnalysis(sourceId),
+    });
   });
 
 export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabilities) =>
@@ -300,6 +305,7 @@ const cachedAudio = (playable: ProviderPlayback) =>
     const decryptionKeys = yield* playable.keys;
     const keys = Redacted.value(decryptionKeys);
     if (!file.value.keyIds.every((keyId) => keys.has(keyId))) return Option.none();
+    yield* cache.decrypted(file.value, decryptionKeys);
     return Option.some(new SourceAudio({ bytes, decryptionKeys, partial: false }));
   });
 

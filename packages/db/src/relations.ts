@@ -2,6 +2,7 @@ import { defineRelations } from "drizzle-orm";
 
 import * as account from "./schema/account.ts";
 import * as assertion from "./schema/assertion.ts";
+import * as audioAnalysis from "./schema/audio-analysis.ts";
 import * as auth from "./schema/auth.ts";
 import * as catalog from "./schema/catalog.ts";
 import * as history from "./schema/history.ts";
@@ -24,6 +25,7 @@ export const schema = {
   ...assertion,
   ...source,
   ...local,
+  ...audioAnalysis,
   ...providerCache,
   ...history,
   ...job,

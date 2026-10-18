@@ -266,8 +266,22 @@ export class PlaybackCapabilities extends Schema.Class<PlaybackCapabilities>(
   formats: Schema.NonEmptyArray(AudioFormat),
 }) {}
 
+/** Measured by the server from the full decoded audio */
+export class AudioAnalysis extends Schema.Class<AudioAnalysis>("AudioAnalysis")({
+  /** Integrated loudness in LUFS (EBU R128) */
+  loudness: Schema.Finite,
+  /** In dBTP */
+  truePeak: Schema.Finite,
+  /** Time before the first sample above −60 dBFS */
+  leadingSilenceMs: Schema.Int,
+  /** Time after the last sample above −60 dBFS */
+  trailingSilenceMs: Schema.Int,
+}) {}
+
 export class PlaybackPlan extends Schema.Class<PlaybackPlan>("PlaybackPlan")({
   format: AudioFormat,
+  /** `null` until the server has analyzed the audio. Ask again later for it. */
+  analysis: Schema.NullOr(AudioAnalysis),
   /**
    * Relative URL for the negotiated stream. The query parameter `start=<ms>` starts it at that
    * position; MP3 and ADTS output can start some frames early.

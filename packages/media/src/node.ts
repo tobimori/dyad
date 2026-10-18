@@ -352,3 +352,6 @@ export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
       );
     }),
   );
+
+export { openAudio };
+export { AudioMeasurement, measureAudio } from "./audio-analysis.ts";
