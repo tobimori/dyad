@@ -390,6 +390,7 @@ export function App(props: {
   const pageContext = () => {
     if (route instanceof AlbumRoute) return "album";
     if (route instanceof ArtistRoute) return "artist";
+    if (route instanceof PlaylistRoute) return "playlist";
     return "library";
   };
 

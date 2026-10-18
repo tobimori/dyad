@@ -244,6 +244,7 @@ export const PlayContext = Schema.Literals([
   "album",
   "artist",
   "home",
+  "playlist",
 ]);
 
 export const AudioContainer = Schema.Literals(["mp3", "flac", "mp4", "adts", "ogg", "webm"]);

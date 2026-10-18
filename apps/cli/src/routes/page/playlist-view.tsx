@@ -32,7 +32,7 @@ export function usePlaylist(atoms: ServerAtoms, route: SectionRoute | PageRoute)
     () =>
       entryItems(
         AsyncResult.isSuccess(result) ? result.value : [],
-        "library",
+        "playlist",
         (entry) => entry.entryId,
       ),
     [result],
