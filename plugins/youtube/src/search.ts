@@ -1,10 +1,10 @@
 import { CreditedArtist, ProviderError, ProviderSource } from "@dyad/plugin";
 import { getJson, HttpStatusError } from "@dyad/plugin/http";
+import { clockMs } from "@dyad/plugin/tracklist";
 import { Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import { searchVideos } from "./api.ts";
-import { clockMs } from "./tracklist.ts";
 
 const remix = { clientName: "WEB_REMIX", clientVersion: "1.20260617.01.00", hl: "en", gl: "US" };
 

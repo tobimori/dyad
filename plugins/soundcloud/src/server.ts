@@ -5,6 +5,7 @@ import { HttpClient } from "effect/http";
 import { clientIdCache, provider, resolveTrack, searchTracks } from "./api.ts";
 import { readTrending } from "./home.ts";
 import { readSet, readUser } from "./pages.ts";
+import { trackTracklists } from "./tracklists.ts";
 
 /**
  * Searches SoundCloud and plays the tracks that play in full without an account. The plugin uses
@@ -27,6 +28,8 @@ export const soundcloudPlugin = new Plugin({
           artist: (userId) => readUser(withClientId, userId).pipe(Effect.provide(services)),
           album: (setId) => readSet(withClientId, setId).pipe(Effect.provide(services)),
           home: () => readTrending(withClientId).pipe(Effect.provide(services)),
+          tracklists: (externalId) =>
+            trackTracklists(withClientId, externalId).pipe(Effect.provide(services)),
           metadataPriority: 10,
           uploads: true,
           download: { leaseDays: 30 },

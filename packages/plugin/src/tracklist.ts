@@ -1,10 +1,12 @@
-import { TracklistEntry } from "@dyad/plugin";
+import { TracklistEntry } from "./index.ts";
 
 const clock = /[[(]?(?<![\d:])((?:\d{1,2}:)?\d{1,2}:[0-5]\d)(?![\d:])[\])]?/g;
 const separators = "\\s\\-–—|:•·";
 // A list number such as `1.` or `2)` is not part of the artist
 const leading = new RegExp(`^[${separators}]*(?:\\d{1,3}[.)]\\s+)?[${separators}]*`);
 const trailing = new RegExp(`[${separators}]+$`);
+// Descriptions list profile links as `Instagram - https://…` or `Instagram - @name`
+const link = /https?:\/\/|www\.|@\w/i;
 
 /** Milliseconds of a clock time such as `1:02:03` or `12:34` */
 export const clockMs = (text: string) =>
@@ -32,4 +34,14 @@ export const parseTracklist = (text: string) =>
 
     const entry = tracklistEntry(line.replaceAll(clock, " "), clockMs(time[1]));
     return entry === undefined ? [] : [entry];
+  });
+
+/**
+ * The lines such as `Artist - Title` or `1. Artist - Title`, for a tracklist without times. A line
+ * without both artist and title, or with a link, is not a track.
+ */
+export const parseUntimedTracklist = (text: string) =>
+  text.split("\n").flatMap((line) => {
+    const entry = link.test(line) ? undefined : tracklistEntry(line.replaceAll(clock, " "), null);
+    return entry?.artist == null ? [] : [entry];
   });

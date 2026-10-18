@@ -44,7 +44,10 @@ const SearchResults = Schema.Struct({ collection: Schema.Array(Track) });
 const StreamUrl = Schema.Struct({ url: Schema.String });
 
 // The numeric track ID stays the same when the uploader renames the track or the permalink
-const ExternalId = Schema.String.check(Schema.isPattern(/^\d+$/));
+export const decodeTrackId = (externalId: string) =>
+  Schema.decodeEffect(Schema.String.check(Schema.isPattern(/^\d+$/)))(externalId).pipe(
+    Effect.mapError(() => new ProviderError({ reason: "Invalid track ID" })),
+  );
 
 // The web client has its `client_id` in one of its script bundles, usually in the last one
 const scrapeClientId = Effect.gen(function* () {
@@ -148,9 +151,7 @@ export const resolveTrack = (
   externalId: string,
 ) =>
   Effect.gen(function* () {
-    const trackId = yield* Schema.decodeEffect(ExternalId)(externalId).pipe(
-      Effect.mapError(() => new ProviderError({ reason: "Invalid track ID" })),
-    );
+    const trackId = yield* decodeTrackId(externalId);
 
     const track = yield* requestApi(
       withClientId,

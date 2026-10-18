@@ -7,10 +7,10 @@ import {
 } from "@dyad/plugin";
 import { getJson, HttpStatusError, makeScrapedToken, send } from "@dyad/plugin/http";
 import type { HttpRequestError } from "@dyad/plugin/http";
+import { clockMs, parseTracklist, tracklistEntry } from "@dyad/plugin/tracklist";
 import { Effect, Option, Redacted, Schema, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
-import { clockMs, parseTracklist, tracklistEntry } from "./tracklist.ts";
 import { clusterOffset } from "./webm.ts";
 
 export const provider = "youtube";

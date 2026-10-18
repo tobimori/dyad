@@ -141,7 +141,7 @@ export class ProviderTracklist extends Data.Class<{
   readonly entries: ReadonlyArray<TracklistEntry>;
   /**
    * From 0 to 1, for the selection among the candidates of a source: 1 for structured platform
-   * data, 0.9 for chapters, 0.8 for a description, 0.6 for a comment
+   * data, 0.9 for chapters, 0.8 for a description, 0.6 for a comment, 0.5 for a list without times
    */
   readonly confidence: number;
 }> {}
