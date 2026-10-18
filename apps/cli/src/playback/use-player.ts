@@ -6,7 +6,7 @@ import {
 } from "@dyad/client-runtime";
 import type { SessionClient } from "@dyad/client-runtime";
 import { SessionCommand } from "@dyad/domain";
-import type { PlayContext, SourceSummary } from "@dyad/domain";
+import type { OutputId, PlayContext, SourceSummary } from "@dyad/domain";
 import { Clock, Effect, Fiber, Random, Schedule, Stream, SubscriptionRef } from "effect";
 import { useEffect, useState } from "react";
 
@@ -25,7 +25,7 @@ const nextRepeatMode = { off: "all", all: "one", one: "off" } as const;
 
 const failureTexts = {
   nothing_to_play: "Nothing to play",
-  output_unavailable: "No device plays this session",
+  output_unavailable: "The output is offline. Press o to choose one.",
   queue_full: "The queue is full",
   // Another client changed the queue or the transport first
   entry_not_found: null,
@@ -41,6 +41,27 @@ const window = (sources: ReadonlyArray<SourceSummary>, index: number) => {
   };
 };
 
+/** The view of the session. It renders again on each change. */
+export function useSessionView(
+  session: typeof SessionClient.Service,
+  run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>,
+) {
+  const [view, setView] = useState(() => SubscriptionRef.getUnsafe(session.view));
+
+  useEffect(() => {
+    const following = run(
+      Stream.runForEach(SubscriptionRef.changes(session.view), (next) =>
+        Effect.sync(() => setView(next)),
+      ),
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(following));
+    };
+  }, []);
+
+  return view;
+}
+
 /** Shows the server session and sends the user's commands to it */
 export function usePlayer(props: {
   readonly session: typeof SessionClient.Service;
@@ -50,22 +71,17 @@ export function usePlayer(props: {
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly notify: (message: string) => void;
 }) {
-  const [view, setView] = useState(() => SubscriptionRef.getUnsafe(props.session.view));
+  const view = useSessionView(props.session, props.run);
   // A playback failure on this device. It stays until the next entry starts.
   const [error, setError] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    const following = props.run(
-      Stream.runForEach(SubscriptionRef.changes(props.session.view), (next) =>
-        Effect.sync(() => setView(next)),
-      ),
-    );
     const engine = props.engine?.run(props.session, setError);
-    const playing = engine === undefined ? null : props.run(engine);
+    if (engine === undefined) return;
+    const playing = props.run(engine);
     return () => {
-      Effect.runFork(Fiber.interrupt(following));
-      if (playing !== null) Effect.runFork(Fiber.interrupt(playing));
+      Effect.runFork(Fiber.interrupt(playing));
     };
   }, []);
 
@@ -128,11 +144,14 @@ export function usePlayer(props: {
     send(SessionCommand.cases.Seek.make({ entryId: current.id, positionMs }));
   };
 
-  const setVolumeTo = (value: number) => {
-    if (volumeTarget === null) return;
+  const setOutputVolume = (outputId: OutputId, value: number) => {
     // Rounding removes the float error of many steps, so that the ends stay reachable
     const rounded = Math.round(Math.min(1, Math.max(0, value)) * 100) / 100;
-    send(SessionCommand.cases.SetVolume.make({ outputId: volumeTarget, volume: rounded }));
+    send(SessionCommand.cases.SetVolume.make({ outputId, volume: rounded }));
+  };
+
+  const setVolumeTo = (value: number) => {
+    if (volumeTarget !== null) setOutputVolume(volumeTarget, value);
   };
 
   const playList = (
@@ -227,6 +246,10 @@ export function usePlayer(props: {
     seekStepMs,
     setVolume: setVolumeTo,
     changeVolume: (direction: 1 | -1) => setVolumeTo((volume ?? 0) + direction * volumeStep),
+    setOutputVolume,
+    /** Plays the session on `outputId` from the current position */
+    transfer: (outputId: OutputId) =>
+      send(SessionCommand.cases.Transfer.make({ outputId, play: null })),
     toggleShuffle: () => send(SessionCommand.cases.SetShuffle.make({ on: !playback.shuffle })),
     cycleRepeat: () =>
       send(SessionCommand.cases.SetRepeat.make({ mode: nextRepeatMode[playback.repeat] })),

@@ -44,6 +44,7 @@ export const commands = {
   volumeDown: command("playback.volumeDown", "Volume down", "Playback", ["-"]),
   shuffle: command("playback.shuffle", "Shuffle", "Playback", ["s"]),
   repeat: command("playback.repeat", "Repeat: off, all, one", "Playback", ["shift+r"]),
+  outputs: command("playback.outputs", "Play on another output", "Playback", ["o"]),
   nowPlaying: command("view.nowPlaying", "Now playing", "Playback", ["p"], "playing"),
 
   play: command("list.play", "Play, queue the rest", "Browse", ["return"], "play"),

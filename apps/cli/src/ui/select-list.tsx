@@ -24,6 +24,7 @@ export function SelectList<A>(props: {
   readonly filter?: string;
   readonly empty?: string;
   readonly onChoose: (value: A) => void;
+  readonly onHighlight?: (value: A) => void;
 }) {
   const theme = useTheme();
   const container = useRef<BoxRenderable | null>(null);
@@ -69,6 +70,10 @@ export function SelectList<A>(props: {
   useEffect(() => {
     scroll.current?.scrollChildIntoView(rowId(index));
   }, [index]);
+
+  useEffect(() => {
+    if (current !== undefined) props.onHighlight?.(current.value);
+  }, [current?.value]);
 
   const titleWidth = props.width - 2;
 

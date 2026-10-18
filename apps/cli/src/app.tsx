@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
+import { OutputsDialog } from "./component/dialog-outputs.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
@@ -458,6 +459,18 @@ export function App(props: {
   const playbackCommands: ReadonlyArray<readonly [Command, () => void]> = [
     [commands.help, () => dialog.push(<HelpDialog />)],
     [commands.plugins, () => dialog.push(<PluginsDialog host={props.plugins} run={props.run} />)],
+    [
+      commands.outputs,
+      () =>
+        dialog.push(
+          <OutputsDialog
+            session={props.session}
+            run={props.run}
+            transfer={player.transfer}
+            setVolume={player.setOutputVolume}
+          />,
+        ),
+    ],
     [commands.queue, () => enterSectionOf(commands.queue)],
     [commands.search, () => enterSectionOf(commands.search)],
     [commands.nextSection, () => moveSection(1)],
