@@ -370,6 +370,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+      fractional-indexing:
+        specifier: 'catalog:'
+        version: 3.2.0
 
   packages/db:
     dependencies:

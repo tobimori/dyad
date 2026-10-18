@@ -73,6 +73,11 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
   providerName: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
   ),
+  /** The bound recording, which a playlist entry saves. `null` when the server cannot tell it. */
+  recordingId: Schema.NullOr(RecordingId).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 /** `YYYY`, `YYYY-MM` or `YYYY-MM-DD` */

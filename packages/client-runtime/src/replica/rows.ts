@@ -11,8 +11,8 @@ import {
   sourceVariant,
 } from "@dyad/db/client";
 import { SyncRow } from "@dyad/domain";
-import type { CatalogGroup, SyncScope, SyncTable } from "@dyad/domain";
-import { mergeRow } from "@dyad/sync";
+import type { CatalogGroup, SyncChange, SyncScope, SyncTable } from "@dyad/domain";
+import { applyChange, changeTarget, mergeRow } from "@dyad/sync";
 import { eq, inArray, or } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteInsertValue, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Array as Arr, Data, Effect, Option, Schema } from "effect";
@@ -113,6 +113,30 @@ export const mergeRows = (rows: ReadonlyArray<SyncRow>) =>
       yield* deleteWhereIn(table.rows, table.id, [...changed.keys()]);
       yield* insertAll(table.rows, [...changed.values()].map(columnsOf));
       changedTables.add(table.name);
+    }
+    return changedTables;
+  }).pipe(Effect.orDie);
+
+/** Applies own changes in order. Returns the tables that changed. */
+export const applyChanges = (changes: ReadonlyArray<SyncChange>) =>
+  Effect.gen(function* () {
+    const db = yield* ClientDatabase;
+    const changedTables = new Set<SyncTable>();
+
+    for (const change of changes) {
+      const { table, id } = changeTarget(change);
+      const synced = syncedTables[table];
+      const [stored] = yield* db.select().from(synced.rows).where(eq(synced.id, id));
+      const current =
+        stored === undefined
+          ? undefined
+          : yield* Schema.decodeUnknownEffect(SyncRow)({ ...stored, table });
+
+      const next = applyChange(current, change);
+      if (Option.isNone(next)) continue;
+      yield* deleteWhereIn(synced.rows, synced.id, [id]);
+      yield* insertAll(synced.rows, [columnsOf(next.value)]);
+      changedTables.add(table);
     }
     return changedTables;
   }).pipe(Effect.orDie);

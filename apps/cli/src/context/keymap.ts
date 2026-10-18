@@ -10,7 +10,7 @@ export class Command extends Data.Class<{
   readonly id: string;
   readonly title: string;
   /** `null` for keys that only work inside one control and that the help does not list */
-  readonly group: "Playback" | "Browse" | "Queue" | "Track" | "Other" | null;
+  readonly group: "Playback" | "Browse" | "Queue" | "Track" | "Playlist" | "Other" | null;
   /** Default keys in `@opentui/keymap` notation */
   readonly keys: ReadonlyArray<string>;
   /** The footer shows the first key of a command with a hint while the command is active */
@@ -81,7 +81,26 @@ export const commands = {
   addAllToQueue: command("page.addAllToQueue", "Add all to queue", "Browse", []),
   downloadAll: command("page.download", "Download all", "Browse", []),
   removeAllDownload: command("page.removeDownload", "Remove the download", "Browse", []),
+  addToPlaylist: command("track.addToPlaylist", "Add to playlist", "Track", ["l"]),
   remove: command("queue.remove", "Remove from queue", "Queue", ["d", "delete"], "remove"),
+  newPlaylist: command("playlist.new", "New playlist", "Playlist", ["c"], "new"),
+  renamePlaylist: command("playlist.rename", "Rename the playlist", "Playlist", ["e"], "rename"),
+  deletePlaylist: command("playlist.delete", "Delete the playlist", "Playlist", []),
+  removeEntry: command(
+    "playlist.removeEntry",
+    "Remove from the playlist",
+    "Playlist",
+    ["d", "delete"],
+    "remove",
+  ),
+  moveEntryUp: command("playlist.moveUp", "Move up in the playlist", "Playlist", [
+    "shift+up",
+    "shift+k",
+  ]),
+  moveEntryDown: command("playlist.moveDown", "Move down in the playlist", "Playlist", [
+    "shift+down",
+    "shift+j",
+  ]),
   clear: command("queue.clear", "Clear, keep current", "Queue", ["c"], "clear"),
 
   leaveInput: command("input.leave", "Leave the search field", null, ["escape", "down"], "leave"),
@@ -99,7 +118,7 @@ export const commands = {
 };
 
 export const helpColumns = [
-  ["Playback", "Other"],
+  ["Playback", "Playlist", "Other"],
   ["Browse", "Queue", "Track"],
 ] as const;
 

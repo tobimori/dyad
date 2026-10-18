@@ -1,11 +1,11 @@
 import { playbackSession, providerItem, providerPage, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { SourceSummary } from "@dyad/domain";
+import { RecordingId, SourceSummary } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
 import { and, eq, lt, notInArray, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
 
-import { sourceId } from "./ids.ts";
+import { boundRecordingId, sourceId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import { providerAlbumRef, providerArtistRef } from "./refs.ts";
@@ -21,6 +21,8 @@ const sweepJob = "provider-cache.sweep";
 export class CachedSource extends Data.Class<{
   /** The ID that the result gets in `source` when it is played */
   readonly sourceId: string;
+  /** The recording that `writeSource` binds the source to */
+  readonly recordingId: RecordingId;
   readonly provider: string;
   /** Normalized with `normalizeIsrc` */
   readonly isrc: string | null;
@@ -62,14 +64,16 @@ export const cachedSummary = (item: CachedSource, providerName: string) => {
     albumRef: albumId === null ? null : providerAlbumRef(item.provider, albumId),
     explicit: item.source.explicit ?? false,
     providerName,
+    recordingId: item.recordingId,
   });
 };
 
 export const toCachedSource = (provider: string, source: ProviderSource) =>
   Effect.gen(function* () {
     const id = yield* sourceId(provider, source.externalId);
+    const recordingId = RecordingId.make(yield* boundRecordingId(provider, source.externalId));
     const isrc = source.isrc === null ? null : normalizeIsrc(source.isrc);
-    return new CachedSource({ sourceId: id, provider, isrc, source });
+    return new CachedSource({ sourceId: id, recordingId, provider, isrc, source });
   });
 
 /** Replaces the cached results of `provider` with the same external IDs */
@@ -120,8 +124,15 @@ export const cachedProviderSource = (id: string) =>
     if (row === undefined) return Option.none();
 
     const source = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(Effect.orDie);
+    const recordingId = RecordingId.make(yield* boundRecordingId(row.provider, source.externalId));
     return Option.some(
-      new CachedSource({ sourceId: id, provider: row.provider, isrc: row.isrc, source }),
+      new CachedSource({
+        sourceId: id,
+        recordingId,
+        provider: row.provider,
+        isrc: row.isrc,
+        source,
+      }),
     );
   });
 

@@ -8,7 +8,7 @@ import {
   sourceVariant,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, SourceSummary } from "@dyad/domain";
+import { CurrentPrincipal, RecordingId, SourceSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import { and, eq, getColumns, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
@@ -386,6 +386,7 @@ export const sourceSummary = (row: {
         : libraryAlbumRef(row.albumArtistKey, row.albumKey),
     explicit: row.canonical?.explicit ?? false,
     providerName: row.providerName,
+    recordingId: row.source.recordingId === null ? null : RecordingId.make(row.source.recordingId),
   });
 };
 

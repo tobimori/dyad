@@ -230,6 +230,7 @@ const player = (controller: boolean) =>
                       downloads={downloads}
                       downloadQuality={settings.downloadQuality ?? "high"}
                       saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
+                      playlists={replica.playlists}
                     />
                   </DialogProvider>
                 </ToastProvider>

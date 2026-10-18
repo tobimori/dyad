@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import type { Action } from "../component/dialog-actions.tsx";
+import type { usePlaylistActions } from "../component/dialog-playlists.tsx";
 import type { SelectableRow } from "../component/row-list.tsx";
 import type { TrackItem } from "../component/track-list.tsx";
 import type { usePlayer } from "../playback/use-player.ts";
@@ -46,6 +47,7 @@ export class Section extends Data.Class<{
     readonly player: ReturnType<typeof usePlayer>;
     readonly search: ReturnType<typeof useSearch>;
     readonly focusList: () => void;
+    readonly playlistActions: ReturnType<typeof usePlaylistActions>;
   }) => SectionView;
 }> {}
 

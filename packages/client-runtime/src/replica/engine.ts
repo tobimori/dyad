@@ -1,7 +1,15 @@
-import { libraryItem, playlistEntry, recording, syncQueue, syncScope } from "@dyad/db/client";
+import {
+  libraryItem,
+  playlist,
+  playlistEntry,
+  recording,
+  syncQueue,
+  syncScope,
+} from "@dyad/db/client";
 import {
   CatalogCursor,
   DeviceId,
+  HybridLogicalClock,
   PlayEventAppend,
   PlayEventRow,
   Principal,
@@ -15,8 +23,9 @@ import {
   UserId,
   syncProtocolVersion,
 } from "@dyad/domain";
-import type { PlayContext, SyncPullResponse } from "@dyad/domain";
-import { and, asc, count, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import type { PlayContext, SyncChange, SyncPullResponse } from "@dyad/domain";
+import { changeTarget, makeHlcClock } from "@dyad/sync";
+import { and, asc, count, eq, inArray, isNull, lte, max, sql } from "drizzle-orm";
 import {
   Clock,
   Context,
@@ -41,7 +50,9 @@ import {
   missingRecordingsState,
   stateKey,
 } from "./database.ts";
+import { playlistEdits } from "./playlists.ts";
 import {
+  applyChanges,
   catalogTables,
   deleteScope,
   mergeRows,
@@ -56,6 +67,8 @@ const principalState = stateKey("principal", Principal);
 const epochState = stateKey("epoch", Schema.String);
 const catalogCursorState = stateKey("catalogCursor", CatalogCursor);
 const nextMutationIdState = stateKey("nextMutationId", Schema.Int);
+// Server time minus local time at the last pull, so that HLCs follow the server clock
+const clockOffsetState = stateKey("clockOffset", Schema.Finite);
 
 /** The replica learns its user and device at its first connection, and needs them for own rows */
 export class ReplicaUnbound extends Data.TaggedError("ReplicaUnbound")<{}> {}
@@ -82,6 +95,32 @@ const makeReplica = Effect.gen(function* () {
       onNone: () => newReplicaId,
       onSome: Effect.succeed,
     }),
+  );
+
+  const clockOffset = yield* Ref.make(Option.getOrElse(yield* clockOffsetState.get, () => 0));
+  const makeClock = (latest: HybridLogicalClock | null) =>
+    Effect.gen(function* () {
+      return yield* makeHlcClock({
+        replicaId: yield* Ref.get(replicaId),
+        latest,
+        now: Effect.map(
+          Effect.all([Clock.currentTimeMillis, Ref.get(clockOffset)]),
+          ([now, offset]) => Math.round(now + offset),
+        ),
+      });
+    });
+  const stored = yield* Effect.all([
+    db.select({ hlc: max(playlist.hlc) }).from(playlist),
+    db.select({ hlc: max(playlistEntry.hlc) }).from(playlistEntry),
+    db.select({ hlc: max(libraryItem.hlc) }).from(libraryItem),
+  ]).pipe(Effect.orDie);
+  const latest =
+    stored
+      .flatMap(([row]) => row?.hlc ?? [])
+      .toSorted()
+      .at(-1) ?? null;
+  const clock = yield* Ref.make(
+    yield* makeClock(latest === null ? null : HybridLogicalClock.make(latest)),
   );
 
   // One local transaction. Atoms that read the changed tables run again after the commit.
@@ -160,10 +199,13 @@ const makeReplica = Effect.gen(function* () {
 
           // Queued changes of the replaced rows apply again
           const pending = yield* queued();
-          const again = pending
-            .flatMap((mutation) => mutation.changes)
-            .filter((change) => touched.has(`${change.row.table}:${change.row.id}`));
-          yield* mergeRows(again.map((change) => change.row));
+          const again = pending.flatMap((mutation) =>
+            mutation.changes.filter((change) => {
+              const target = changeTarget(change);
+              return touched.has(`${target.table}:${target.id}`);
+            }),
+          );
+          yield* applyChanges(again);
           return tables;
         }),
       );
@@ -294,6 +336,9 @@ const makeReplica = Effect.gen(function* () {
         }),
       );
       yield* learnPrincipal(response);
+      const offset = response.serverTime - (yield* Clock.currentTimeMillis);
+      yield* Ref.set(clockOffset, offset);
+      yield* clockOffsetState.set(offset);
       yield* commit(applyPage(followed, response));
       if (response.more) {
         wanted = [];
@@ -329,6 +374,11 @@ const makeReplica = Effect.gen(function* () {
     Effect.catchTag("ReplicaMismatch", () =>
       newReplicaId.pipe(
         Effect.flatMap((id) => Ref.set(replicaId, id)),
+        // Clock values carry the replica ID
+        Effect.andThen(Ref.get(clock)),
+        Effect.flatMap((old) => old.next),
+        Effect.flatMap(makeClock),
+        Effect.flatMap((next) => Ref.set(clock, next)),
         Effect.andThen(renumber(1)),
         Effect.andThen(push),
         Effect.andThen(pull),
@@ -363,6 +413,48 @@ const makeReplica = Effect.gen(function* () {
     }),
   );
 
+  /** Applies the changes of `build` as one mutation and queues it for the server */
+  const mutate = <A>(
+    build: (
+      next: Effect.Effect<HybridLogicalClock>,
+    ) => Effect.Effect<
+      readonly [A, ReadonlyArray<SyncChange>],
+      never,
+      ClientDatabase | Crypto.Crypto
+    >,
+  ) =>
+    Effect.gen(function* () {
+      const next = (yield* Ref.get(clock)).next;
+      const [value, tables] = yield* db
+        .transaction(() =>
+          Effect.gen(function* () {
+            const [value, changes] = yield* build(next);
+            const [first, ...rest] = changes;
+            if (first === undefined) return [value, new Set<string>()] as const;
+
+            const id = Option.getOrElse(yield* nextMutationIdState.get, () => 1);
+            const mutation = new SyncMutation({ id, changes: [first, ...rest] });
+            yield* db.insert(syncQueue).values({
+              mutationId: id,
+              mutation: yield* Schema.encodeEffect(SyncMutation)(mutation),
+            });
+            yield* nextMutationIdState.set(id + 1);
+            return [value, yield* applyChanges(changes)] as const;
+          }),
+        )
+        .pipe(Effect.provideService(Crypto.Crypto, crypto), Effect.orDie);
+      yield* reactivity.invalidate([...tables]);
+      yield* Queue.offer(wake, undefined);
+      return value;
+    }).pipe(Effect.provideContext(context));
+
+  const owner = Effect.flatMap(principalState.get, (principal) =>
+    Option.match(principal, {
+      onNone: () => Effect.fail(new ReplicaUnbound()),
+      onSome: (value) => Effect.succeed(value.userId),
+    }),
+  ).pipe(Effect.provideContext(context));
+
   return {
     /** `live` while the server sends hints */
     status,
@@ -379,36 +471,28 @@ const makeReplica = Effect.gen(function* () {
         const principal = yield* principalState.get;
         if (Option.isNone(principal)) return yield* new ReplicaUnbound();
 
-        yield* commit(
-          Effect.gen(function* () {
-            const id = Option.getOrElse(yield* nextMutationIdState.get, () => 1);
-            const row = new PlayEventRow({
-              table: "play_event",
-              id: play.id,
-              userId: principal.value.userId,
-              deviceId: principal.value.deviceId,
-              sourceId: play.sourceId,
-              recordingId: null,
-              startedAt: Math.round(play.startedAt),
-              playedMs: Math.round(play.playedMs),
-              completed: play.completed,
-              context: play.context,
-              scrobbled: false,
-            });
-            const mutation = new SyncMutation({
-              id,
-              changes: [new PlayEventAppend({ kind: "play_event.append", schemaVersion: 1, row })],
-            });
-            yield* db.insert(syncQueue).values({
-              mutationId: id,
-              mutation: yield* Schema.encodeEffect(SyncMutation)(mutation),
-            });
-            yield* nextMutationIdState.set(id + 1);
-            return yield* mergeRows([row]);
-          }).pipe(Effect.orDie),
+        const row = new PlayEventRow({
+          table: "play_event",
+          id: play.id,
+          userId: principal.value.userId,
+          deviceId: principal.value.deviceId,
+          sourceId: play.sourceId,
+          recordingId: null,
+          startedAt: Math.round(play.startedAt),
+          playedMs: Math.round(play.playedMs),
+          completed: play.completed,
+          context: play.context,
+          scrobbled: false,
+        });
+        yield* mutate(() =>
+          Effect.succeed([
+            undefined,
+            [new PlayEventAppend({ kind: "play_event.append", schemaVersion: 1, row })],
+          ]),
         );
-        yield* Queue.offer(wake, undefined);
       }).pipe(Effect.provideContext(context)),
+    /** Edits of the user's playlists. They apply at once, also offline. */
+    playlists: playlistEdits(mutate, owner),
     /** The mutations that the server has not acknowledged */
     pending: db
       .select({ count: count() })

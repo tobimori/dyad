@@ -57,34 +57,35 @@ export class HlcClock extends Context.Service<
 /** The wall time of `hlc` in ms */
 export const wallTimeOf = (hlc: HybridLogicalClock) => decode(hlc).wallTime;
 
-export const hlcClockLayer = (options: {
+/** A clock that continues after `latest` */
+export const makeHlcClock = (options: {
   readonly replicaId: ReplicaId;
   /** The highest stored value. Later values are greater, also when the wall clock went back. */
   readonly latest: HybridLogicalClock | null;
   /** Wall time in ms. A client adds its offset to the server clock. */
   readonly now?: Effect.Effect<number>;
 }) =>
-  Layer.effect(
-    HlcClock,
-    Effect.gen(function* () {
-      const now = options.now ?? Clock.currentTimeMillis;
-      const last = yield* Ref.make(options.latest === null ? origin : decode(options.latest));
+  Effect.gen(function* () {
+    const now = options.now ?? Clock.currentTimeMillis;
+    const last = yield* Ref.make(options.latest === null ? origin : decode(options.latest));
 
-      const advance = (remote: ClockTime) =>
-        Effect.gen(function* () {
-          const wallTime = yield* now;
-          const time = yield* Ref.modify(last, (previous) => {
-            const value = tick(previous, wallTime, remote);
-            return [value, value];
-          });
-
-          return encode(time, options.replicaId);
+    const advance = (remote: ClockTime) =>
+      Effect.gen(function* () {
+        const wallTime = yield* now;
+        const time = yield* Ref.modify(last, (previous) => {
+          const value = tick(previous, wallTime, remote);
+          return [value, value];
         });
 
-      // A local event has no remote value. `origin` is not greater than any clock value.
-      return {
-        next: advance(origin),
-        receive: (remote) => advance(decode(remote)),
-      };
-    }),
-  );
+        return encode(time, options.replicaId);
+      });
+
+    // A local event has no remote value. `origin` is not greater than any clock value.
+    return HlcClock.of({
+      next: advance(origin),
+      receive: (remote) => advance(decode(remote)),
+    });
+  });
+
+export const hlcClockLayer = (options: Parameters<typeof makeHlcClock>[0]) =>
+  Layer.effect(HlcClock, makeHlcClock(options));

@@ -5,12 +5,18 @@ import {
   playlistEntry,
   replica,
   replicaIdentity,
+  source,
   syncRejection,
 } from "@dyad/db";
 import { Database, ReplicaDatabase, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   CurrentPrincipal,
-  PlayEventRow,
+  PlaylistCreate,
+  PlaylistEntryAdd,
+  PlaylistEntryPatch,
+  PlaylistEntryRow,
+  PlaylistPatch,
+  PlaylistRow,
   ReplicaId,
   ReplicaMismatch,
   ScopeCursor,
@@ -26,14 +32,16 @@ import {
   syncProtocolVersion,
 } from "@dyad/domain";
 import type {
+  HybridLogicalClock,
+  SyncChange,
   SyncMutation,
   SyncPullRequest,
   SyncPushRequest,
   SyncTable,
   UserId,
 } from "@dyad/domain";
-import { mergeRow } from "@dyad/sync";
-import { and, asc, eq, gt, gte, inArray, lt, or } from "drizzle-orm";
+import { HlcClock, applyChange, changeTarget, wallTimeOf } from "@dyad/sync";
+import { and, asc, eq, gt, gte, lt, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import {
@@ -42,6 +50,7 @@ import {
   Data,
   Effect,
   Layer,
+  Match,
   Option,
   PubSub,
   Ref,
@@ -51,6 +60,9 @@ import {
 } from "effect";
 
 import { readCatalog } from "./catalog-sync.ts";
+import { maxClockAheadMs } from "./clock.ts";
+import { cachedProviderSource } from "./provider-cache.ts";
+import { addProviderSource } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 
 const pageLimit = 1000;
@@ -91,40 +103,41 @@ class SyncSource extends Data.Class<{
   readonly id: SQLiteColumn;
 }> {}
 
+const syncSources = {
+  library_item: new SyncSource({
+    table: "library_item",
+    rows: libraryItem,
+    scopeColumn: libraryItem.userId,
+    changeSeq: libraryItem.changeSeq,
+    id: libraryItem.id,
+  }),
+  play_event: new SyncSource({
+    table: "play_event",
+    rows: playEvent,
+    scopeColumn: playEvent.userId,
+    changeSeq: playEvent.changeSeq,
+    id: playEvent.id,
+  }),
+  playlist: new SyncSource({
+    table: "playlist",
+    rows: playlist,
+    scopeColumn: playlist.id,
+    changeSeq: playlist.changeSeq,
+    id: playlist.id,
+  }),
+  playlist_entry: new SyncSource({
+    table: "playlist_entry",
+    rows: playlistEntry,
+    scopeColumn: playlistEntry.playlistId,
+    changeSeq: playlistEntry.changeSeq,
+    id: playlistEntry.id,
+  }),
+} satisfies Record<SyncTable, SyncSource>;
+
 const sourcesOf = (scope: SyncScope) =>
   scope.startsWith("user:")
-    ? [
-        new SyncSource({
-          table: "library_item",
-          rows: libraryItem,
-          scopeColumn: libraryItem.userId,
-          changeSeq: libraryItem.changeSeq,
-          id: libraryItem.id,
-        }),
-        new SyncSource({
-          table: "play_event",
-          rows: playEvent,
-          scopeColumn: playEvent.userId,
-          changeSeq: playEvent.changeSeq,
-          id: playEvent.id,
-        }),
-      ]
-    : [
-        new SyncSource({
-          table: "playlist",
-          rows: playlist,
-          scopeColumn: playlist.id,
-          changeSeq: playlist.changeSeq,
-          id: playlist.id,
-        }),
-        new SyncSource({
-          table: "playlist_entry",
-          rows: playlistEntry,
-          scopeColumn: playlistEntry.playlistId,
-          changeSeq: playlistEntry.changeSeq,
-          id: playlistEntry.id,
-        }),
-      ];
+    ? [syncSources.library_item, syncSources.play_event]
+    : [syncSources.playlist, syncSources.playlist_entry];
 
 // Rows of one scope sort by `(change_seq, table, id)`. `rowKey` is `<table>:<id>`.
 const afterCursor = (source: SyncSource, cursor: ScopeCursor) => {
@@ -288,42 +301,176 @@ export const syncPull = (request: SyncPullRequest) =>
     );
   });
 
-const decodePlay = (row: typeof playEvent.$inferSelect) =>
-  Schema.decodeUnknownEffect(PlayEventRow)({ ...row, table: "play_event" }).pipe(Effect.orDie);
+const readRow = (table: SyncTable, id: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const source = syncSources[table];
+    const [row] = yield* db.select().from(source.rows).where(eq(source.id, id));
+    if (row === undefined) return undefined;
+    return yield* Schema.decodeUnknownEffect(SyncRow)({ ...row, table }).pipe(Effect.orDie);
+  });
+
+const writeRow = (row: SyncRow, changeSeq: number) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const source = syncSources[row.table];
+    const { table: _, ...values } = row;
+    yield* db
+      .insert(source.rows)
+      .values({ ...values, changeSeq })
+      .onConflictDoUpdate({ target: source.id, set: { ...values, changeSeq } });
+  });
 
 const touchedRows = (mutation: SyncMutation) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const ids = mutation.changes.map((change) => change.row.id);
-    const stored = yield* db.select().from(playEvent).where(inArray(playEvent.id, ids));
-    const rows = new Map((yield* Effect.forEach(stored, decodePlay)).map((row) => [row.id, row]));
-
-    return ids.map(
-      (id) => new SyncTouchedRow({ table: "play_event", id, row: rows.get(id) ?? null }),
-    );
-  });
-
-const rejectedResult = (mutation: SyncMutation, reason: "forbidden") =>
-  Effect.map(
-    touchedRows(mutation),
-    (rows) => new SyncMutationResult({ id: mutation.id, outcome: "rejected", reason, rows }),
+  Effect.forEach(mutation.changes, (change) =>
+    Effect.gen(function* () {
+      const { table, id } = changeTarget(change);
+      return new SyncTouchedRow({ table, id, row: (yield* readRow(table, id)) ?? null });
+    }),
   );
 
-const appendPlay = (row: PlayEventRow, changeSeq: number) =>
+const mutationResult = (
+  mutation: SyncMutation,
+  outcome: "rejected" | "restamped",
+  reason: SyncMutationResult["reason"],
+) =>
+  Effect.map(
+    touchedRows(mutation),
+    (rows) => new SyncMutationResult({ id: mutation.id, outcome, reason, rows }),
+  );
+
+const hlcOf = (change: SyncChange) =>
+  Match.value(change).pipe(
+    Match.discriminatorsExhaustive("kind")({
+      "play_event.append": () => null,
+      "playlist.create": (create) => create.row.hlc,
+      "playlist_entry.add": (add) => add.row.hlc,
+      "playlist.patch": (patch) => patch.hlc,
+      "playlist_entry.patch": (patch) => patch.hlc,
+    }),
+  );
+
+const withHlc = (change: SyncChange, hlc: HybridLogicalClock) =>
+  Match.value(change).pipe(
+    Match.discriminatorsExhaustive("kind")({
+      "play_event.append": (append) => append,
+      "playlist.create": (create) =>
+        new PlaylistCreate({ ...create, row: new PlaylistRow({ ...create.row, hlc }) }),
+      "playlist_entry.add": (add) =>
+        new PlaylistEntryAdd({ ...add, row: new PlaylistEntryRow({ ...add.row, hlc }) }),
+      "playlist.patch": (patch) => new PlaylistPatch({ ...patch, hlc }),
+      "playlist_entry.patch": (patch) => new PlaylistEntryPatch({ ...patch, hlc }),
+    }),
+  );
+
+// Users edit only their own playlists. Imported playlists change only in the provider's app.
+const checkChange = (
+  change: SyncChange,
+  current: SyncRow | undefined,
+  rowAt: (table: SyncTable, id: string) => ReturnType<typeof readRow>,
+  principal: { readonly userId: UserId; readonly deviceId: string },
+) => {
+  const editable = (row: SyncRow | undefined) => {
+    if (row?.table !== "playlist" || row.deleted) return "not_found" as const;
+    return row.ownerId === principal.userId && row.origin === null ? null : ("forbidden" as const);
+  };
+
+  return Match.value(change).pipe(
+    Match.discriminatorsExhaustive("kind")({
+      "play_event.append": (append) =>
+        Effect.succeed(
+          append.row.userId === principal.userId && append.row.deviceId === principal.deviceId
+            ? null
+            : ("forbidden" as const),
+        ),
+      "playlist.create": (create) =>
+        Effect.succeed(
+          create.row.ownerId === principal.userId && current === undefined
+            ? null
+            : ("forbidden" as const),
+        ),
+      "playlist.patch": () => Effect.succeed(editable(current)),
+      "playlist_entry.add": (add) =>
+        current === undefined
+          ? Effect.map(rowAt("playlist", add.row.playlistId), editable)
+          : Effect.succeed("forbidden" as const),
+      "playlist_entry.patch": () =>
+        current?.table === "playlist_entry"
+          ? Effect.map(rowAt("playlist", current.playlistId), editable)
+          : Effect.succeed("not_found" as const),
+    }),
+  );
+};
+
+/**
+ * Checks the changes of a mutation in order, each against the rows after the changes before it.
+ * Returns the rows to write, or the reason to reject the whole mutation.
+ */
+const admitMutation = (
+  mutation: SyncMutation,
+  principal: { readonly userId: UserId; readonly deviceId: string },
+) =>
   Effect.gen(function* () {
-    const db = yield* Database;
-    const [stored] = yield* db.select().from(playEvent).where(eq(playEvent.id, row.id));
-    const current = stored === undefined ? undefined : yield* decodePlay(stored);
+    const clock = yield* HlcClock;
+    const now = yield* Clock.currentTimeMillis;
+    const rows = new Map<string, SyncRow | undefined>();
+    const rowAt = (table: SyncTable, id: string) => {
+      const key = `${table}:${id}`;
+      return rows.has(key) ? Effect.succeed(rows.get(key)) : readRow(table, id);
+    };
 
-    const merged = mergeRow(current, row);
-    if (Option.isNone(merged) || merged.value.table !== "play_event") return;
+    let restamped = false;
+    for (const original of mutation.changes) {
+      // A client clock far ahead would win every later conflict, so the server stamps the change
+      const hlc = hlcOf(original);
+      const ahead = hlc !== null && wallTimeOf(hlc) > now + maxClockAheadMs;
+      const change = ahead ? withHlc(original, yield* clock.next) : original;
+      if (ahead) restamped = true;
+      else if (hlc !== null) yield* clock.receive(hlc);
 
-    const { table: _, ...values } = merged.value;
-    yield* db
-      .insert(playEvent)
-      .values({ ...values, changeSeq })
-      .onConflictDoUpdate({ target: playEvent.id, set: { ...values, changeSeq } });
+      const { table, id } = changeTarget(change);
+      const current = yield* rowAt(table, id);
+      const reason = yield* checkChange(change, current, rowAt, principal);
+      if (reason !== null) return { reason, rows: [], restamped };
+
+      const merged = applyChange(current, change);
+      if (Option.isSome(merged)) rows.set(`${table}:${id}`, merged.value);
+    }
+    return {
+      reason: null,
+      rows: [...rows.values()].flatMap((row) => row ?? []),
+      restamped,
+    };
   });
+
+// A search result enters the catalog when a playlist refers to it, like when it plays
+const addEntrySources = (mutations: ReadonlyArray<SyncMutation>) =>
+  Effect.forEach(
+    mutations.flatMap((mutation) =>
+      mutation.changes.flatMap((change) =>
+        change.kind === "playlist_entry.add" && change.sourceId !== null
+          ? [{ sourceId: change.sourceId, recordingId: change.row.recordingId }]
+          : [],
+      ),
+    ),
+    ({ sourceId, recordingId }) =>
+      Effect.gen(function* () {
+        const db = yield* Database;
+        const [known] = yield* db
+          .select({ id: source.id })
+          .from(source)
+          .where(eq(source.id, sourceId));
+        if (known !== undefined) return;
+
+        const cached = yield* cachedProviderSource(sourceId);
+        if (Option.isSome(cached) && cached.value.recordingId === recordingId) {
+          yield* addProviderSource(cached.value);
+        }
+      }).pipe(
+        Effect.catchCause((cause) => Effect.logWarning("Cannot add the source of an entry", cause)),
+      ),
+    { discard: true },
+  );
 
 /** Admits the mutations of a client in order, as changes of this server */
 export const syncPush = (request: SyncPushRequest) =>
@@ -333,7 +480,7 @@ export const syncPush = (request: SyncPushRequest) =>
     const principal = yield* CurrentPrincipal;
     const replicaId = request.replicaId;
 
-    return yield* db.transaction(() =>
+    const response = yield* db.transaction(() =>
       Effect.gen(function* () {
         const admitted = yield* bindReplica(replicaId);
         const first = request.mutations[0];
@@ -365,27 +512,25 @@ export const syncPush = (request: SyncPushRequest) =>
           // A retry after a lost response gets the same result
           if (mutation.id <= last) {
             const reason = rejections.get(mutation.id);
-            if (reason !== undefined) results.push(yield* rejectedResult(mutation, reason));
+            if (reason !== undefined) {
+              results.push(yield* mutationResult(mutation, "rejected", reason));
+            }
             continue;
           }
 
           last = mutation.id;
-          const allowed = mutation.changes.every(
-            (change) =>
-              change.row.userId === principal.userId && change.row.deviceId === principal.deviceId,
-          );
-          if (!allowed) {
+          const admission = yield* admitMutation(mutation, principal);
+          if (admission.reason !== null) {
             yield* db
               .insert(syncRejection)
-              .values({ replicaId, mutationId: mutation.id, reason: "forbidden" });
-            results.push(yield* rejectedResult(mutation, "forbidden"));
+              .values({ replicaId, mutationId: mutation.id, reason: admission.reason });
+            results.push(yield* mutationResult(mutation, "rejected", admission.reason));
             continue;
           }
 
           const value = yield* changeSeq;
-          yield* Effect.forEach(mutation.changes, (change) => appendPlay(change.row, value), {
-            discard: true,
-          });
+          yield* Effect.forEach(admission.rows, (row) => writeRow(row, value), { discard: true });
+          if (admission.restamped) results.push(yield* mutationResult(mutation, "restamped", null));
         }
 
         if (last > admitted) {
@@ -397,6 +542,17 @@ export const syncPush = (request: SyncPushRequest) =>
         return new SyncPushResponse({ lastMutationId: last, results });
       }),
     );
+
+    // Before the response, so that the next pull of the client finds the recordings
+    const rejected = new Set(
+      response.results.flatMap((result) => (result.reason === null ? [] : [result.id])),
+    );
+    yield* addEntrySources(
+      request.mutations.filter(
+        (mutation) => mutation.id <= response.lastMutationId && !rejected.has(mutation.id),
+      ),
+    );
+    return response;
   });
 
 /** Publishes after each commit that took a `change_seq` */

@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { LibraryNotices, useLibraryStatus } from "../component/library-notice.tsx";
 import { PlaylistRow, RowList, counted } from "../component/row-list.tsx";
 import { ListTitle } from "../component/track-list.tsx";
+import { commands } from "../context/keymap.ts";
 import { Section, SectionView } from "../context/routes.ts";
 
 const title = "Playlists";
@@ -42,12 +43,26 @@ export const playlists = new Section({
       onSuccess: () =>
         syncing
           ? "Syncing the playlists…"
-          : (status.importing ?? "No playlists. Link an account with dyad link."),
+          : (status.importing ??
+            "No playlists. Press c to make one, or link an account with dyad link."),
     });
+
+    const rename = (selected: number) => {
+      const row = items[selected];
+      if (row === undefined) return;
+      app.playlistActions
+        .manage(row.playlist, () => {})
+        .find((action) => action.command === commands.renamePlaylist)
+        ?.run();
+    };
 
     return new SectionView({
       items,
       refresh,
+      keys: [
+        [commands.newPlaylist, app.playlistActions.create],
+        [commands.renamePlaylist, rename],
+      ],
       render: (list) => (
         <>
           <ListTitle

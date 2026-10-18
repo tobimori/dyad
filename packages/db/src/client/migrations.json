@@ -44,5 +44,15 @@
       "\nCREATE INDEX `source_segment_recording_idx` ON `source_segment` (`recording_id`);",
       "\n-- Groups that the client has already synced come again with their segments\nDELETE FROM `client_state` WHERE `key` = 'catalogCursor';\n"
     ]
+  },
+  {
+    "name": "20261018151052_add_playlist_field_clocks",
+    "folderMillis": 1792336252000,
+    "hash": "84dcb77943cdec69b1fdf6aff3924ce901f421df2ffed5c688ba1546b959c8ea",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `playlist` ADD `field_hlc` text;",
+      "\nALTER TABLE `playlist_entry` ADD `field_hlc` text;"
+    ]
   }
 ]

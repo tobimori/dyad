@@ -2,6 +2,9 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import { changeSeq } from "./change-seq.ts";
 
+// The HLC of each field that a later write changed. A field without a key has the row `hlc`.
+const fieldHlc = () => text("field_hlc", { mode: "json" }).$type<Record<string, string>>();
+
 /**
  * User data for later replication: deterministic IDs, an HLC, tombstones and no foreign keys. The
  * user's library is the rows that are not deleted, of any origin.
@@ -42,6 +45,7 @@ export const playlist = sqliteTable(
     origin: text("origin"),
     createdAt: integer("created_at").notNull(),
     hlc: text("hlc").notNull(),
+    fieldHlc: fieldHlc(),
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
     changeSeq,
   },
@@ -60,6 +64,7 @@ export const playlistEntry = sqliteTable(
     position: text("position").notNull(),
     addedAt: integer("added_at").notNull(),
     hlc: text("hlc").notNull(),
+    fieldHlc: fieldHlc(),
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
     changeSeq,
   },

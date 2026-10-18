@@ -1,5 +1,5 @@
 import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
-import type { Downloads, ServerAtoms, SessionClient } from "@dyad/client-runtime";
+import type { Downloads, Replica, ServerAtoms, SessionClient } from "@dyad/client-runtime";
 import { segmentIndexAt } from "@dyad/domain";
 import type {
   AlbumCard,
@@ -24,6 +24,7 @@ import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
 import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
+import { usePlaylistActions } from "./component/dialog-playlists.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
@@ -88,6 +89,7 @@ export function App(props: {
   readonly downloads: typeof Downloads.Service | null;
   readonly downloadQuality: typeof DownloadQuality.Type;
   readonly saveDownloadQuality: (quality: typeof DownloadQuality.Type) => void;
+  readonly playlists: (typeof Replica.Service)["playlists"];
 }) {
   const renderer = useRenderer();
   const screen = useTerminalDimensions();
@@ -130,6 +132,16 @@ export function App(props: {
   const section = routes.section;
   const page = usePage(props.atoms, route);
   const playlist = usePlaylist(props.atoms, route);
+  const playlistActions = usePlaylistActions({
+    atoms: props.atoms,
+    edits: props.playlists,
+    run: props.run,
+  });
+  const playlistSummaries = useAtomValue(props.atoms.playlists);
+  const shownPlaylist =
+    route instanceof PlaylistRoute && AsyncResult.isSuccess(playlistSummaries)
+      ? playlistSummaries.value.find((candidate) => candidate.id === route.id)
+      : undefined;
 
   const main = useRef<BoxRenderable | null>(null);
   const [downloadQuality, setDownloadQuality] = useState(props.downloadQuality);
@@ -146,6 +158,7 @@ export function App(props: {
             player,
             search,
             focusList: () => main.current?.focus(),
+            playlistActions,
           }),
         ] as const,
     ),
@@ -438,8 +451,12 @@ export function App(props: {
       title: titleOf(source),
       sourceIds: [source.id],
     };
+    const recordingId = source.recordingId;
     return [
       ...list,
+      ...(recordingId === null
+        ? []
+        : [playlistActions.add([{ recordingId, sourceId: source.id }])]),
       ...downloadActions(song, commands.download, commands.removeDownload),
       ...target.sectionActions,
     ];
@@ -561,6 +578,9 @@ export function App(props: {
         }),
       );
     }
+    if (segment.recordingId !== null) {
+      list.push(playlistActions.add([{ recordingId: segment.recordingId, sourceId: null }]));
+    }
     return list;
   };
 
@@ -571,6 +591,7 @@ export function App(props: {
     const inSet = shownSegment === undefined ? [] : segmentActions(shownSegment);
     if (target instanceof ActionTarget) return [...inSet, ...trackActions(target)];
     if (target instanceof AlbumRow) return albumActions(target.album);
+    if (target instanceof PlaylistRow) return playlistActions.manage(target.playlist, () => {});
     return [];
   };
 
@@ -589,7 +610,20 @@ export function App(props: {
 
   const openActions = () => {
     const target = actionTarget();
-    const actions = [...actionsFor(target), ...pageActions()];
+    const manage =
+      view === "browse" && shownPlaylist !== undefined
+        ? playlistActions.manage(shownPlaylist, routes.back)
+        : [];
+    const removal = entryCommands.some(([command]) => command === commands.removeEntry)
+      ? [
+          new Action({
+            command: commands.removeEntry,
+            label: "Remove from the playlist",
+            run: () => editEntry(removeEntry),
+          }),
+        ]
+      : [];
+    const actions = [...actionsFor(target), ...removal, ...pageActions(), ...manage];
     if (actions.length === 0) return;
     dialog.push(<ActionsDialog title={actionTitle(target)} actions={actions} />);
   };
@@ -667,6 +701,7 @@ export function App(props: {
     [commands.repeat, player.cycleRepeat],
     [commands.playNext, () => runAction(commands.playNext)],
     [commands.addToQueue, () => runAction(commands.addToQueue)],
+    [commands.addToPlaylist, () => runAction(commands.addToPlaylist)],
   ];
 
   const opensCard =
@@ -690,6 +725,39 @@ export function App(props: {
     [commands.last, () => select(items.length - 1)],
   ];
 
+  // A playlist can have a recording twice, so its items have the entry IDs as keys
+  const editEntry = (edit: (entryId: string) => void) => {
+    const entry = items[selectedIndex];
+    if (entry !== undefined) edit(entry.key);
+  };
+  const removeEntry = (entryId: string) => {
+    const neighbor = items[selectedIndex + 1] ?? items[selectedIndex - 1];
+    if (neighbor !== undefined) routes.select(neighbor.key);
+    props.run(props.playlists.removeEntry(entryId));
+  };
+  const entryCommands: ReadonlyArray<readonly [Command, () => void]> =
+    route instanceof PlaylistRoute && shownPlaylist?.readOnly === false
+      ? [
+          [commands.removeEntry, () => editEntry(removeEntry)],
+          [
+            commands.moveEntryUp,
+            () => editEntry((id) => props.run(props.playlists.moveEntry(route.id, id, -1))),
+          ],
+          [
+            commands.moveEntryDown,
+            () => editEntry((id) => props.run(props.playlists.moveEntry(route.id, id, 1))),
+          ],
+          [
+            commands.renamePlaylist,
+            () =>
+              playlistActions
+                .manage(shownPlaylist, routes.back)
+                .find((action) => action.command === commands.renamePlaylist)
+                ?.run(),
+          ],
+        ]
+      : [];
+
   const sectionKeys = route instanceof SectionRoute ? (sectionView.keys ?? []) : [];
   const sectionCommands = sectionKeys.map(
     ([command, run]) => [command, () => run(indexOfSelection())] as const,
@@ -712,7 +780,7 @@ export function App(props: {
 
   const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
     view === "browse"
-      ? [...sectionCommands, ...listCommands]
+      ? [...sectionCommands, ...entryCommands, ...listCommands]
       : [
           ...segmentCommands,
           [commands.close, () => setView("browse")],

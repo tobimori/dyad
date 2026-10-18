@@ -10,7 +10,7 @@ import {
 } from "./primitives.ts";
 
 /** A client and a server sync only when they have the same version */
-export const syncProtocolVersion = 1;
+export const syncProtocolVersion = 2;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -41,6 +41,11 @@ export class LibraryItemRow extends Schema.Class<LibraryItemRow>("LibraryItemRow
   deleted: Schema.Boolean,
 }) {}
 
+/** The HLC of each field that a later write changed. A field without a key has the row `hlc`. */
+export const FieldClocks = Schema.NullOr(Schema.Record(Schema.String, HybridLogicalClock)).pipe(
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+);
+
 export class PlaylistRow extends Schema.Class<PlaylistRow>("PlaylistRow")({
   table: Schema.Literal("playlist"),
   id: Uuid,
@@ -49,6 +54,7 @@ export class PlaylistRow extends Schema.Class<PlaylistRow>("PlaylistRow")({
   origin: Schema.NullOr(Schema.String),
   createdAt: Schema.Int,
   hlc: HybridLogicalClock,
+  fieldHlc: FieldClocks,
   deleted: Schema.Boolean,
 }) {}
 
@@ -60,6 +66,7 @@ export class PlaylistEntryRow extends Schema.Class<PlaylistEntryRow>("PlaylistEn
   position: Schema.String,
   addedAt: Schema.Int,
   hlc: HybridLogicalClock,
+  fieldHlc: FieldClocks,
   deleted: Schema.Boolean,
 }) {}
 
@@ -246,7 +253,65 @@ export class PlayEventAppend extends Schema.Class<PlayEventAppend>("PlayEventApp
   row: PlayEventRow,
 }) {}
 
-export const SyncChange = Schema.Union([PlayEventAppend]);
+export const PlaylistName = Schema.Trimmed.check(Schema.isMinLength(1), Schema.isMaxLength(200));
+
+// `fractional-indexing` keys. A malformed key would break the inserts of other replicas.
+const Position = Schema.String.check(Schema.isPattern(/^[A-Za-z][0-9A-Za-z]{0,199}$/));
+
+/** A new playlist of the user, without entries */
+export class PlaylistCreate extends Schema.Class<PlaylistCreate>("PlaylistCreate")({
+  kind: Schema.Literal("playlist.create"),
+  schemaVersion: Schema.Literal(1),
+  row: PlaylistRow.check(
+    Schema.makeFilter((row) =>
+      Schema.is(PlaylistName)(row.name) && row.origin === null && !row.deleted && !row.fieldHlc
+        ? undefined
+        : "Expected a new named playlist without an origin",
+    ),
+  ),
+}) {}
+
+/** Sets the given fields with `hlc` */
+export class PlaylistPatch extends Schema.Class<PlaylistPatch>("PlaylistPatch")({
+  kind: Schema.Literal("playlist.patch"),
+  schemaVersion: Schema.Literal(1),
+  id: Uuid,
+  hlc: HybridLogicalClock,
+  name: Schema.optionalKey(PlaylistName),
+  deleted: Schema.optionalKey(Schema.Literal(true)),
+}) {}
+
+export class PlaylistEntryAdd extends Schema.Class<PlaylistEntryAdd>("PlaylistEntryAdd")({
+  kind: Schema.Literal("playlist_entry.add"),
+  schemaVersion: Schema.Literal(1),
+  row: PlaylistEntryRow.check(
+    Schema.makeFilter((row) =>
+      Schema.is(Position)(row.position) && !row.deleted && !row.fieldHlc
+        ? undefined
+        : "Expected a new entry",
+    ),
+  ),
+  /** The source that the user added. The server adds a search result to the catalog. */
+  sourceId: Schema.NullOr(Uuid),
+}) {}
+
+/** Sets the given fields with `hlc` */
+export class PlaylistEntryPatch extends Schema.Class<PlaylistEntryPatch>("PlaylistEntryPatch")({
+  kind: Schema.Literal("playlist_entry.patch"),
+  schemaVersion: Schema.Literal(1),
+  id: Uuid,
+  hlc: HybridLogicalClock,
+  position: Schema.optionalKey(Position),
+  deleted: Schema.optionalKey(Schema.Literal(true)),
+}) {}
+
+export const SyncChange = Schema.Union([
+  PlayEventAppend,
+  PlaylistCreate,
+  PlaylistPatch,
+  PlaylistEntryAdd,
+  PlaylistEntryPatch,
+]);
 export type SyncChange = typeof SyncChange.Type;
 
 /** One local transaction of a client. The server applies all changes or none. */
@@ -283,7 +348,8 @@ export class SyncTouchedRow extends Schema.Class<SyncTouchedRow>("SyncTouchedRow
 export class SyncMutationResult extends Schema.Class<SyncMutationResult>("SyncMutationResult")({
   id: Schema.Int,
   outcome: Schema.Literals(["rejected", "restamped"]),
-  reason: Schema.NullOr(Schema.Literal("forbidden")),
+  /** `not_found`: the row or its playlist does not exist or is deleted */
+  reason: Schema.NullOr(Schema.Literals(["forbidden", "not_found"])),
   rows: Schema.Array(SyncTouchedRow),
 }) {}
 

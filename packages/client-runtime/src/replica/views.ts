@@ -104,6 +104,8 @@ const playableSources = (match: SQL | undefined) =>
                 : libraryAlbumRef(key.albumArtistKey, key.albumKey),
             explicit: row.canonical?.explicit ?? false,
             providerName: names.get(row.source.provider) ?? null,
+            recordingId:
+              row.source.recordingId === null ? null : RecordingId.make(row.source.recordingId),
           }),
         };
       });

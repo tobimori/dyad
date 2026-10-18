@@ -16,7 +16,7 @@ export const syncRejection = sqliteTable(
   {
     replicaId: text("replica_id").notNull(),
     mutationId: integer("mutation_id").notNull(),
-    reason: text("reason", { enum: ["forbidden"] }).notNull(),
+    reason: text("reason", { enum: ["forbidden", "not_found"] }).notNull(),
   },
   (table) => [primaryKey({ columns: [table.replicaId, table.mutationId] })],
 );
