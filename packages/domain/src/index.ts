@@ -531,6 +531,25 @@ export class PlayerResume extends Schema.Class<PlayerResume>("PlayerResume")({
   entryId: EntryId,
   positionMs: Schema.Number,
   state: Schema.Literals(["playing", "paused"]),
+  /** The entries that ended by themselves on the device while it was offline */
+  advanced: Schema.Array(EntryId)
+    .check(Schema.isMaxLength(10_000))
+    .pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  /** The play of `entryId` when it started offline. The server continues it when it adopts. */
+  play: Schema.NullOr(Schema.Struct({ startedAt: Schema.Number, playedMs: Schema.Number })).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+}) {}
+
+/** A play that a device recorded while it was offline. The server records each `id` once. */
+export class OfflinePlay extends Schema.Class<OfflinePlay>("OfflinePlay")({
+  id: Schema.String.check(Schema.isUUID()),
+  sourceId: Schema.String.check(Schema.isUUID()),
+  context: PlayContext,
+  /** Server time */
+  startedAt: Schema.Number,
+  playedMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  completed: Schema.Boolean,
 }) {}
 
 const PublicRpc = RpcGroup.make(
@@ -650,6 +669,9 @@ const UserRpc = RpcGroup.make(
       failure: Schema.NullOr(PlaybackUnavailable.fields.reason),
       volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
     },
+  }),
+  Rpc.make("recordPlays", {
+    payload: { plays: Schema.Array(OfflinePlay).check(Schema.isMaxLength(1000)) },
   }),
   Rpc.make("createPairingCode", { success: PairingCode }),
   Rpc.make("listDevices", { success: Schema.Array(DeviceSummary) }),

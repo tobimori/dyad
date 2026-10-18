@@ -91,6 +91,7 @@ export function App(props: {
     engine: props.engine,
     run: props.run,
     notify: (message) => toast("error", message),
+    inform: (message) => toast("notice", message),
   });
   // The server records a play when its entry stops being current
   useEffect(refreshRecent, [player.current?.id]);
@@ -661,7 +662,9 @@ export function App(props: {
           volume={player.volume}
           shuffle={player.shuffle}
           repeat={player.repeat}
-          message={player.error ?? (player.lost ? "The output does not answer" : null)}
+          message={
+            player.error ?? player.offline ?? (player.lost ? "The output does not answer" : null)
+          }
           artwork={artwork}
           showCover={view === "browse" && !showPanel}
           onOpen={openNowPlaying}

@@ -154,6 +154,8 @@ const makeSession = (
       urlDriver: Option.none<UrlDriver>(),
       // A play on a URL output counts for the device that sent the last command
       commandDevice: Option.none<DeviceId>(),
+      // The play of an entry that the output started offline. The server continues it.
+      handover: Option.none<PlayerResume>(),
     };
 
     const broadcast = (event: Event) => {
@@ -280,6 +282,10 @@ const makeSession = (
           }
         }
 
+        state.handover = Option.filter(
+          state.handover,
+          (resume) => resume.entryId === playback.entryId,
+        );
         const entry = currentEntry();
         const output =
           playback.outputId === null ? undefined : state.players.get(playback.outputId);
@@ -287,12 +293,14 @@ const makeSession = (
           output?.connection.deviceId ??
           (Option.isSome(state.urlDriver) ? Option.getOrUndefined(state.commandDevice) : undefined);
         if (Option.isNone(state.play) && playback.rate === 1 && entry && deviceId) {
+          const handover = Option.getOrUndefined(state.handover)?.play;
+          state.handover = Option.none();
           state.play = Option.some(
             new OpenPlay({
               entry,
               deviceId,
-              startedAt: now,
-              playedMs: 0,
+              startedAt: handover?.startedAt ?? now,
+              playedMs: handover?.playedMs ?? 0,
               resumedAt: now,
             }),
           );
@@ -879,6 +887,13 @@ const makeSession = (
       // The device played on while it was away, and nobody changed the transport since
       const adopts =
         resume !== null && resume.revision >= playback.revision && indexOf(resume.entryId) !== -1;
+      if (adopts) {
+        // An entry that ended on the device offline has a complete play, as after a natural end
+        if (playback.entryId !== null && resume.advanced.includes(playback.entryId)) {
+          state.ended = Option.some(playback.entryId);
+        }
+        if (resume.play !== null) state.handover = Option.some(resume);
+      }
       setPlayback(
         adopts
           ? {

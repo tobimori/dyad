@@ -28,6 +28,7 @@ import {
 import { pluginCommands } from "./commands/plugins.ts";
 import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
+import { openPlayLog } from "./context/play-log.ts";
 import { importSavedSession, savedVolume } from "./context/session.ts";
 import { Settings, loadSettings, updateSettings } from "./context/settings.ts";
 import { ThemeProvider } from "./context/theme-provider.tsx";
@@ -73,6 +74,7 @@ const player = (controller: boolean) =>
     if (Option.isSome(saved)) yield* saveVolume(saved.value);
     const volume = settings.volume ?? Option.getOrElse(saved, () => 1);
 
+    const playLog = yield* openPlayLog(serverUrl);
     const audio = controller
       ? null
       : yield* Effect.acquireRelease(
@@ -84,7 +86,7 @@ const player = (controller: boolean) =>
         ? null
         : Context.get(
             yield* Layer.build(
-              engineLayer({ audio, serverUrl, volume, saveVolume }).pipe(
+              engineLayer({ audio, serverUrl, volume, saveVolume, recordPlay: playLog.add }).pipe(
                 Layer.provide(Layer.succeedContext(connection)),
                 Layer.provide(FetchHttpClient.layer),
               ),
@@ -96,6 +98,7 @@ const player = (controller: boolean) =>
       sessionClientLayer({
         player:
           engine === null ? null : { capabilities, volume: engine.volume, resume: engine.resume },
+        playLog,
       }).pipe(Layer.provide(Layer.succeedContext(connection)), Layer.provide(logging)),
     );
     const session = Context.get(sessionServices, SessionClient);

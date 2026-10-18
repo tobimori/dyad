@@ -70,6 +70,8 @@ export function usePlayer(props: {
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly notify: (message: string) => void;
+  /** A quiet note */
+  readonly inform: (message: string) => void;
 }) {
   const view = useSessionView(props.session, props.run);
   // A playback failure on this device. It stays until the next entry starts.
@@ -77,7 +79,10 @@ export function usePlayer(props: {
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    const engine = props.engine?.run(props.session, setError);
+    const engine = props.engine?.run(props.session, {
+      onFailure: setError,
+      onNotice: props.inform,
+    });
     if (engine === undefined) return;
     const playing = props.run(engine);
     return () => {
@@ -107,15 +112,16 @@ export function usePlayer(props: {
     };
   }, [playback.state]);
 
-  const send = (command: typeof SessionCommand.Type) =>
+  const send = (command: typeof SessionCommand.Type) => {
+    // Offline, only the device that plays can change its own audio
+    if (!view.connected && isTransportCommand(command) && props.engine?.controlOffline(command)) {
+      return;
+    }
+
     props.run(
       props.session.send(command).pipe(
         Effect.catchTags({
-          // Offline, transport commands change only this device
-          SessionOffline: () =>
-            Effect.sync(() => {
-              if (!isTransportCommand(command)) props.notify("The server is offline");
-            }),
+          SessionOffline: () => Effect.sync(() => props.notify("The server is offline")),
           SessionCommandFailed: (failure) =>
             Effect.sync(() => {
               const text = failureTexts[failure.reason];
@@ -126,6 +132,7 @@ export function usePlayer(props: {
         }),
       ),
     );
+  };
 
   const position = () => {
     if (current === undefined) return 0;
@@ -183,6 +190,14 @@ export function usePlayer(props: {
     send(SessionCommand.cases.Enqueue.make({ sourceIds: [first, ...others], context, after }));
   };
 
+  // Offline, the view shows what this device plays, or the last state of another output
+  const offlineText = () => {
+    if (view.connected) return null;
+    return props.engine !== null && playback.outputId === own && !view.superseded
+      ? "Offline, playing downloaded audio"
+      : "Offline, showing the last known state";
+  };
+
   // A loading state on another output; this device shows its own audio
   const loading =
     playback.state === "playing" &&
@@ -200,6 +215,8 @@ export function usePlayer(props: {
     error,
     /** The output stopped answering */
     lost: playback.lost && playback.state === "playing",
+    /** `null` while connected */
+    offline: offlineText(),
     position,
     durationMs,
     /** `null` while the audio plays on another device */

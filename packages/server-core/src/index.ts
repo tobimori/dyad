@@ -16,7 +16,7 @@ import {
   setup,
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
-import { listRecentPlays } from "./history.ts";
+import { listRecentPlays, recordPlays } from "./history.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
@@ -92,6 +92,7 @@ export const serverRoutes = Layer.unwrap(
       controlSession: (payload) =>
         controlSession(payload).pipe(orDieOnDatabaseError("controlSession")),
       reportPlayback: (payload) => reportPlayback(payload),
+      recordPlays: ({ plays }) => recordPlays(plays).pipe(orDieOnDatabaseError("recordPlays")),
       createPairingCode: () => createPairingCode,
       listDevices: () => listDevices.pipe(orDieOnDatabaseError("listDevices")),
       removeDevice: ({ deviceId }) =>

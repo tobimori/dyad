@@ -8,7 +8,13 @@ import {
   nextEntry,
   positionAt,
 } from "@dyad/domain";
-import type { DeviceId, PlaybackCapabilities, PlayerResume, QueueEntry } from "@dyad/domain";
+import type {
+  DeviceId,
+  OfflinePlay,
+  PlaybackCapabilities,
+  PlayerResume,
+  QueueEntry,
+} from "@dyad/domain";
 import { NowPlaying } from "@dyad/plugin/client";
 import {
   Clock,
@@ -17,6 +23,7 @@ import {
   Data,
   Effect,
   Layer,
+  Option,
   Predicate,
   Schedule,
   Semaphore,
@@ -49,7 +56,7 @@ export class SessionView extends Data.Class<{
   readonly clockOffset: number;
 }> {}
 
-/** A queue edit needs the server, so it fails at once while the client is offline */
+/** A command needs the server, so it fails at once while the client is offline */
 export class SessionOffline extends Data.TaggedError("SessionOffline")<{}> {}
 
 // The stream skipped a queue change, so the client needs a new snapshot
@@ -93,7 +100,7 @@ export const positionOf = (view: SessionView, now: number) => {
   return durationMs === null ? position : Math.min(position, durationMs);
 };
 
-/** The view shows these at once, also while the client is offline */
+/** The view shows these at once, before the server confirms them */
 export const isTransportCommand = SessionCommand.isAnyOf([
   "Pause",
   "Resume",
@@ -207,17 +214,26 @@ const makeSessionClient = (options: {
     /** What the device plays now, sent when it connects again */
     readonly resume: Effect.Effect<PlayerResume | null>;
   } | null;
+  /** The plays of offline time that the server does not have yet */
+  readonly playLog: {
+    readonly pending: Effect.Effect<ReadonlyArray<OfflinePlay>>;
+    readonly remove: (plays: ReadonlyArray<OfflinePlay>) => Effect.Effect<void>;
+  } | null;
 }) =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
     const crypto = yield* Crypto.Crypto;
     const view = yield* SubscriptionRef.make(initialView);
+    const scope = yield* Effect.scope;
     // Commands reach the server in the order of the user's keys
     const sending = yield* Semaphore.make(1);
+    const sendingPlays = yield* Semaphore.make(1);
     const state = {
       // Counts the snapshots, so that a retry stops when a new connection replaces the old one
       epoch: 0,
       pending: new Array<Pending>(),
+      // What this device plays while it is offline
+      local: Option.none<Playback>(),
     };
 
     const update = (change: (current: SessionView) => Partial<SessionView>) =>
@@ -227,11 +243,15 @@ const makeSessionClient = (options: {
         state.pending = state.pending.filter(
           (pending) => pending.revision === null || pending.revision > next.confirmed.revision,
         );
-        const playback = new Playback({
-          ...next.confirmed,
-          ...Object.assign({}, ...state.pending.map((pending) => pending.fields)),
-          revision: next.confirmed.revision + state.pending.length,
-        });
+        const playback = Option.getOrElse(
+          state.local,
+          () =>
+            new Playback({
+              ...next.confirmed,
+              ...Object.assign({}, ...state.pending.map((pending) => pending.fields)),
+              revision: next.confirmed.revision + state.pending.length,
+            }),
+        );
         return new SessionView({ ...next, playback });
       });
 
@@ -264,6 +284,7 @@ const makeSessionClient = (options: {
                 Effect.suspend(() => {
                   state.epoch += 1;
                   state.pending = [];
+                  state.local = Option.none();
                   return update(() => ({
                     connected: true,
                     deviceId,
@@ -273,7 +294,7 @@ const makeSessionClient = (options: {
                     confirmed: snapshot.playback,
                     outputs: snapshot.outputs,
                     clockOffset: snapshot.serverTime - receivedAt,
-                  }));
+                  })).pipe(Effect.andThen(Effect.forkIn(sendPlays, scope)));
                 }),
 
               QueueChanged: (change) =>
@@ -309,6 +330,20 @@ const makeSessionClient = (options: {
 
     yield* Effect.forkScoped(Effect.repeat(follow, Schedule.spaced("1 second")));
 
+    // A retry after a lost reply records nothing twice, because the server knows each play ID
+    const sendPlays = sendingPlays.withPermits(1)(
+      Effect.gen(function* () {
+        if (options.playLog === null || !SubscriptionRef.getUnsafe(view).connected) return;
+        const plays = yield* options.playLog.pending;
+        if (plays.length === 0) return;
+
+        yield* connection.recordPlays({ plays });
+        yield* options.playLog.remove(plays);
+      }).pipe(
+        Effect.catchCause((cause) => Effect.logDebug("Cannot send the offline plays", cause)),
+      ),
+    );
+
     /**
      * A transport command shows in the view at once. A retry sends the same request ID, so that
      * the server applies the command once.
@@ -316,9 +351,7 @@ const makeSessionClient = (options: {
     const send = (command: Command) =>
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(view);
-        if (!isTransportCommand(command) && !current.connected) {
-          return yield* new SessionOffline();
-        }
+        if (!current.connected) return yield* new SessionOffline();
 
         const requestId = yield* crypto.randomUUIDv4();
         const epoch = state.epoch;
@@ -338,9 +371,6 @@ const makeSessionClient = (options: {
           state.pending.push(new Pending({ requestId, fields, revision: null }));
           yield* update(() => ({}));
         }
-        // Offline, the command changes only this view until the next snapshot. A device that plays
-        // sends what it did in `resume` when it connects again.
-        if (!current.connected) return yield* new SessionOffline();
 
         const forget = Effect.suspend(() => {
           state.pending = state.pending.filter((pending) => pending.requestId !== requestId);
@@ -387,7 +417,27 @@ const makeSessionClient = (options: {
       Stream.changesWith(sameNowPlaying),
     );
 
-    return { view, send, nowPlaying };
+    /** While offline, the view shows what this device plays. The next snapshot replaces it. */
+    const showLocal = (local: { readonly playback: Playback; readonly volume: number }) =>
+      update((current) => {
+        if (current.connected) return {};
+        state.local = Option.some(local.playback);
+        const own = current.deviceId === null ? null : deviceOutputId(current.deviceId);
+        return {
+          outputs: current.outputs.map((output) =>
+            output.id === own ? new Output({ ...output, volume: local.volume }) : output,
+          ),
+        };
+      });
+
+    return {
+      view,
+      send,
+      nowPlaying,
+      showLocal,
+      /** Sends the play log while connected. A snapshot also sends it. */
+      sendPlays: Effect.asVoid(Effect.forkIn(sendPlays, scope)),
+    };
   });
 
 /**

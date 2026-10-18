@@ -1,7 +1,7 @@
 import { playEvent, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CurrentPrincipal } from "@dyad/domain";
-import type { DeviceId, PlayContext, UserId } from "@dyad/domain";
+import type { DeviceId, OfflinePlay, PlayContext, UserId } from "@dyad/domain";
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { Crypto, Effect } from "effect";
 
@@ -10,6 +10,8 @@ import { playableSources, sourceSummary } from "./sources.ts";
 const recentPlayLimit = 100;
 
 export const insertPlay = (play: {
+  /** A device gives its own ID to a play of offline time, so that a second upload adds nothing */
+  readonly id?: string;
   readonly userId: UserId;
   readonly deviceId: DeviceId;
   readonly sourceId: string;
@@ -21,8 +23,22 @@ export const insertPlay = (play: {
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
-    const id = yield* crypto.randomUUIDv7().pipe(Effect.orDie);
-    yield* db.insert(playEvent).values({ id, ...play });
+    const id = play.id ?? (yield* crypto.randomUUIDv7().pipe(Effect.orDie));
+    yield* db
+      .insert(playEvent)
+      .values({ ...play, id })
+      .onConflictDoNothing();
+  });
+
+/** The plays that the current device recorded while it was offline */
+export const recordPlays = (plays: ReadonlyArray<OfflinePlay>) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentPrincipal;
+    yield* Effect.forEach(
+      plays,
+      (play) => insertPlay({ ...play, userId: principal.userId, deviceId: principal.deviceId }),
+      { discard: true },
+    );
   });
 
 /** The playable sources of the user's last plays, newest play first, one entry per source */
