@@ -14,6 +14,7 @@ import {
 } from "effect";
 import { HttpClient } from "effect/http";
 
+import { AudioTap } from "../visualizer/audio-feed.ts";
 import { findSeekPoint, startPoint } from "./seek.ts";
 import type { SeekPoint } from "./seek.ts";
 
@@ -90,6 +91,7 @@ class Download extends Data.Class<{
   readonly received: SubscriptionRef.SubscriptionRef<Received>;
   /** Closing it stops the request */
   readonly scope: Scope.Closeable;
+  readonly tap: AudioTap;
 }> {}
 
 export class Track extends Data.Class<{
@@ -102,6 +104,8 @@ export class Track extends Data.Class<{
    */
   readonly seek: (ms: number) => Effect.Effect<void>;
   readonly ended: Effect.Effect<void, PlaybackError>;
+  /** The response that plays now, for the visualizer */
+  readonly tap: () => AudioTap;
 }> {}
 
 /** Starts at `startMs`. Closing the scope stops the stream and the request. */
@@ -136,7 +140,13 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string, sta
           new Received({ bytes: new Uint8Array(0), state: "loading" }),
         );
         yield* Effect.forkIn(download(response.stream, received), scope);
-        return new Download({ startMs, received, scope });
+        const tap = new AudioTap({
+          codec: format,
+          startMs,
+          bytes: () => SubscriptionRef.getUnsafe(received).bytes,
+          complete: () => SubscriptionRef.getUnsafe(received).state !== "loading",
+        });
+        return new Download({ startMs, received, scope, tap });
       });
 
     let current = yield* startDownload(startMs);
@@ -233,5 +243,6 @@ export const openTrack = (audio: Audio, serverUrl: string, sourceId: string, sta
       durationMs,
       seek,
       ended: Deferred.await(ended),
+      tap: () => current.tap,
     });
   });

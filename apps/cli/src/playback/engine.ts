@@ -330,6 +330,8 @@ const makeEngine = (options: {
       position: (entryId: EntryId) => trackOf(entryId)?.position() ?? null,
       /** Some providers give no duration before the download ends */
       durationMs: (entryId: EntryId) => trackOf(entryId)?.durationMs() ?? null,
+      /** The response that plays `entryId`, for the visualizer */
+      tap: (entryId: EntryId) => trackOf(entryId)?.tap() ?? null,
       /** Follows the session until it is interrupted. `onFailure` gets `null` when an entry starts. */
       run,
     };

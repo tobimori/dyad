@@ -203,6 +203,7 @@ export function usePlayer(props: {
     position,
     durationMs,
     /** `null` while the audio plays on another device */
+    tap: () => (current === undefined ? null : (props.engine?.tap(current.id) ?? null)),
     playList: (
       sources: ReadonlyArray<SourceSummary>,
       index: number,

@@ -14,10 +14,12 @@
     "build:darwin-arm64": "DYAD_EXE_TARGET=darwin-arm64 vp pack"
   },
   "dependencies": {
+    "@dyad/audio": "workspace:*",
     "@dyad/client-runtime": "workspace:*",
     "@dyad/domain": "workspace:*",
     "@dyad/plugin": "workspace:*",
     "@dyad/plugin-discord-presence": "workspace:*",
+    "@dyad/visualizer": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@effect/platform-node": "catalog:",
     "@opentui/core": "catalog:",

@@ -50,6 +50,7 @@ import { sections, startSection } from "./routes/sections.ts";
 import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
 import { useToast } from "./ui/toast.tsx";
+import { VisualizerView } from "./visualizer/visualizer-view.tsx";
 
 const sidebarMinWidth = 100;
 const panelMinWidth = 120;
@@ -108,7 +109,7 @@ export function App(props: {
   const playlist = usePlaylist(props.atoms, route);
 
   const main = useRef<BoxRenderable | null>(null);
-  const [view, setView] = useState<"browse" | "nowPlaying">("browse");
+  const [view, setView] = useState<"browse" | "nowPlaying" | "visualizer">("browse");
 
   // `sections` never changes, so each render calls the same hooks in the same order
   const views = new Map(
@@ -476,6 +477,7 @@ export function App(props: {
     [commands.nextSection, () => moveSection(1)],
     [commands.previousSection, () => moveSection(-1)],
     [commands.nowPlaying, () => setView(view === "browse" ? "nowPlaying" : "browse")],
+    [commands.visualizer, () => setView(view === "visualizer" ? "browse" : "visualizer")],
     [commands.reload, reload],
     [commands.togglePause, player.togglePause],
     [commands.next, player.next],
@@ -593,12 +595,26 @@ export function App(props: {
       height="100%"
       backgroundColor={theme.background}
     >
-      <Header
-        sections={showSidebar || view === "nowPlaying" ? [] : sections}
-        active={section.id}
-        server={showSidebar ? props.serverUrl : null}
-        status={status}
-      />
+      {view !== "visualizer" && (
+        <Header
+          sections={showSidebar || view === "nowPlaying" ? [] : sections}
+          active={section.id}
+          server={showSidebar ? props.serverUrl : null}
+          status={status}
+        />
+      )}
+      {view === "visualizer" && (
+        <VisualizerView
+          source={player.current?.source}
+          artwork={artwork}
+          playing={player.state === "playing"}
+          tap={player.tap}
+          positionMs={player.position}
+          durationMs={player.durationMs()}
+          width={screen.width}
+          height={screen.height}
+        />
+      )}
       {view === "nowPlaying" && (
         <NowPlayingView
           entry={player.current}
@@ -636,21 +652,23 @@ export function App(props: {
           )}
         </box>
       )}
-      <Footer
-        entry={player.current}
-        state={player.state}
-        positionMs={player.position()}
-        durationMs={player.durationMs()}
-        volume={player.volume}
-        shuffle={player.shuffle}
-        repeat={player.repeat}
-        message={player.error ?? (player.lost ? "The output does not answer" : null)}
-        artwork={artwork}
-        showCover={view === "browse" && !showPanel}
-        onOpen={openNowPlaying}
-        onSeek={player.seekTo}
-        onVolume={player.setVolume}
-      />
+      {view !== "visualizer" && (
+        <Footer
+          entry={player.current}
+          state={player.state}
+          positionMs={player.position()}
+          durationMs={player.durationMs()}
+          volume={player.volume}
+          shuffle={player.shuffle}
+          repeat={player.repeat}
+          message={player.error ?? (player.lost ? "The output does not answer" : null)}
+          artwork={artwork}
+          showCover={view === "browse" && !showPanel}
+          onOpen={openNowPlaying}
+          onSeek={player.seekTo}
+          onVolume={player.setVolume}
+        />
+      )}
     </box>
   );
 }

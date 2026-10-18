@@ -46,6 +46,9 @@ export const commands = {
   repeat: command("playback.repeat", "Repeat: off, all, one", "Playback", ["shift+r"]),
   outputs: command("playback.outputs", "Play on another output", "Playback", ["o"]),
   nowPlaying: command("view.nowPlaying", "Now playing", "Playback", ["p"], "playing"),
+  visualizer: command("view.visualizer", "Visualizer", "Playback", ["v"], "visual"),
+  nextPreset: command("visualizer.next", "Next visual", "Playback", ["]"]),
+  previousPreset: command("visualizer.previous", "Previous visual", "Playback", ["["]),
 
   play: command("list.play", "Play, queue the rest", "Browse", ["return"], "play"),
   open: command("list.open", "Open the artist, album or playlist", "Browse", ["return"], "open"),

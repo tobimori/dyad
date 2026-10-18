@@ -159,6 +159,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@dyad/audio':
+        specifier: workspace:*
+        version: link:../../packages/audio
       '@dyad/client-runtime':
         specifier: workspace:*
         version: link:../../packages/client-runtime
@@ -171,6 +174,9 @@ importers:
       '@dyad/plugin-discord-presence':
         specifier: workspace:*
         version: link:../../plugins/discord-presence
+      '@dyad/visualizer':
+        specifier: workspace:*
+        version: link:../../packages/visualizer
       '@effect/atom-react':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(react@19.3.1)(scheduler@0.28.0)
