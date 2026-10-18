@@ -33,9 +33,17 @@ export const artist = sqliteTable(
     }),
     country: text("country"),
     disambiguation: text("disambiguation"),
+    // `artistNameKey(name)`. Many artists share a key, so it only finds candidates for a link.
+    nameKey: text("name_key"),
+    // Root of the merge tree, like `recording.merged_into_id`
+    mergedIntoId: text("merged_into_id"),
     ...entity,
   },
-  (table) => [index("artist_local_key_idx").on(table.localKey)],
+  (table) => [
+    index("artist_local_key_idx").on(table.localKey),
+    index("artist_name_key_idx").on(table.nameKey),
+    index("artist_merged_into_idx").on(table.mergedIntoId),
+  ],
 );
 
 export const artistCredit = sqliteTable("artist_credit", {
@@ -48,7 +56,8 @@ export const artistCreditName = sqliteTable(
   {
     artistCreditId: text("artist_credit_id").notNull(),
     position: integer("position").notNull(),
-    artistId: text("artist_id").notNull(),
+    // Null for a name that no evidence links to an artist
+    artistId: text("artist_id"),
     creditedAs: text("credited_as").notNull(),
     joinPhrase: text("join_phrase").notNull().default(""),
   },
@@ -80,6 +89,26 @@ export const recording = sqliteTable(
     index("recording_artist_credit_idx").on(table.artistCreditId),
     index("recording_merged_into_idx").on(table.mergedIntoId),
     index("recording_revision_idx").on(table.revision),
+  ],
+);
+
+/**
+ * A version or mashup part and its original, from `derivative_of`. A link is not a merge: audio
+ * never moves. Views resolve `original_id` through `merged_into_id`.
+ */
+export const recordingDerivative = sqliteTable(
+  "recording_derivative",
+  {
+    recordingId: text("recording_id").notNull(),
+    originalId: text("original_id").notNull(),
+    // Index of the mashup part, null for a version of one recording
+    part: integer("part"),
+    // The first version that the recording adds over `original_id`, for example `remix`
+    kind: text("kind").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.recordingId, table.originalId] }),
+    index("recording_derivative_original_idx").on(table.originalId),
   ],
 );
 

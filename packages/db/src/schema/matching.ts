@@ -12,3 +12,23 @@ export const isrcLookup = sqliteTable("isrc_lookup", {
     .notNull(),
   checkedAt: integer("checked_at").notNull(),
 });
+
+/**
+ * Replica-local MusicBrainz artist searches by `artistNameKey`. The count of artists with a key
+ * tells whether a name is ambiguous.
+ */
+export const artistLookup = sqliteTable("artist_lookup", {
+  nameKey: text("name_key").primaryKey(),
+  // The MusicBrainz artists whose name or alias has the key
+  artists: text("artists", { mode: "json" })
+    .$type<
+      ReadonlyArray<{
+        readonly mbid: string;
+        readonly name: string;
+        readonly disambiguation: string | null;
+        readonly country: string | null;
+      }>
+    >()
+    .notNull(),
+  checkedAt: integer("checked_at").notNull(),
+});

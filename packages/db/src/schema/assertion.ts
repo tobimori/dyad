@@ -13,8 +13,11 @@ export const catalogAssertion = sqliteTable(
     field: text("field").notNull(),
     // Null states that the origin has no value
     value: text("value", { mode: "json" }),
-    // Resolution rank: admin, musicbrainz, provider, local
-    origin: text("origin", { enum: ["admin", "musicbrainz", "provider", "local"] }).notNull(),
+    // Resolution rank: admin, local, provider, musicbrainz, match, parse. `match` is the artist and
+    // original resolver, `parse` the title parser.
+    origin: text("origin", {
+      enum: ["admin", "musicbrainz", "provider", "local", "match", "parse"],
+    }).notNull(),
     // `workspace` for admin edits, MBID, `<provider>:<external_id>`, or local source ID
     originRef: text("origin_ref").notNull(),
     originRevision: text("origin_revision"),
