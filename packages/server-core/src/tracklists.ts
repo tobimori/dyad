@@ -1,13 +1,25 @@
 import { catalogAssertion, recording, source, sourceSegment, user } from "@dyad/db";
 import { Database, ReplicaDatabase } from "@dyad/db/node";
-import { CurrentPrincipal, SourceSegment, TracklistEditFailed, UserId } from "@dyad/domain";
+import {
+  CurrentPrincipal,
+  RecordingId,
+  SourceSegment,
+  TracklistEditFailed,
+  UserId,
+} from "@dyad/domain";
 import { TracklistEntry } from "@dyad/plugin";
-import type { MusicBrainzRecording, ProviderTracklist } from "@dyad/plugin";
+import type {
+  MusicBrainzRecording,
+  PluginContext,
+  ProviderError,
+  ProviderTracklist,
+} from "@dyad/plugin";
+import { eventWords } from "@dyad/plugin/tracklist";
 import { HlcClock } from "@dyad/sync";
-import { and, asc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
-import { Clock, Context, Effect, Layer, PubSub, Result, Schema, Stream } from "effect";
+import { and, asc, between, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { Clock, Context, Effect, Layer, Option, PubSub, Result, Schema, Stream } from "effect";
 
-import { assertRecording, projectRecordings, resolveField } from "./assertions.ts";
+import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
 import { assertionId, musicbrainzRecordingId } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
 import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
@@ -15,6 +27,7 @@ import { normalizeArtist, normalizeText } from "./normalize.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { touchGroups } from "./sync-counter.ts";
+import { artistNameKey } from "./version-titles.ts";
 
 const readKind = "tracklist.read";
 const matchKind = "tracklist.match";
@@ -25,6 +38,12 @@ const Entries = Schema.Array(TracklistEntry);
 const rereadAfterMs = 24 * 60 * 60 * 1000;
 // MusicBrainz can answer 503 with `Retry-After: 0` when the whole server is busy (October 2026)
 const busyWaitSeconds = 60;
+// A tracklist site cannot beat a description or chapters, so the read does not ask it
+const goodConfidence = 0.8;
+// Uploads of one set differ by an intro or an outro
+const copyToleranceMs = (a: number, b: number) => Math.max(30_000, 0.02 * Math.max(a, b));
+// A different intro moves all times, so a copy keeps them only for nearly the same duration
+const sameTimingMs = 5000;
 
 const makeTracklists = Effect.gen(function* () {
   return {
@@ -32,6 +51,8 @@ const makeTracklists = Effect.gen(function* () {
     changes: yield* PubSub.unbounded<string>(),
     /** When this process last queued a read of each source */
     readAt: new Map<string, number>(),
+    /** The lookups of tracklist sites, by the ID that starts their origin refs */
+    sites: new Map<string, Parameters<PluginContext["tracklists"]["add"]>[1]>(),
   };
 });
 
@@ -123,17 +144,17 @@ const tracklistAssertions = (sourceId: string) =>
       );
   });
 
-// The candidates of `originRef` that a read no longer finds are withdrawn
+// The candidates with the origin ref `prefix` that a read no longer finds are withdrawn
 const assertProviderTracklists = (
   sourceId: string,
-  originRef: string,
+  prefix: string,
   tracklists: ReadonlyArray<ProviderTracklist>,
 ) =>
   Effect.gen(function* () {
     const written = yield* Effect.forEach(tracklists, (tracklist) =>
       assertTracklist(sourceId, {
         origin: "provider",
-        originRef: `${originRef}#${tracklist.part}`,
+        originRef: `${prefix}${tracklist.part}`,
         value: Schema.encodeSync(Entries)(tracklist.entries),
         confidence: tracklist.confidence,
         authorUserId: null,
@@ -142,18 +163,131 @@ const assertProviderTracklists = (
     const lost = (yield* tracklistAssertions(sourceId)).filter(
       (assertion) =>
         assertion.origin === "provider" &&
-        assertion.originRef.startsWith(`${originRef}#`) &&
+        assertion.originRef.startsWith(prefix) &&
         !written.includes(assertion.id),
     );
     yield* retract(lost.map((assertion) => assertion.id));
+  });
+
+// An admin edit wins, and without entries it hides the tracklist. Candidates of several plugins
+// compare by confidence, which they set on one scale.
+const selectTracklist = (assertions: ReadonlyArray<typeof catalogAssertion.$inferSelect>) => {
+  const [selected] = assertions
+    .flatMap((assertion) => {
+      const admin = assertion.origin === "admin";
+      if (assertion.value === null && !admin) return [];
+      const entries =
+        assertion.value === null
+          ? Option.some(null)
+          : Schema.decodeUnknownOption(Entries)(assertion.value);
+      return Option.isSome(entries) ? [{ assertion, admin, entries: entries.value }] : [];
+    })
+    .toSorted(
+      (a, b) =>
+        Number(b.admin) - Number(a.admin) ||
+        b.assertion.confidence - a.assertion.confidence ||
+        b.assertion.hlc.localeCompare(a.assertion.hlc) ||
+        a.assertion.id.localeCompare(b.assertion.id),
+    );
+  return selected;
+};
+
+// The DJs of each recording that is a set, from its own assertions
+const setArtists = (recordingIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const sets = yield* resolvedValues(recordingIds, "set", fields.set);
+    const credits = yield* resolvedValues(recordingIds, "artist_credit", fields.artist_credit);
+    return new Map(
+      recordingIds.flatMap((id) => {
+        const artists = credits.get(id)?.artists.map((artist) => artist.name) ?? [];
+        return sets.get(id) === true && artists.length > 0 ? [[id, artists] as const] : [];
+      }),
+    );
+  });
+
+// The other sources of the same set: the same DJs and event words, and nearly the same duration
+const setCopies = (sourceId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const [row] = yield* db.select().from(source).where(eq(source.id, sourceId));
+    const durationMs = row?.rawDurationMs ?? null;
+    if (row?.recordingId == null || durationMs === null) return [];
+
+    const candidates = yield* db
+      .select()
+      .from(source)
+      .where(
+        and(
+          ne(source.id, sourceId),
+          isNotNull(source.recordingId),
+          between(source.rawDurationMs, durationMs * 0.98 - 30_000, durationMs / 0.98 + 30_000),
+        ),
+      );
+    const sets = yield* setArtists([
+      row.recordingId,
+      ...candidates.flatMap((candidate) => candidate.recordingId ?? []),
+    ]);
+    const artists = sets.get(row.recordingId);
+    if (artists === undefined) return [];
+
+    const key = (names: ReadonlyArray<string>) => names.map(artistNameKey).toSorted().join(" ");
+    // The parsed title drops words such as the year of an `Essential Mix`
+    const words = eventWords(row.rawTitle ?? "", artists);
+    return candidates.flatMap((candidate) => {
+      const other = sets.get(candidate.recordingId ?? "");
+      const offMs = Math.abs((candidate.rawDurationMs ?? Infinity) - durationMs);
+      if (other === undefined || key(other) !== key(artists)) return [];
+      if (offMs > copyToleranceMs(durationMs, candidate.rawDurationMs ?? 0)) return [];
+
+      // `Boiler Room` and `Boiler Room London` name the same event, `London` and `Berlin` do not
+      const otherWords = eventWords(candidate.rawTitle ?? "", other);
+      const [fewer, more] =
+        words.length <= otherWords.length ? [words, otherWords] : [otherWords, words];
+      const same = fewer.length > 0 && fewer.every((word) => more.includes(word));
+      return same ? [{ id: candidate.id, offMs }] : [];
+    });
+  });
+
+// The best tracklist that a copy selected from its own candidates. Without nearly the same
+// duration, its entries have no times.
+const copyTracklist = (sourceId: string) =>
+  Effect.gen(function* () {
+    const copies = yield* setCopies(sourceId);
+    const lists = yield* Effect.forEach(copies, (copy) =>
+      Effect.gen(function* () {
+        const selected = selectTracklist(yield* tracklistAssertions(copy.id));
+        if (selected?.entries == null) return [];
+        const timed = copy.offMs <= sameTimingMs;
+        const confidence = selected.assertion.confidence;
+        return [
+          {
+            ...copy,
+            confidence: timed ? confidence : Math.min(confidence, 0.5),
+            entries: timed
+              ? selected.entries
+              : selected.entries.map(
+                  (entry) =>
+                    new TracklistEntry({ startMs: null, artist: entry.artist, title: entry.title }),
+                ),
+          },
+        ];
+      }),
+    );
+    const [best] = lists
+      .flat()
+      .toSorted(
+        (a, b) => b.confidence - a.confidence || a.offMs - b.offMs || a.id.localeCompare(b.id),
+      );
+    return best;
   });
 
 const entryKey = (entry: { readonly artist: string | null; readonly title: string | null }) =>
   JSON.stringify([entry.artist, entry.title]);
 
 /**
- * Makes the segments of the source from its selected tracklist. A segment keeps the recording of an
- * earlier segment with the same text, also of another source. Returns whether a segment changed.
+ * Makes the segments of the source from its selected tracklist, or from the tracklist of a copy
+ * that is better. A segment keeps the recording of an earlier segment with the same text, also of
+ * another source. Returns whether a segment changed.
  */
 const deriveSegments = (sourceId: string) =>
   Effect.gen(function* () {
@@ -161,8 +295,12 @@ const deriveSegments = (sourceId: string) =>
     const [row] = yield* db.select().from(source).where(eq(source.id, sourceId));
     if (row === undefined) return false;
 
+    const own = selectTracklist(yield* tracklistAssertions(sourceId));
+    const copy = own?.admin === true ? undefined : yield* copyTracklist(sourceId);
     const entries =
-      resolveField(yield* Providers, yield* tracklistAssertions(sourceId), field, Entries) ?? [];
+      copy !== undefined && copy.confidence > (own?.assertion.confidence ?? 0)
+        ? copy.entries
+        : (own?.entries ?? []);
     const titles = [...new Set(entries.map((entry) => entry.title))];
     const matched = new Map(
       (titles.length === 0
@@ -209,6 +347,16 @@ const deriveSegments = (sourceId: string) =>
     // Segments belong to the group of the set recording
     if (row.recordingId !== null) yield* touchGroups([row.recordingId]);
     return true;
+  });
+
+// The copies of a set can select the tracklist of the source, so they change with it
+const deriveWithCopies = (sourceId: string) =>
+  Effect.gen(function* () {
+    const copies = yield* setCopies(sourceId);
+    const changed = yield* Effect.forEach([sourceId, ...copies.map((copy) => copy.id)], (id) =>
+      deriveSegments(id).pipe(Effect.map((derived) => (derived ? [id] : []))),
+    );
+    return changed.flat();
   });
 
 // `ID - ID` and similar are tracks that the DJ does not name
@@ -262,8 +410,8 @@ const queueMatch = (sourceId: string) =>
   });
 
 /**
- * Reads the tracklists of a provider source in the background when it plays, at most once a day.
- * Call it after the source is in the catalog.
+ * Reads the tracklists of a provider source and, for a set, of the tracklist sites in the
+ * background when it plays, at most once a day. Call it after the source is in the catalog.
  */
 export const queueTracklistRead = (sourceId: string, userId: UserId) =>
   Effect.gen(function* () {
@@ -277,7 +425,9 @@ export const queueTracklistRead = (sourceId: string, userId: UserId) =>
       .select({ provider: source.provider })
       .from(source)
       .where(eq(source.id, sourceId));
-    if (row === undefined || (yield* Providers).get(row.provider)?.tracklists === undefined) return;
+    if (row === undefined) return;
+    const provider = (yield* Providers).get(row.provider);
+    if (provider?.tracklists === undefined && tracklists.sites.size === 0) return;
 
     tracklists.readAt.set(sourceId, now);
     // The user waits for it, so it runs before imports and lookups
@@ -289,35 +439,58 @@ const ReadPayload = Schema.Struct({ sourceId: Schema.String, userId: UserId });
 const runRead = ({ sourceId, userId }: typeof ReadPayload.Type) =>
   Effect.gen(function* () {
     const db = yield* Database;
+    const tracklists = yield* Tracklists;
     const [row] = yield* db.select().from(source).where(eq(source.id, sourceId));
     if (row === undefined) return;
 
+    // A failed read changes nothing, and the next play tries again
+    const failed = (error: ProviderError) =>
+      Effect.gen(function* () {
+        tracklists.readAt.delete(sourceId);
+        yield* Effect.logWarning("Cannot read the tracklists").pipe(
+          Effect.annotateLogs({ sourceId, reason: error.reason }),
+        );
+        return undefined;
+      });
+
     const usable = (yield* usableProviders(userId)).get(row.provider);
     const read = usable?.provider.tracklists;
-    if (usable === undefined || read === undefined) return;
-
-    // A failed read changes nothing, and the next play tries again
-    const tracklists = yield* read(row.externalId, usable.credentials).pipe(
-      Effect.catchTag("ProviderError", (error) =>
-        Effect.gen(function* () {
-          (yield* Tracklists).readAt.delete(sourceId);
-          yield* Effect.logWarning("Cannot read the tracklists").pipe(
-            Effect.annotateLogs({ sourceId, reason: error.reason }),
+    const own =
+      usable === undefined || read === undefined
+        ? undefined
+        : yield* read(row.externalId, usable.credentials).pipe(
+            Effect.catchTag("ProviderError", failed),
           );
-          return undefined;
-        }),
-      ),
-    );
-    if (tracklists === undefined) return;
+
+    const artists =
+      row.recordingId === null
+        ? undefined
+        : (yield* setArtists([row.recordingId])).get(row.recordingId);
+    const good = own?.some((tracklist) => tracklist.confidence >= goodConfidence) === true;
+    const sites =
+      artists === undefined || good
+        ? []
+        : yield* Effect.forEach([...tracklists.sites], ([id, lookup]) =>
+            lookup({ artists, title: row.rawTitle ?? "", durationMs: row.rawDurationMs }).pipe(
+              Effect.map((found) => ({ id, found })),
+              Effect.catchTag("ProviderError", failed),
+            ),
+          );
 
     const changed = yield* db.transaction(() =>
       Effect.gen(function* () {
-        yield* assertProviderTracklists(sourceId, `${row.provider}:${row.externalId}`, tracklists);
-        return yield* deriveSegments(sourceId);
+        if (own !== undefined) {
+          yield* assertProviderTracklists(sourceId, `${row.provider}:${row.externalId}#`, own);
+        }
+        for (const site of sites) {
+          if (site !== undefined)
+            yield* assertProviderTracklists(sourceId, `${site.id}:`, site.found);
+        }
+        return yield* deriveWithCopies(sourceId);
       }),
     );
-    if (changed) yield* publish(sourceId);
-    yield* queueMatch(sourceId);
+    yield* Effect.forEach(changed, publish, { discard: true });
+    yield* Effect.forEach(new Set([sourceId, ...changed]), queueMatch, { discard: true });
   });
 
 const matchedRecording = (candidate: MusicBrainzRecording) =>
@@ -469,6 +642,7 @@ const segmentsOf = (sourceId: string, userId: UserId) =>
         album: pages?.album ?? canonical?.album ?? null,
         artistRef: pages?.artistRef ?? null,
         albumRef: pages?.albumRef ?? null,
+        recordingId: row.recordingId === null ? null : RecordingId.make(row.recordingId),
       });
     });
   });
@@ -524,11 +698,11 @@ export const hideTracklist = (sourceId: string, hidden: boolean) =>
           const known = yield* tracklistAssertions(sourceId);
           if (known.some((assertion) => assertion.id === id)) yield* retract([id]);
         }
-        return yield* deriveSegments(sourceId);
+        return yield* deriveWithCopies(sourceId);
       }),
     );
-    if (changed) yield* publish(sourceId);
-    yield* queueMatch(sourceId);
+    yield* Effect.forEach(changed, publish, { discard: true });
+    yield* Effect.forEach(new Set([sourceId, ...changed]), queueMatch, { discard: true });
   });
 
 /** Build it after the plugins, so that a read finds the provider and the MusicBrainz lookups */

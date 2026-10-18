@@ -162,7 +162,8 @@ export class ProviderTracklist extends Data.Class<{
   readonly entries: ReadonlyArray<TracklistEntry>;
   /**
    * From 0 to 1, for the selection among the candidates of a source: 1 for structured platform
-   * data, 0.9 for chapters, 0.8 for a description, 0.6 for a comment, 0.5 for a list without times
+   * data, 0.9 for chapters, 0.8 for a description, 0.7 for a tracklist site, 0.6 for a comment,
+   * 0.5 for a list without times
    */
   readonly confidence: number;
 }> {}
@@ -494,6 +495,22 @@ export class PluginContext extends Data.Class<{
   readonly musicbrainz: {
     /** Supplies the MusicBrainz lookups of matching. Setup fails if another plugin supplied them. */
     readonly add: (lookup: MusicBrainzLookup) => Effect.Effect<void, never, Scope.Scope>;
+  };
+  readonly tracklists: {
+    /**
+     * Tracklists of sets from a site that does not host them. The origin ref is `<id>:<part>`, so
+     * `id` is not a provider ID and `part` names the page, for example `<page_id>#tracklist`.
+     */
+    readonly add: (
+      id: string,
+      lookup: (set: {
+        /** As the core parsed them from the title of the upload */
+        readonly artists: ReadonlyArray<string>;
+        /** The title of the upload, for example `Fred again.. | Boiler Room: London` */
+        readonly title: string;
+        readonly durationMs: number | null;
+      }) => Effect.Effect<ReadonlyArray<ProviderTracklist>, ProviderError>,
+    ) => Effect.Effect<void, never, Scope.Scope>;
   };
   readonly outputs: {
     /**

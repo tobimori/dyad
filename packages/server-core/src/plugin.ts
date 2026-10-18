@@ -11,6 +11,7 @@ import { syncLibraryRoot } from "./library.ts";
 import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
 import { Outputs } from "./outputs.ts";
 import { Popularities, Providers } from "./providers.ts";
+import { Tracklists } from "./tracklists.ts";
 
 // A second registration of a key would replace the first, and closing either plugin scope would
 // remove both. The defect fails the setup of the second plugin only.
@@ -80,6 +81,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
       const popularities = yield* Popularities;
       const musicbrainzLookups = yield* MusicBrainzLookups;
       const outputs = yield* Outputs;
+      const tracklists = yield* Tracklists;
       const services = yield* Effect.context<
         | Database
         | ReplicaDatabase
@@ -111,6 +113,9 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         },
         musicbrainz: {
           add: (lookup) => register(musicbrainzLookups, musicbrainzLookupKey, lookup),
+        },
+        tracklists: {
+          add: (id, lookup) => register(tracklists.sites, id, lookup),
         },
         outputs: {
           // `device:<DeviceId>` is the output ID of a Dyad device

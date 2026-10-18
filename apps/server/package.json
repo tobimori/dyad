@@ -21,6 +21,7 @@
     "@dyad/plugin-deezer": "workspace:*",
     "@dyad/plugin-hypem": "workspace:*",
     "@dyad/plugin-local-files": "workspace:*",
+    "@dyad/plugin-mixesdb": "workspace:*",
     "@dyad/plugin-musicbrainz": "workspace:*",
     "@dyad/plugin-soundcloud": "workspace:*",
     "@dyad/plugin-youtube": "workspace:*",

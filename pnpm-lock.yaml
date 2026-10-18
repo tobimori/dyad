@@ -251,6 +251,9 @@ importers:
       '@dyad/plugin-local-files':
         specifier: workspace:*
         version: link:../../plugins/local-files
+      '@dyad/plugin-mixesdb':
+        specifier: workspace:*
+        version: link:../../plugins/mixesdb
       '@dyad/plugin-musicbrainz':
         specifier: workspace:*
         version: link:../../plugins/musicbrainz
@@ -617,6 +620,15 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.2.1)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  plugins/mixesdb:
+    dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
       effect:
         specifier: 'catalog:'
         version: 4.0.5

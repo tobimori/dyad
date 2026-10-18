@@ -255,6 +255,11 @@ export class SourceSegment extends Schema.Class<SourceSegment>("SourceSegment")(
   /** The pages of a source of the matched recording that the user can play */
   artistRef: Schema.NullOr(ArtistRef),
   albumRef: Schema.NullOr(AlbumRef),
+  /** The matched recording, which a playlist entry can save */
+  recordingId: Schema.NullOr(RecordingId).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 export class TracklistEditFailed extends Schema.TaggedError<TracklistEditFailed>()(

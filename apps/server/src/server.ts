@@ -10,6 +10,7 @@ import { castPlugin } from "@dyad/plugin-cast/server";
 import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { hypemPlugin } from "@dyad/plugin-hypem/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
+import { mixesdbPlugin } from "@dyad/plugin-mixesdb/server";
 import { musicbrainzPlugin } from "@dyad/plugin-musicbrainz/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
 import { youtubePlugin } from "@dyad/plugin-youtube/server";
@@ -40,6 +41,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   castPlugin,
   deezerPlugin,
   hypemPlugin,
+  mixesdbPlugin,
   musicbrainzPlugin,
   soundcloudPlugin,
   youtubePlugin,

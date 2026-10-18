@@ -45,3 +45,44 @@ export const parseUntimedTracklist = (text: string) =>
     const entry = link.test(line) ? undefined : tracklistEntry(line.replaceAll(clock, " "), null);
     return entry?.artist == null ? [] : [entry];
   });
+
+// Uploads of the same set add or leave out these words
+const setNoise = new Set([
+  "dj",
+  "set",
+  "live",
+  "full",
+  "official",
+  "video",
+  "audio",
+  "hd",
+  "hq",
+  "4k",
+  "1080p",
+  "show",
+  "stream",
+  "at",
+  "in",
+  "the",
+  "from",
+  "and",
+  "of",
+  "b2b",
+  "vs",
+  "presents",
+  "pres",
+]);
+
+const words = (text: string) =>
+  text
+    .normalize("NFKD")
+    .replaceAll(/\p{M}/gu, "")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length > 1);
+
+/** The words of a set title that name the event, for example `boiler room london`, without the DJs */
+export const eventWords = (title: string, artists: ReadonlyArray<string>) => {
+  const artistWords = new Set(artists.flatMap(words));
+  return [...new Set(words(title))].filter((word) => !artistWords.has(word) && !setNoise.has(word));
+};
