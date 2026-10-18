@@ -10,7 +10,10 @@ import { Context, Data } from "effect";
 import type { Effect, Option, Stream } from "effect";
 
 export class Library extends Data.Class<{
-  /** The user's library songs that have a source */
+  /**
+   * The user's library songs that have a source, in a stable order such as the order of adding.
+   * At each server start, the first artist of a name in this order gets the name without marks.
+   */
   readonly songs: ReadonlyArray<SourceSummary>;
   /** Epoch ms of the last library sync; Cantata reloads its cache when it changes */
   readonly syncedAt: number;

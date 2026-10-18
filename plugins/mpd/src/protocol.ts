@@ -1,4 +1,4 @@
-import type { SourceSummary } from "@dyad/domain";
+import { SourceSummary } from "@dyad/domain";
 import { Data, Effect, Option, Schema } from "effect";
 
 /** An MPD error. The server sends it as `ACK [code@index] {command} message`. */
@@ -79,8 +79,31 @@ export const sourceIdOf = (uri: string) => {
   return uri.startsWith(songUriPrefix) && isUuid(sourceId) ? Option.some(sourceId) : Option.none();
 };
 
+// mpc 0.35, ncmpc 0.54, ncmpcpp 0.10.1 and rmpc 0.11.0 show U+200B as nothing
+const mark = "\u200B";
+
+/** The name without the marks of `markArtist` */
+export const plainName = (name: string) => name.replace(/\u200B+$/u, "");
+
+export const hasMark = (name: string) => name.includes(mark);
+
+/**
+ * Gives each further artist of a name one more invisible mark, so that clients that group by
+ * `Artist` show it in its own row. A mark does not change while the server runs.
+ */
+export const markArtist = (artistRefsByName: Map<string, Array<string>>, song: SourceSummary) => {
+  const { artist, artistRef } = song;
+  // Without a ref the song cannot tell its artist, so it gets the plain name
+  if (artist === null || artistRef === null) return song;
+  const refs = artistRefsByName.get(artist) ?? [];
+  artistRefsByName.set(artist, refs);
+  const known = refs.indexOf(artistRef);
+  const index = known === -1 ? refs.push(artistRef) - 1 : known;
+  return index === 0 ? song : new SourceSummary({ ...song, artist: artist + mark.repeat(index) });
+};
+
 /** The tags that `SourceSummary` has, in the order of the song output */
-export const tags = ["Artist", "Album", "Title"] as const;
+export const tags = ["Artist", "ArtistSort", "Album", "Title"] as const;
 export type Tag = (typeof tags)[number];
 
 /** Finds a tag of `tags` without regard to case, because clients send `artist` or `ARTIST` */
@@ -88,10 +111,20 @@ export const tagNamed = (name: string) =>
   Option.fromNullishOr(tags.find((tag) => tag.toLowerCase() === name.toLowerCase()));
 
 export const tagValue = (song: SourceSummary, tag: Tag) =>
-  ({ Artist: song.artist, Album: song.album, Title: song.title })[tag];
+  ({
+    Artist: song.artist,
+    // Clients that sort by it keep the artists of a name together
+    ArtistSort: song.artist === null ? null : plainName(song.artist),
+    Album: song.album,
+    Title: song.title,
+  })[tag];
 
 // MPD 0.24 gives the `Artist` of a song without `AlbumArtist` in filters, groups and `list`
-const queryTags = [...tags.map((tag) => [tag, tag] as const), ["AlbumArtist", "Artist"] as const];
+const queryTags = [
+  ...tags.map((tag) => [tag, tag] as const),
+  ["AlbumArtist", "Artist"] as const,
+  ["AlbumArtistSort", "ArtistSort"] as const,
+];
 
 /** The name of a tag in a filter, group or `list`, and the tag that gives its value */
 export const queryTag = (name: string) =>
@@ -114,7 +147,9 @@ export const songLines = (song: SourceSummary, enabled: ReadonlySet<Tag>) => [
   field("file", songUri(song.id)),
   ...tags.flatMap((tag) => {
     const value = tagValue(song, tag);
-    return enabled.has(tag) && value !== null ? [field(tag, value)] : [];
+    // MPD sends `ArtistSort` only when a file has one
+    const sameAsArtist = tag === "ArtistSort" && value === song.artist;
+    return enabled.has(tag) && value !== null && !sameAsArtist ? [field(tag, value)] : [];
   }),
   ...(song.durationMs === null
     ? []

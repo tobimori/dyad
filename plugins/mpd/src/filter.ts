@@ -1,7 +1,7 @@
 import type { SourceSummary } from "@dyad/domain";
 import { Data, Effect, Option } from "effect";
 
-import { Ack, ackCode, songUri, tags, tagText, tagValue } from "./protocol.ts";
+import { Ack, ackCode, hasMark, plainName, songUri, tags, tagText, tagValue } from "./protocol.ts";
 
 type Matcher = (song: SourceSummary) => boolean;
 
@@ -49,7 +49,7 @@ export const parseFilter = (args: ReadonlyArray<string>, mode: "find" | "search"
           tag.toLowerCase() === "any" &&
           (operator === "==" || operator === "contains")
         ) {
-          query = value;
+          query = plainName(value);
           return () => true;
         }
 
@@ -61,7 +61,11 @@ export const parseFilter = (args: ReadonlyArray<string>, mode: "find" | "search"
                 catch: () => invalid(`Invalid regular expression: ${value}`),
               })
             : null;
-        const test = (actual: string) => {
+        // `==` and a value with marks select one artist; the other operators match all artists of
+        // a name
+        const exact = positive === "==" || hasMark(value);
+        const test = (tagged: string) => {
+          const actual = exact ? tagged : plainName(tagged);
           if (pattern !== null) return pattern.test(actual);
           if (positive === "contains") return fold(actual).includes(expected);
           if (positive === "starts_with") return fold(actual).startsWith(expected);

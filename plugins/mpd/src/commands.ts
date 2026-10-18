@@ -20,11 +20,13 @@ import {
 
 import { parseFilter } from "./filter.ts";
 import { directoryPath, directoryTree, walk } from "./library.ts";
+import { Library } from "./mirror.ts";
 import type { Artwork, MirrorUnavailable } from "./mirror.ts";
 import {
   Ack,
   ackCode,
   field,
+  markArtist,
   seconds,
   songLines,
   songUri,
@@ -44,6 +46,8 @@ export class Server extends Data.Class<{
   readonly startedAt: number;
   /** MPD output IDs are small integers. A Dyad output gets one when the server first sees it. */
   readonly outputNumbers: Map<string, number>;
+  /** The artist refs of each name in the order of first sight, for `markArtist` */
+  readonly artistRefsByName: Map<string, Array<string>>;
 }> {}
 
 export class Connection extends Data.Class<{
@@ -88,10 +92,26 @@ const view = Effect.flatMap(Session, (session) => SubscriptionRef.get(session.vi
 
 const mirror = Effect.map(Session, (session) => session.mirror);
 
-const library = mirror.pipe(
-  Effect.flatMap((mirror) => mirror.library),
-  Effect.mapError(fromMirror),
-);
+const library = (connection: Connection) =>
+  mirror.pipe(
+    Effect.flatMap((mirror) => mirror.library),
+    Effect.map(
+      ({ songs, syncedAt }) =>
+        new Library({
+          songs: songs.map((song) => markArtist(connection.server.artistRefsByName, song)),
+          syncedAt,
+        }),
+    ),
+    Effect.mapError(fromMirror),
+  );
+
+// Reads the library first, so that its order and not the order of commands decides which artist
+// of a name keeps the plain name
+const artistMarks = (connection: Connection) =>
+  library(connection).pipe(
+    Effect.ignore,
+    Effect.as((song: SourceSummary) => markArtist(connection.server.artistRefsByName, song)),
+  );
 
 const control = (command: typeof SessionCommand.Type, ifQueueVersion: number | null = null) =>
   controlSession(command, ifQueueVersion).pipe(Effect.mapError(fromMirror));
@@ -150,16 +170,19 @@ const entryIdsIn = (current: View, positions: string) =>
 const queueLines = (
   current: View,
   connection: Connection,
-  keep: (entry: QueueEntry, position: number) => boolean = () => true,
+  keep: (entry: QueueEntry, position: number, song: SourceSummary) => boolean = () => true,
 ) =>
-  current.entries.flatMap((entry, position) =>
-    keep(entry, position)
-      ? [
-          ...songLines(entry.source, connection.enabledTags),
-          field("Pos", position),
-          field("Id", entry.id),
-        ]
-      : [],
+  Effect.map(artistMarks(connection), (mark) =>
+    current.entries.flatMap((entry, position) => {
+      const song = mark(entry.source);
+      return keep(entry, position, song)
+        ? [
+            ...songLines(song, connection.enabledTags),
+            field("Pos", position),
+            field("Id", entry.id),
+          ]
+        : [];
+    }),
   );
 
 const songsLines = (songs: ReadonlyArray<SourceSummary>, connection: Connection) =>
@@ -223,12 +246,12 @@ const enqueue = (
     return entryIds;
   });
 
-const sourcesAt = (uri: string) =>
+const sourcesAt = (uri: string, connection: Connection) =>
   Effect.gen(function* () {
     const sourceId = sourceIdOf(uri);
     if (Option.isSome(sourceId)) return [sourceId.value];
 
-    const tree = directoryTree((yield* library).songs);
+    const tree = directoryTree((yield* library(connection)).songs);
     const path = directoryPath(uri);
     if (!tree.has(path)) {
       return yield* new Ack({ code: ackCode.noExist, message: "No such directory" });
@@ -236,17 +259,16 @@ const sourcesAt = (uri: string) =>
     return walk(tree, path).flatMap((entry) => (Predicate.isString(entry) ? [] : [entry.id]));
   });
 
-const findSongs = (args: ReadonlyArray<string>, mode: "find" | "catalog") =>
+const findSongs = (args: ReadonlyArray<string>, mode: "find" | "catalog", connection: Connection) =>
   Effect.gen(function* () {
     const filter = yield* parseFilter(args, mode);
-    const songs =
-      filter.query === null
-        ? (yield* library).songs
-        : yield* mirror.pipe(
-            Effect.flatMap((mirror) => mirror.search(filter.query ?? "")),
-            Effect.mapError(fromMirror),
-          );
-    return songs.filter(filter.matches);
+    if (filter.query === null) return (yield* library(connection)).songs.filter(filter.matches);
+    const found = yield* mirror.pipe(
+      Effect.flatMap((mirror) => mirror.search(filter.query ?? "")),
+      Effect.mapError(fromMirror),
+    );
+    const mark = yield* artistMarks(connection);
+    return found.map(mark).filter(filter.matches);
   });
 
 const findInQueue = (
@@ -256,7 +278,7 @@ const findInQueue = (
 ) =>
   Effect.gen(function* () {
     const filter = yield* parseFilter(args, mode);
-    return queueLines(yield* view, connection, (entry) => filter.matches(entry.source));
+    return yield* queueLines(yield* view, connection, (_, __, song) => filter.matches(song));
   });
 
 // Splits trailing `group TAG` arguments off a filter
@@ -502,13 +524,13 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
       }),
     ),
     currentsong: handler(0, 0, (_, connection) =>
-      Effect.map(view, (current) =>
+      Effect.flatMap(view, (current) =>
         queueLines(current, connection, (entry) => entry.id === current.playback.entryId),
       ),
     ),
     stats: handler(0, 0, (_, connection) =>
       Effect.gen(function* () {
-        const { songs, syncedAt } = yield* library;
+        const { songs, syncedAt } = yield* library(connection);
         const now = yield* Clock.currentTimeMillis;
         const totalMs = songs.reduce((total, song) => total + (song.durationMs ?? 0), 0);
         return [
@@ -632,9 +654,9 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
         : Effect.fail(new Ack({ code: ackCode.unknown, message: "not supported" })),
     ),
 
-    add: handler(1, 2, ([uri = "", position]) =>
+    add: handler(1, 2, ([uri = "", position], connection) =>
       Effect.gen(function* () {
-        const sourceIds = yield* sourcesAt(uri);
+        const sourceIds = yield* sourcesAt(uri, connection);
         const at = position === undefined ? null : yield* integer(position);
         yield* enqueue(sourceIds, at, "library");
         return [];
@@ -683,9 +705,11 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
       Effect.gen(function* () {
         const current = yield* view;
         // ncmpc and mpc send `-1` for the whole queue
-        if (positions === undefined || positions === "-1") return queueLines(current, connection);
+        if (positions === undefined || positions === "-1") {
+          return yield* queueLines(current, connection);
+        }
         const [start, end] = yield* range(positions, current.entries.length);
-        return queueLines(
+        return yield* queueLines(
           current,
           connection,
           (_, position) => position >= start && position < end,
@@ -695,15 +719,19 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
     playlistid: handler(0, 1, ([id], connection) =>
       Effect.gen(function* () {
         const current = yield* view;
-        if (id === undefined) return queueLines(current, connection);
+        if (id === undefined) return yield* queueLines(current, connection);
         const entry = yield* entryWithId(current, id);
-        return queueLines(current, connection, (candidate) => candidate === entry);
+        return yield* queueLines(current, connection, (candidate) => candidate === entry);
       }),
     ),
     plchanges: handler(1, 2, ([version = "", positions], connection) =>
       Effect.gen(function* () {
         const current = yield* view;
-        return queueLines(current, connection, yield* changedSince(current, version, positions));
+        return yield* queueLines(
+          current,
+          connection,
+          yield* changedSince(current, version, positions),
+        );
       }),
     ),
     plchangesposid: handler(1, 2, ([version = "", positions]) =>
@@ -722,7 +750,7 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
 
     lsinfo: handler(0, 1, ([uri = ""], connection) =>
       Effect.gen(function* () {
-        const { songs } = yield* library;
+        const { songs } = yield* library(connection);
         const sourceId = sourceIdOf(uri);
         if (Option.isSome(sourceId)) {
           return songsLines(
@@ -745,9 +773,9 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
         ];
       }),
     ),
-    listall: handler(0, 1, ([uri = ""]) =>
+    listall: handler(0, 1, ([uri = ""], connection) =>
       Effect.gen(function* () {
-        const tree = directoryTree((yield* library).songs);
+        const tree = directoryTree((yield* library(connection)).songs);
         const path = directoryPath(uri);
         if (!tree.has(path)) {
           return yield* new Ack({ code: ackCode.noExist, message: "No such directory" });
@@ -759,7 +787,7 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
     ),
     listallinfo: handler(0, 1, ([uri = ""], connection) =>
       Effect.gen(function* () {
-        const tree = directoryTree((yield* library).songs);
+        const tree = directoryTree((yield* library(connection)).songs);
         const path = directoryPath(uri);
         if (!tree.has(path)) {
           return yield* new Ack({ code: ackCode.noExist, message: "No such directory" });
@@ -771,7 +799,7 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
         );
       }),
     ),
-    list: handler(1, Infinity, ([name = "", ...args]) =>
+    list: handler(1, Infinity, ([name = "", ...args], connection) =>
       Effect.gen(function* () {
         const query = queryTag(name);
         // Dyad has no values for other MPD tags, for example the `Genre` of Cantata
@@ -785,7 +813,7 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
           return yield* invalid('should be "Album" for 3 arguments');
         }
         const filter = yield* parseFilter(legacy ? ["Artist", artist] : rest, "find");
-        const songs = (yield* library).songs.filter(filter.matches);
+        const songs = (yield* library(connection)).songs.filter(filter.matches);
 
         const rows = new Map<string, ReadonlyArray<string>>();
         for (const song of songs) {
@@ -794,9 +822,13 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
           const row = [...groups.map((group) => tagText(song, group)), value];
           rows.set(row.join("\n"), row);
         }
-        const sorted = [...rows.values()].sort((left, right) =>
-          left.join("\n").localeCompare(right.join("\n")),
-        );
+        // Column by column, so that the rows of a group stay together. `localeCompare` sees no
+        // difference between names that differ only in marks.
+        const sorted = [...rows.values()].sort((left, right) => {
+          const column = left.findIndex((value, index) => value !== right[index]);
+          const [a = "", b = ""] = [left[column], right[column]];
+          return a.localeCompare(b) || (a < b ? -1 : 1);
+        });
 
         const columns = [...groups, label];
         return sorted.flatMap((row, index) => {
@@ -809,14 +841,14 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
       }),
     ),
     find: handler(1, Infinity, (args, connection) =>
-      Effect.map(findSongs(args, "find"), (songs) => songsLines(songs, connection)),
+      Effect.map(findSongs(args, "find", connection), (songs) => songsLines(songs, connection)),
     ),
     search: handler(1, Infinity, (args, connection) =>
-      Effect.map(findSongs(args, "catalog"), (songs) => songsLines(songs, connection)),
+      Effect.map(findSongs(args, "catalog", connection), (songs) => songsLines(songs, connection)),
     ),
-    findadd: handler(1, Infinity, (args) =>
+    findadd: handler(1, Infinity, (args, connection) =>
       Effect.gen(function* () {
-        const songs = yield* findSongs(args, "find");
+        const songs = yield* findSongs(args, "find", connection);
         yield* enqueue(
           songs.map((song) => song.id),
           null,
@@ -825,9 +857,9 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
         return [];
       }),
     ),
-    searchadd: handler(1, Infinity, (args) =>
+    searchadd: handler(1, Infinity, (args, connection) =>
       Effect.gen(function* () {
-        const songs = yield* findSongs(args, "catalog");
+        const songs = yield* findSongs(args, "catalog", connection);
         yield* enqueue(
           songs.map((song) => song.id),
           null,
@@ -836,11 +868,11 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
         return [];
       }),
     ),
-    count: handler(1, Infinity, (args) =>
+    count: handler(1, Infinity, (args, connection) =>
       Effect.gen(function* () {
         const { rest, groups } = groupsOf(args);
         const filter = yield* parseFilter(rest, "find");
-        const songs = (yield* library).songs.filter(filter.matches);
+        const songs = (yield* library(connection)).songs.filter(filter.matches);
         const totals = (songs: ReadonlyArray<SourceSummary>) => [
           field("songs", songs.length),
           field(
@@ -882,7 +914,11 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
       ),
     ),
     listplaylistinfo: handler(1, 1, ([name = ""], connection) =>
-      Effect.map(playlistSongs(name), (songs) => songsLines(songs, connection)),
+      Effect.gen(function* () {
+        const songs = yield* playlistSongs(name);
+        const mark = yield* artistMarks(connection);
+        return songsLines(songs.map(mark), connection);
+      }),
     ),
     load: handler(1, 2, ([name = "", positions]) =>
       Effect.gen(function* () {

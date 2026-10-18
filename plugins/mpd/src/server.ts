@@ -273,6 +273,7 @@ export const serve = (listen: { readonly host: string; readonly port: number }, 
     const server = new Server({
       startedAt: yield* Clock.currentTimeMillis,
       outputNumbers: new Map(),
+      artistRefsByName: new Map(),
     });
     const peers = new Map<string, number>();
     yield* Effect.logInfo(`MPD server listens on ${listen.host}:${listen.port}`);

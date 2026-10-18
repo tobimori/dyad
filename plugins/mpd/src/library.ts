@@ -55,12 +55,12 @@ export const directoryTree = (songs: ReadonlyArray<SourceSummary>) => {
     songs: ReadonlyArray<SourceSummary>,
   ) => tree.set(path, new Directory({ directories, songs }));
 
-  const artistKey = (song: SourceSummary) => song.artistRef ?? artistName(song);
   const albumKey = (song: SourceSummary) =>
-    song.albumRef ?? `${artistKey(song)}\n${song.album ?? ""}`;
+    song.albumRef ?? `${artistName(song)}\n${song.album ?? ""}`;
   const albumName = (song: SourceSummary) => song.album ?? "Unknown Album";
 
-  const artists = group("Artists", songs, artistKey, artistName);
+  // By name, as clients group by `Artist`; `markArtist` gives each artist its own name
+  const artists = group("Artists", songs, artistName, artistName);
   for (const artist of artists) {
     const albums = group(artist.path, artist.songs, albumKey, albumName);
     for (const album of albums) add(album.path, [], album.songs);
