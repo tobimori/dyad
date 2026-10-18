@@ -2,7 +2,7 @@ import type { SourceSummary } from "@dyad/domain";
 import { Data } from "effect";
 import type { Effect, Scope, Stream } from "effect";
 
-/** The source that this device plays or has paused */
+/** The current source of the user's session, on whichever output plays it */
 export class NowPlaying extends Data.Class<{
   readonly source: SourceSummary;
   readonly state: "playing" | "paused";

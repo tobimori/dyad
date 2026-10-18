@@ -1,5 +1,6 @@
 import { titleOf } from "@dyad/client-runtime";
-import type { QueueEntry, RepeatMode } from "@dyad/client-runtime";
+import type { QueueEntry } from "@dyad/client-runtime";
+import type { RepeatMode } from "@dyad/domain";
 import { Fragment } from "react";
 
 import { ProgressBar, VolumeBar } from "./bars.tsx";

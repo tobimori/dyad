@@ -330,6 +330,9 @@ importers:
       '@dyad/domain':
         specifier: workspace:*
         version: link:../domain
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../plugin
       effect:
         specifier: 'catalog:'
         version: 4.0.5

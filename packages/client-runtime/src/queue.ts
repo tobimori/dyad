@@ -1,7 +1,6 @@
-import type { PlayContext, SourceSummary } from "@dyad/domain";
-import { Data, Effect, Random, Schema } from "effect";
-
-export const RepeatMode = Schema.Literals(["off", "all", "one"]);
+import { isSameSong } from "@dyad/domain";
+import type { PlayContext, RepeatMode, SourceSummary } from "@dyad/domain";
+import { Data, Effect, Random } from "effect";
 
 export class QueueEntry extends Data.Class<{
   /** Tells apart two entries of the same source */
@@ -38,19 +37,6 @@ export const currentEntry = (queue: PlayQueue) =>
   queue.current === null ? undefined : queue.entries[queue.current];
 
 const shuffled = <A>(items: ReadonlyArray<A>) => Effect.runSync(Random.shuffle(items));
-
-const sameText = (left: string | null, right: string | null) =>
-  left !== null && right !== null && left.toLowerCase() === right.toLowerCase();
-
-const durationToleranceMs = 2000;
-
-/** Two sources that look like one song, for example on an album and on a single */
-export const isSameSong = (left: SourceSummary, right: SourceSummary) => {
-  if (left.id === right.id) return true;
-  if (!sameText(left.title, right.title) || !sameText(left.artist, right.artist)) return false;
-  if (left.durationMs === null || right.durationMs === null) return true;
-  return Math.abs(left.durationMs - right.durationMs) <= durationToleranceMs;
-};
 
 /**
  * Plays `sources[index]` and queues the rest of the list after it. A search lists one song once per

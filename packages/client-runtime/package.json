@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@dyad/domain": "workspace:*",
+    "@dyad/plugin": "workspace:*",
     "effect": "catalog:"
   }
 }
