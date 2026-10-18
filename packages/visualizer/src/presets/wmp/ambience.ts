@@ -2,7 +2,7 @@ import { Data } from "effect";
 
 import type { Canvas, Color, Motion } from "../../canvas.ts";
 import { type Frame, Preset, type Random } from "../../preset.ts";
-import { hex, toRamp } from "./color.ts";
+import { gradient, hex, toRamp } from "./color.ts";
 
 // The hue order of WMP 9 Ambience
 const hues = [
@@ -10,9 +10,12 @@ const hues = [
   0xf078b4, 0x8c5ae6, 0xfaaa78, 0xa0a0a0,
 ].map(hex);
 
-class Style extends Data.Class<{
+/** One look of the Ambience engine, which Battery shares */
+export class Style extends Data.Class<{
   /** Index in `hues` of the first color, as in the first run on Windows XP */
   readonly hue: number;
+  /** Fixed colors from dark to bright, shown instead of the hue cycle when the style runs alone */
+  readonly palette?: ReadonlyArray<Color>;
   /** Level that shows as the darkest color, so that the background keeps a dark tint */
   readonly base: number;
   readonly decay: number;
@@ -20,6 +23,8 @@ class Style extends Data.Class<{
   readonly bands?: number;
   /** Multiplier for the level at a point after the warp, for dark edges and holes */
   readonly edge?: (x: number, y: number, radius: number) => number;
+  /** Changes the image after the warp and before `draw`, for shifts that the warp mesh cannot do */
+  readonly post?: (canvas: Canvas, frame: Frame) => void;
   readonly move: (
     vertex: Motion,
     x: number,
@@ -35,7 +40,7 @@ class Style extends Data.Class<{
  * Draws the waveform as a jagged line through (`cx`, `cy`) in the direction `angle`. `start`
  * selects the part of the waveform, so that two lines differ.
  */
-const wave = (
+export const wave = (
   canvas: Canvas,
   frame: Frame,
   cx: number,
@@ -69,13 +74,15 @@ const wave = (
 };
 
 /** Draws the waveform around a ring with the radii `rx` and `ry` */
-const ring = (
+export const ring = (
   canvas: Canvas,
   frame: Frame,
   rx: number,
   ry: number,
   amplitude: number,
   level = 1,
+  cx = 0,
+  cy = 0,
 ) => {
   const samples = frame.audio.waveform;
   const points = Math.max(16, Math.min(samples.length, Math.round(rx * canvas.scale * 4)));
@@ -85,8 +92,8 @@ const ring = (
   for (let i = 0; i <= points; i++) {
     const a = (i / points) * Math.PI * 2;
     const v = 1 + (samples[i % points] ?? 0) * amplitude;
-    const x = Math.cos(a) * rx * v;
-    const y = Math.sin(a) * ry * v;
+    const x = cx + Math.cos(a) * rx * v;
+    const y = cy + Math.sin(a) * ry * v;
     if (i > 0) canvas.line(lastX, lastY, x, y, gain, 0, 0);
     lastX = x;
     lastY = y;
@@ -319,10 +326,11 @@ const styleSeconds = [10, 30] as const;
 const hueSeconds = [10, 60] as const;
 const hueFade = 3;
 
-const ambience = (name: string, styles: ReadonlyArray<Style>) =>
+/** A preset of the Ambience engine that shows one style, or changes between `styles` */
+export const ambienceFamily = (collection: string, name: string, styles: ReadonlyArray<Style>) =>
   new Preset({
     name,
-    collection: "Ambience",
+    collection,
     bloom: 0,
     create: (canvas, random: Random) => {
       const ramp = new Float32Array(256 * 3);
@@ -371,9 +379,11 @@ const ambience = (name: string, styles: ReadonlyArray<Style>) =>
         const mix = Math.max(0, -hueLeft / hueFade);
         const base = style.base;
         const bands = style.bands ?? 0;
+        const palette = styles.length === 1 ? style.palette : undefined;
         toRamp((t, out: Color) => {
           const level = base + (1 - base) * t;
           const u = bands > 0 ? 0.5 - 0.5 * Math.cos(level * Math.PI * bands) : level;
+          if (palette !== undefined) return gradient(palette, u, out);
           const r = (from?.r ?? 0) + ((to?.r ?? 0) - (from?.r ?? 0)) * mix;
           const g = (from?.g ?? 0) + ((to?.g ?? 0) - (from?.g ?? 0)) * mix;
           const b = (from?.b ?? 0) + ((to?.b ?? 0) - (from?.b ?? 0)) * mix;
@@ -397,10 +407,14 @@ const ambience = (name: string, styles: ReadonlyArray<Style>) =>
           const level = Math.min(1.1, pixels[o] ?? 0);
           pixels[o] = mask === undefined ? level : level * (mask[o / 3] ?? 1) ** keep;
         }
+        style.post?.(canvas, frame);
         style.draw(canvas, frame);
       };
     },
   });
+
+const ambience = (name: string, styles: ReadonlyArray<Style>) =>
+  ambienceFamily("Ambience", name, styles);
 
 export const ambienceSwirl = ambience("Swirl", [swirl]);
 export const ambienceWarp = ambience("Warp", [warp]);
