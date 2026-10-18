@@ -254,6 +254,7 @@ export const catalogSource = (song: AppleTrack) =>
     // Songs have artist IDs only in relationships, which these requests do not include
     artists: [],
     explicit: song.attributes.contentRating === "explicit",
+    bitrate: 256_000,
   });
 
 /** The catalog needs only the web client token, not a subscriber */

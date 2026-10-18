@@ -23,6 +23,7 @@ export const soundcloudPlugin = new Plugin({
             resolveTrack(withClientId, externalId).pipe(Effect.provide(services)),
           search: (query) => searchTracks(withClientId, query).pipe(Effect.provide(services)),
           metadataPriority: 10,
+          download: { leaseDays: 30 },
         }),
       );
     }),

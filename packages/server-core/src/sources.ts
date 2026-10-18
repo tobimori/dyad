@@ -148,6 +148,7 @@ export const writeProviderSource = (provider: string, item: ProviderSource) =>
       container: item.container,
       lossless: item.lossless,
       encrypted: item.encrypted,
+      bitrate: item.bitrate,
     },
   );
 

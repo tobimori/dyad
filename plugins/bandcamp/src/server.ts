@@ -21,6 +21,7 @@ export const bandcampPlugin = new Plugin({
           resolve: (externalId) => resolveTrack(externalId).pipe(Effect.provide(services)),
           search: (query) => searchTracks(query).pipe(Effect.provide(services)),
           metadataPriority: 20,
+          download: { leaseDays: 30 },
         }),
       );
     }),

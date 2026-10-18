@@ -216,6 +216,7 @@ export const appleMusicPlugin = new Plugin({
           account: { login, link },
           library,
           metadataPriority: 30,
+          download: { leaseDays: 30 },
         }),
       );
     }),

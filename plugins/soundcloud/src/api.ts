@@ -140,6 +140,7 @@ export const searchTracks = (withClientId: Effect.Success<typeof clientIdCache>,
                 ? [new CreditedArtist({ id: String(track.user.id), name: track.user.username })]
                 : [],
             explicit: track.publisher_metadata?.explicit ?? null,
+            bitrate: fullStream(track)?.preset === "aac_160k" ? 160_000 : 96_000,
           }),
       );
   });

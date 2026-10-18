@@ -79,6 +79,7 @@ export const searchTracks = (query: string) =>
               : `https://f4.bcbits.com/img/a${track.art_id}_10.jpg`,
           artists: [new CreditedArtist({ id: String(track.band_id), name: track.band_name })],
           explicit: null,
+          bitrate: 128_000,
         }),
     );
   });
