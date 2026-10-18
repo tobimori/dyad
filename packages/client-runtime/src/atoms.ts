@@ -80,6 +80,21 @@ export const serverAtoms = (
           ),
       ),
     ),
+    /** The linked providers that can create a playlist for a two-way link, with their names */
+    playlistProviders: local(
+      ["client_state"],
+      Effect.map(accountProvidersState.get, (providers) =>
+        Option.match(providers, {
+          onNone: () => [],
+          onSome: (value) =>
+            value.createPlaylists.flatMap((provider) =>
+              value.linked.includes(provider)
+                ? [{ provider, name: value.names[provider] ?? provider }]
+                : [],
+            ),
+        }),
+      ),
+    ),
     recentPlays: local(["play_event", ...catalogTables, "client_state"], localRecentPlays),
     libraryArtists: runtime.atom(
       ServerConnection.use((client) => client.listLibraryArtists()).pipe(

@@ -360,6 +360,9 @@ const makeReplica = Effect.gen(function* () {
     const value = new AccountProviders({
       names: Object.fromEntries(providers.map((provider) => [provider.provider, provider.name])),
       linked: accounts.map((account) => account.provider),
+      createPlaylists: providers.flatMap((provider) =>
+        provider.createsPlaylists ? [provider.provider] : [],
+      ),
     });
     yield* commit(accountProvidersState.set(value).pipe(Effect.as(["client_state"])));
   });

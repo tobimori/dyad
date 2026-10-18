@@ -61,5 +61,12 @@
     "hash": "89b0952e005edec7ed5164f255fdf050630d3f12dfd586355609c5ac14ae348b",
     "bps": true,
     "sql": ["ALTER TABLE `playlist` ADD `link` text;"]
+  },
+  {
+    "name": "20261018151219_add_playlist_link_state",
+    "folderMillis": 1792336339000,
+    "hash": "84d625a919ade8b1dd906b9a83f42b85871c2752a060876c2f7fe96925d79f36",
+    "bps": true,
+    "sql": ["ALTER TABLE `playlist` ADD `link_state` text;"]
   }
 ]

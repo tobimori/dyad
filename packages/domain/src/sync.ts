@@ -48,12 +48,22 @@ export const FieldClocks = Schema.NullOr(Schema.Record(Schema.String, HybridLogi
 
 /**
  * The provider playlist that the server syncs with a playlist. `import`: the server applies the
- * provider's changes and keeps the edits in Dyad.
+ * provider's changes and keeps the edits in Dyad. `two-way`: it also sends the edits in Dyad that
+ * the provider can make.
  */
 export class PlaylistLink extends Schema.Class<PlaylistLink>("PlaylistLink")({
   provider: Schema.String,
+  /** `null` until the server creates the provider playlist of a `two-way` link */
   remoteId: Schema.NullOr(Schema.String),
-  direction: Schema.Literal("import"),
+  direction: Schema.Literals(["import", "two-way"]),
+}) {}
+
+/** The result of the last write to the provider playlist of a `two-way` link. Only the server sets it. */
+export class PlaylistLinkState extends Schema.Class<PlaylistLinkState>("PlaylistLinkState")({
+  /** The provider cannot make some edits, for example a removal or a new order */
+  differs: Schema.Boolean,
+  /** Why the last write failed, for example a missing account */
+  error: Schema.NullOr(Schema.String),
 }) {}
 
 export class PlaylistRow extends Schema.Class<PlaylistRow>("PlaylistRow")({
@@ -63,6 +73,9 @@ export class PlaylistRow extends Schema.Class<PlaylistRow>("PlaylistRow")({
   name: Schema.String,
   origin: Schema.NullOr(Schema.String),
   link: Schema.NullOr(PlaylistLink).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  linkState: Schema.NullOr(PlaylistLinkState).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   createdAt: Schema.Int,
   hlc: HybridLogicalClock,
   fieldHlc: FieldClocks,
@@ -269,7 +282,10 @@ export const PlaylistName = Schema.Trimmed.check(Schema.isMinLength(1), Schema.i
 // `fractional-indexing` keys. A malformed key would break the inserts of other replicas.
 const Position = Schema.String.check(Schema.isPattern(/^[A-Za-z][0-9A-Za-z]{0,199}$/));
 
-/** A new playlist of the user, without entries */
+/**
+ * A new playlist of the user, without entries. With a `two-way` link, the server creates the
+ * provider playlist.
+ */
 export class PlaylistCreate extends Schema.Class<PlaylistCreate>("PlaylistCreate")({
   kind: Schema.Literal("playlist.create"),
   schemaVersion: Schema.Literal(1),
@@ -277,7 +293,8 @@ export class PlaylistCreate extends Schema.Class<PlaylistCreate>("PlaylistCreate
     Schema.makeFilter((row) =>
       Schema.is(PlaylistName)(row.name) &&
       row.origin === null &&
-      row.link === null &&
+      (row.link === null || (row.link.direction === "two-way" && row.link.remoteId === null)) &&
+      row.linkState === null &&
       !row.deleted &&
       !row.fieldHlc
         ? undefined

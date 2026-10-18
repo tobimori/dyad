@@ -94,6 +94,35 @@ function ConfirmDialog(props: {
   );
 }
 
+// A new playlist can also be a new playlist of a provider that gets the edits
+function LinkDialog(props: {
+  readonly providers: ReadonlyArray<{ readonly provider: string; readonly name: string }>;
+  readonly onChoose: (provider: string | null) => void;
+}) {
+  const dialog = useDialog();
+  const options = [
+    new SelectOption({ value: "", title: "Only in Dyad", detail: "" }),
+    ...props.providers.map(
+      ({ provider, name }) =>
+        new SelectOption({ value: provider, title: `Also in ${name}`, detail: "two-way" }),
+    ),
+  ];
+
+  return (
+    <Dialog title="Where does the playlist go?" width={dialogWidth}>
+      <SelectList
+        options={options}
+        width={dialogWidth - 4}
+        rows={options.length}
+        onChoose={(value) => {
+          dialog.pop();
+          props.onChoose(value === "" ? null : value);
+        }}
+      />
+    </Dialog>
+  );
+}
+
 function PickerDialog(props: {
   readonly atoms: ServerAtoms;
   readonly onChoose: (playlist: PlaylistSummary) => void;
@@ -144,32 +173,41 @@ export function usePlaylistActions(props: {
   const dialog = useDialog();
   const toast = useToast();
   const { names } = useLibraryStatus(props.atoms);
+  const providersResult = useAtomValue(props.atoms.playlistProviders);
+  const providers = AsyncResult.isSuccess(providersResult) ? providersResult.value : [];
   const edits = props.edits;
 
   const create = (
     entries: ReadonlyArray<{ readonly recordingId: RecordingId; readonly sourceId: string | null }>,
-  ) =>
+  ) => {
+    const save = (name: string, provider: string | null) =>
+      props.run(
+        edits.create(name, entries, provider).pipe(
+          Effect.match({
+            onSuccess: () =>
+              toast(
+                "notice",
+                entries.length === 0 ? `Created ${name}` : `Added to the new playlist ${name}`,
+              ),
+            onFailure: () =>
+              toast("error", "Connect to the server once before you create a playlist"),
+          }),
+        ),
+      );
     dialog.push(
       <NameDialog
         title="New playlist"
         initial=""
         onSubmit={(name) =>
-          props.run(
-            edits.create(name, entries).pipe(
-              Effect.match({
-                onSuccess: () =>
-                  toast(
-                    "notice",
-                    entries.length === 0 ? `Created ${name}` : `Added to the new playlist ${name}`,
-                  ),
-                onFailure: () =>
-                  toast("error", "Connect to the server once before you create a playlist"),
-              }),
-            ),
-          )
+          providers.length === 0
+            ? save(name, null)
+            : dialog.push(
+                <LinkDialog providers={providers} onChoose={(provider) => save(name, provider)} />,
+              )
         }
       />,
     );
+  };
 
   return {
     create: () => create([]),

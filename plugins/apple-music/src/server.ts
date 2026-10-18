@@ -6,6 +6,7 @@ import {
   ProviderAudio,
   ProviderError,
   ProviderLibrary,
+  ProviderPlaylists,
 } from "@dyad/plugin";
 import type { Credentials } from "@dyad/plugin";
 import { makePacer } from "@dyad/plugin/http";
@@ -25,7 +26,14 @@ import {
 } from "./api.ts";
 import type { AppleSession } from "./api.ts";
 import { readSegments, segmentBytes } from "./hls.ts";
-import { probeLibrary, readLibrarySongs, readPlaylists, readPlaylistTracks } from "./library.ts";
+import {
+  addPlaylistSongs,
+  createPlaylist,
+  probeLibrary,
+  readLibrarySongs,
+  readPlaylists,
+  readPlaylistTracks,
+} from "./library.ts";
 import { readCharts } from "./home.ts";
 import { readAlbum, readArtist } from "./pages.ts";
 import { acquireAppleKeys } from "./widevine.ts";
@@ -210,6 +218,15 @@ export const appleMusicPlugin = new Plugin({
           readLibrary((session) => readPlaylistTracks(libraryPace, session, remoteId))(credentials),
       });
 
+      const playlists = new ProviderPlaylists({
+        create: (credentials, name) =>
+          readLibrary((session) => createPlaylist(libraryPace, session, name))(credentials),
+        add: (credentials, remoteId, songs) =>
+          readLibrary((session) => addPlaylistSongs(libraryPace, session, remoteId, songs))(
+            credentials,
+          ),
+      });
+
       const link = (credentials: Credentials) =>
         Effect.gen(function* () {
           const token = yield* mediaUserToken(credentials);
@@ -233,6 +250,7 @@ export const appleMusicPlugin = new Plugin({
           home: (credentials) => catalogPage(credentials, readCharts),
           account: { login, link },
           library,
+          playlists,
           metadataPriority: 30,
           download: { leaseDays: 30 },
         }),

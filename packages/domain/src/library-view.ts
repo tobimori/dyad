@@ -4,6 +4,7 @@ import {
   LibraryEntry,
   PlaylistEntry,
   PlaylistLink,
+  PlaylistLinkState,
   PlaylistSummary,
   RecordingId,
 } from "./index.ts";
@@ -33,6 +34,7 @@ export const playlistSummary = (
     readonly id: string;
     readonly name: string;
     readonly link: typeof PlaylistLink.Encoded | null;
+    readonly linkState: typeof PlaylistLinkState.Encoded | null;
   },
   entryCount: number,
 ) =>
@@ -41,6 +43,7 @@ export const playlistSummary = (
     name: row.name,
     entryCount,
     link: row.link === null ? null : new PlaylistLink(row.link),
+    linkState: row.linkState === null ? null : new PlaylistLinkState(row.linkState),
   });
 
 /**
@@ -142,20 +145,27 @@ export const libraryView = (rows: {
             (a.title ?? "").localeCompare(b.title ?? ""),
         );
     },
+    /** `twoWayProvider`: the provider of the playlist's `two-way` link */
     playlistEntries: (
       entries: ReadonlyArray<{
         readonly id: string;
         readonly recordingId: string;
         readonly addedAt: number;
       }>,
+      twoWayProvider: string | null,
     ) =>
-      entries.map(
-        (entry) =>
-          new PlaylistEntry({
-            ...describe(rootOf(entry.recordingId)),
-            addedAt: entry.addedAt,
-            entryId: entry.id,
-          }),
-      ),
+      entries.map((entry) => {
+        const root = rootOf(entry.recordingId);
+        return new PlaylistEntry({
+          ...describe(root),
+          addedAt: entry.addedAt,
+          entryId: entry.id,
+          dyadOnly:
+            twoWayProvider !== null &&
+            !(sourcesByRoot.get(root) ?? []).some(
+              (candidate) => candidate.summary.provider === twoWayProvider,
+            ),
+        });
+      }),
   };
 };

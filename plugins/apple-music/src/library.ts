@@ -1,11 +1,12 @@
 import { LibraryPlaylist, LibraryProbe, LibrarySnapshot, LibrarySong } from "@dyad/plugin";
-import { getJson, HttpStatusError } from "@dyad/plugin/http";
+import { getJson, HttpStatusError, send } from "@dyad/plugin/http";
 import type { makePacer } from "@dyad/plugin/http";
-import { Effect, Option, Schema } from "effect";
+import { Array as Arr, Effect, Option, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import {
   amp,
+  AppleMusicError,
   appleError,
   AppleTrack,
   authorize,
@@ -159,6 +160,46 @@ export const readPlaylistTracks = (pace: Pace, session: AppleSession, playlistId
       incompleteReason: snapshot.incompleteReason,
     });
   });
+
+const CreatedPlaylist = Schema.Struct({
+  data: Schema.NonEmptyArray(Schema.Struct({ id: Schema.String })),
+});
+
+const encodeFailed = (stage: string) => () =>
+  Effect.fail(new AppleMusicError({ stage, reason: "Cannot encode the request" }));
+
+// Apple's API can create library playlists and add songs to them, but it answers 403 or 401 to
+// removals, moves and deletes (October 2026)
+export const createPlaylist = (pace: Pace, session: AppleSession, name: string) =>
+  Effect.gen(function* () {
+    const request = yield* HttpClientRequest.post(`${amp}/v1/me/library/playlists`).pipe(
+      authorize(session),
+      HttpClientRequest.bodyJson({ attributes: { name } }),
+    );
+    const response = yield* pace(requestJson(request, CreatedPlaylist, "create playlist"));
+    return response.data[0].id;
+  }).pipe(Effect.catchTag("HttpBodyError", encodeFailed("create playlist")));
+
+/** Adds catalog songs at the end of a library playlist */
+export const addPlaylistSongs = (
+  pace: Pace,
+  session: AppleSession,
+  playlistId: string,
+  songIds: ReadonlyArray<string>,
+) =>
+  Effect.forEach(
+    Arr.chunksOf(songIds, 100),
+    (chunk) =>
+      Effect.gen(function* () {
+        const path = `/v1/me/library/playlists/${encodeURIComponent(playlistId)}/tracks`;
+        const request = yield* HttpClientRequest.post(`${amp}${path}`).pipe(
+          authorize(session),
+          HttpClientRequest.bodyJson({ data: chunk.map((id) => ({ id, type: "songs" })) }),
+        );
+        yield* pace(send(request)).pipe(Effect.mapError(appleError("add playlist songs", request)));
+      }).pipe(Effect.catchTag("HttpBodyError", encodeFailed("add playlist songs"))),
+    { discard: true },
+  );
 
 /** One request. The newest song and the count change when songs are added or removed. */
 export const probeLibrary = (pace: Pace, session: AppleSession) =>

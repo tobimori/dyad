@@ -34,6 +34,8 @@ export function usePlaylist(atoms: ServerAtoms, route: SectionRoute | PageRoute)
         AsyncResult.isSuccess(result) ? result.value : [],
         "playlist",
         (entry) => entry.entryId,
+        // The provider has no source of the song, so it stays out of the provider playlist
+        (entry) => (entry.dyadOnly ? "Only in Dyad" : undefined),
       ),
     [result],
   );
@@ -54,6 +56,19 @@ function PlaylistHeader(props: {
 
   const link = playlist?.link ?? null;
   const provider = link === null ? null : providerName(names, link.provider);
+  const linkState = playlist?.linkState ?? null;
+  const linkText = () => {
+    if (provider === null) return "";
+    if (link?.direction === "import") {
+      return `Gets the changes from ${provider}. Edits here stay in Dyad.`;
+    }
+    if (linkState?.error != null) return linkState.error;
+    if (link?.remoteId === null) return `Creates the playlist in ${provider}…`;
+    if (linkState?.differs === true) {
+      return `Differs from ${provider}: it cannot make some edits`;
+    }
+    return `Syncs with ${provider} both ways`;
+  };
   const totalMs = props.entries.reduce((total, entry) => total + (entry.durationMs ?? 0), 0);
   const details = [
     provider === null ? "Playlist" : `${provider} playlist`,
@@ -70,7 +85,7 @@ function PlaylistHeader(props: {
         {details.filter((detail) => detail !== "").join(" · ")}
       </text>
       <text wrapMode="none" fg={theme.faint}>
-        {provider === null ? "" : `Gets the changes from ${provider}. Edits here stay in Dyad.`}
+        {linkText()}
       </text>
     </box>
   );

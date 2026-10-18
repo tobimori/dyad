@@ -13,6 +13,8 @@ export class ListItem extends Data.Class<{
   readonly key: string;
   readonly source: SourceSummary;
   readonly context: typeof PlayContext.Type;
+  /** Shown in place of the source */
+  readonly label?: string | undefined;
 }> {}
 
 /** A library entry that the user cannot play. The list shows it dimmed and never queues it. */
@@ -33,10 +35,13 @@ export const entryItems = <E extends LibraryEntry>(
   entries: ReadonlyArray<E>,
   context: typeof PlayContext.Type,
   keyOf: (entry: E) => string,
+  labelOf: (entry: E) => string | undefined = () => undefined,
 ) =>
   entries.map((entry) => {
     const key = keyOf(entry);
-    if (entry.source !== null) return new ListItem({ key, source: entry.source, context });
+    if (entry.source !== null) {
+      return new ListItem({ key, source: entry.source, context, label: labelOf(entry) });
+    }
     // The contract sets `unavailable` whenever `source` is `null`
     const label = entry.unavailable === null ? "" : unavailableLabel(entry.unavailable);
     return new UnavailableItem({ key, entry, label });
@@ -240,7 +245,7 @@ export function TrackList(props: {
                 artist={track.artist ?? ""}
                 album={track.album ?? ""}
                 time={formatDuration(track.durationMs)}
-                source={unavailable ? item.label : sourceLabel(item.source)}
+                source={unavailable ? item.label : (item.label ?? sourceLabel(item.source))}
                 width={width}
                 wide={wide}
                 fg={playing ? theme.accent : color}

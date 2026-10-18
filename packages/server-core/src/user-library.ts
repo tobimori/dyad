@@ -16,7 +16,7 @@ import {
   libraryView,
   playlistSummary,
 } from "@dyad/domain";
-import type { PlaylistLink, UserId } from "@dyad/domain";
+import type { PlaylistLink, PlaylistLinkState, UserId } from "@dyad/domain";
 import { HlcClock, patchRow } from "@dyad/sync";
 import { and, asc, count, eq, inArray, or, sql } from "drizzle-orm";
 import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
@@ -99,6 +99,7 @@ export const addLinkedPlaylist = (
       name,
       origin,
       link,
+      linkState: null,
       createdAt: yield* Clock.currentTimeMillis,
       hlc: yield* clock.next,
       fieldHlc: null,
@@ -110,7 +111,11 @@ export const addLinkedPlaylist = (
 /** Sets the fields of a playlist with a new HLC. Returns whether the row changed. */
 export const patchPlaylist = (
   id: string,
-  fields: { readonly name?: string; readonly link?: PlaylistLink | null },
+  fields: {
+    readonly name?: string;
+    readonly link?: PlaylistLink | null;
+    readonly linkState?: PlaylistLinkState | null;
+  },
 ) =>
   Effect.gen(function* () {
     const clock = yield* HlcClock;
@@ -287,8 +292,9 @@ export const unlinkPlaylists = (ownerId: string, provider: string, keep: Readonl
           sql`json_extract(${playlist.link}, '$.provider') = ${provider}`,
         ),
       );
+    // A two-way link without a provider playlist yet waits for its first write
     const unlinked = rows.filter(
-      (row) => row.link?.remoteId == null || !keep.has(row.link.remoteId),
+      (row) => row.link?.remoteId != null && !keep.has(row.link.remoteId),
     );
     yield* Effect.forEach(unlinked, (row) => patchPlaylist(row.id, { link: null }), {
       discard: true,
@@ -379,7 +385,7 @@ export const listPlaylistEntries = (playlistId: string) =>
     const principal = yield* CurrentPrincipal;
 
     const [owned] = yield* db
-      .select({ id: playlist.id })
+      .select({ link: playlist.link })
       .from(playlist)
       .where(
         and(
@@ -399,5 +405,8 @@ export const listPlaylistEntries = (playlistId: string) =>
       principal.userId,
       entries.map((entry) => entry.recordingId),
     );
-    return view.playlistEntries(entries);
+    return view.playlistEntries(
+      entries,
+      owned.link?.direction === "two-way" ? owned.link.provider : null,
+    );
   });

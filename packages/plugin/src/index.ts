@@ -238,6 +238,33 @@ export class ProviderLibrary extends Data.Class<{
 }> {}
 
 /**
+ * Writes to the playlists of a linked account, for playlists with a two-way link. Songs are
+ * `ProviderSource.externalId` values. The core sends the edits that the provider can make and shows
+ * the playlist as different from the provider for the others.
+ */
+export class ProviderPlaylists extends Data.Class<{
+  /** Returns the `LibraryPlaylist.remoteId` of the new, empty playlist */
+  readonly create?: (credentials: Credentials, name: string) => Effect.Effect<string, LibraryError>;
+  /** Adds the songs at the end */
+  readonly add?: (
+    credentials: Credentials,
+    remoteId: string,
+    songs: ReadonlyArray<string>,
+  ) => Effect.Effect<void, LibraryError>;
+  /** Makes `songs` all songs of the playlist, in this order */
+  readonly replace?: (
+    credentials: Credentials,
+    remoteId: string,
+    songs: ReadonlyArray<string>,
+  ) => Effect.Effect<void, LibraryError>;
+  /** Called when the user deletes the playlist in Dyad */
+  readonly delete?: (
+    credentials: Credentials,
+    remoteId: string,
+  ) => Effect.Effect<void, LibraryError>;
+}> {}
+
+/**
  * A streaming service. The core calls each function with the credentials of the user who plays or
  * searches. Without `account`, the credentials are empty.
  */
@@ -304,6 +331,8 @@ export class Provider extends Data.Class<{
   };
   /** Only for providers with `account` */
   readonly library?: ProviderLibrary;
+  /** Only for providers with `library`, which reads the playlists */
+  readonly playlists?: ProviderPlaylists;
   /** Higher wins when providers share a recording. Curated catalogs rank above uploads */
   readonly metadataPriority?: number;
   /**

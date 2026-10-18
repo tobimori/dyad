@@ -16,10 +16,17 @@ import { Providers, toCredentials } from "./providers.ts";
 export const listAccountProviders = Effect.gen(function* () {
   const providers = yield* Providers;
 
-  return [...providers].flatMap(([provider, { name, account }]) =>
+  return [...providers].flatMap(([provider, { name, account, playlists }]) =>
     account === undefined
       ? []
-      : [new AccountProviderSummary({ provider, name, login: account.login })],
+      : [
+          new AccountProviderSummary({
+            provider,
+            name,
+            login: account.login,
+            createsPlaylists: playlists?.create !== undefined,
+          }),
+        ],
   );
 });
 

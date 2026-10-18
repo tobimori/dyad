@@ -69,6 +69,10 @@ export class AccountProviders extends Schema.Class<AccountProviders>("AccountPro
   names: Schema.Record(Schema.String, Schema.String),
   /** The providers of the user's linked accounts */
   linked: Schema.Array(Schema.String),
+  /** The providers that can create a playlist for a two-way link */
+  createPlaylists: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
 }) {}
 
 export const accountProvidersState = stateKey("accountProviders", AccountProviders);

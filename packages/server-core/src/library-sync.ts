@@ -5,30 +5,35 @@ import {
   libraryRemotePlaylist,
   libraryRemoteTrack,
   librarySyncState,
+  playlistEntry,
   providerAccount,
   recording,
+  source,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
   CurrentPrincipal,
   LibrarySyncStatus,
   PlaylistLink,
+  PlaylistLinkState,
   UserId,
   accountOrigin,
 } from "@dyad/domain";
+import type { PlaylistRow } from "@dyad/domain";
+import { LibraryError, ProviderPlaylists } from "@dyad/plugin";
 import type {
   Credentials,
-  LibraryError,
   LibraryProbe,
   LibrarySnapshot,
   LibrarySong,
   ProviderLibrary,
 } from "@dyad/plugin";
-import { and, count, eq, isNull, notInArray } from "drizzle-orm";
-import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
+import { and, asc, count, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { Clock, Data, Effect, Equal, Layer, Option, Schema } from "effect";
 
 import { boundRecordingId, uuidV5 } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
+import { PlaylistPushPayload, playlistPushKind, queuePlaylistPush } from "./playlist-push.ts";
 import { cacheProviderSources } from "./provider-cache.ts";
 import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
@@ -38,6 +43,7 @@ import {
   addLinkedPlaylist,
   mergeRemoteEntries,
   patchPlaylist,
+  rootsOf,
   setMembership,
   unlinkPlaylists,
 } from "./user-library.ts";
@@ -280,6 +286,74 @@ const importSongs = (account: LinkedAccount, library: ProviderLibrary, before: L
     );
   });
 
+const remotePlaylistOf = (account: LinkedAccount, remoteId: string) =>
+  and(
+    eq(libraryRemotePlaylist.userId, account.userId),
+    eq(libraryRemotePlaylist.provider, account.provider),
+    eq(libraryRemotePlaylist.remoteId, remoteId),
+  );
+
+/**
+ * Applies the provider's changes since the last sync to the entries. An incomplete read changes no
+ * entries, because a part of an ordered list has no order. Returns the provider's songs as bound
+ * recordings, or `None` after an incomplete read.
+ */
+const pullPlaylist = (
+  account: LinkedAccount,
+  library: ProviderLibrary,
+  link: {
+    readonly playlistId: string;
+    readonly remoteId: string;
+    readonly version: string | null;
+  },
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const now = yield* Clock.currentTimeMillis;
+    const { playlistId, remoteId } = link;
+    const songs = yield* library.playlistSongs(account.credentials, remoteId);
+
+    const pulled = yield* writeIfLinked(
+      account,
+      Effect.gen(function* () {
+        const incompleteReason = songs.incompleteReason;
+        if (incompleteReason !== null) {
+          yield* writeRemotePlaylist(account, remoteId, { playlistId, incompleteReason });
+          return Option.none();
+        }
+
+        const [current] = yield* db
+          .select({ snapshot: libraryRemotePlaylist.snapshot })
+          .from(libraryRemotePlaylist)
+          .where(remotePlaylistOf(account, remoteId));
+        const recordingIds = yield* writeSongs(account, songs.items);
+        const changed = yield* mergeRemoteEntries(
+          playlistId,
+          current?.snapshot ?? null,
+          recordingIds,
+        );
+        yield* writeRemotePlaylist(account, remoteId, {
+          playlistId,
+          incompleteReason,
+          version: link.version,
+          lastCompleteAt: now,
+          snapshot: recordingIds,
+        });
+        return Option.some({ recordingIds, changed });
+      }),
+    );
+
+    yield* Effect.logInfo("Library playlist imported").pipe(
+      Effect.annotateLogs({
+        provider: account.provider,
+        songs: songs.items.length,
+        incompleteReason: songs.incompleteReason,
+        changedEntries: Option.match(pulled, { onNone: () => 0, onSome: (value) => value.changed }),
+      }),
+    );
+    return pulled;
+  });
+
 /**
  * Each remote playlist has a Dyad playlist with a link to it. A read applies only the provider's
  * changes since the last sync, so that the edits in Dyad stay. A removed remote playlist unlinks
@@ -307,9 +381,10 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
       list.items,
       (remote) =>
         Effect.gen(function* () {
-          const playlistId = yield* uuidV5(
-            `playlist:${account.userId}:${account.provider}:${remote.remoteId}`,
-          );
+          const state = known.get(remote.remoteId);
+          const playlistId =
+            state?.playlistId ??
+            (yield* uuidV5(`playlist:${account.userId}:${account.provider}:${remote.remoteId}`));
           const now = yield* Clock.currentTimeMillis;
           const link = new PlaylistLink({
             provider: account.provider,
@@ -319,11 +394,10 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
 
           // A playlist that the user unlinked or deleted stays as it is. After a new link of the
           // account, the provider's state is the base, so that nothing is added twice.
-          const linked = yield* writeIfLinked(
+          const next = yield* writeIfLinked(
             account,
             Effect.gen(function* () {
               const row = yield* readRow("playlist", playlistId);
-              const state = known.get(remote.remoteId);
               if (row === undefined) {
                 yield* addLinkedPlaylist(
                   userId,
@@ -337,9 +411,9 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
                   snapshot: [],
                   name: remote.name,
                 });
-                return true;
+                return "pull";
               }
-              if (row.table !== "playlist" || row.deleted) return false;
+              if (row.table !== "playlist" || row.deleted) return "skip";
               if (row.link === null && state === undefined) {
                 yield* patchPlaylist(playlistId, { link });
                 yield* writeRemotePlaylist(account, remote.remoteId, {
@@ -347,10 +421,10 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
                   snapshot: null,
                   name: remote.name,
                 });
-                return true;
+                return "pull";
               }
               if (row.link?.provider !== link.provider || row.link.remoteId !== link.remoteId) {
-                return false;
+                return "skip";
               }
 
               if (state?.name !== remote.name) {
@@ -360,67 +434,25 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
                   name: remote.name,
                 });
               }
-              return true;
+              return row.link.direction === "two-way" ? "push" : "pull";
             }),
           );
-          const state = known.get(remote.remoteId);
+
+          // The push reads the songs before it writes
+          if (next === "push") return yield* queuePlaylistPush(playlistId);
           const readDue =
-            linked &&
+            next === "pull" &&
             (remote.version === null ||
               state?.version !== remote.version ||
               state.lastCompleteAt === null ||
               now - state.lastCompleteAt >= fullReadIntervalMs);
-          if (!readDue) return;
-
-          // An incomplete read changes no entries, because a part of an ordered list has no order
-          const songs = yield* library.playlistSongs(account.credentials, remote.remoteId);
-          const changedEntries = yield* writeIfLinked(
-            account,
-            Effect.gen(function* () {
-              const incompleteReason = songs.incompleteReason;
-              if (incompleteReason !== null) {
-                yield* writeRemotePlaylist(account, remote.remoteId, {
-                  playlistId,
-                  incompleteReason,
-                });
-                return 0;
-              }
-
-              const [current] = yield* db
-                .select({ snapshot: libraryRemotePlaylist.snapshot })
-                .from(libraryRemotePlaylist)
-                .where(
-                  and(
-                    eq(libraryRemotePlaylist.userId, account.userId),
-                    eq(libraryRemotePlaylist.provider, account.provider),
-                    eq(libraryRemotePlaylist.remoteId, remote.remoteId),
-                  ),
-                );
-              const recordingIds = yield* writeSongs(account, songs.items);
-              const changed = yield* mergeRemoteEntries(
-                playlistId,
-                current?.snapshot ?? null,
-                recordingIds,
-              );
-              yield* writeRemotePlaylist(account, remote.remoteId, {
-                playlistId,
-                incompleteReason,
-                version: remote.version,
-                lastCompleteAt: now,
-                snapshot: recordingIds,
-              });
-              return changed;
-            }),
-          );
-
-          yield* Effect.logInfo("Library playlist imported").pipe(
-            Effect.annotateLogs({
-              provider: account.provider,
-              songs: songs.items.length,
-              incompleteReason: songs.incompleteReason,
-              changedEntries,
-            }),
-          );
+          if (readDue) {
+            yield* pullPlaylist(account, library, {
+              playlistId,
+              remoteId: remote.remoteId,
+              version: remote.version,
+            });
+          }
         }),
       { discard: true },
     );
@@ -454,6 +486,207 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
       }),
     );
   });
+
+// Removes from `list` one item for each item of `other`, by key
+const withoutEach = <A>(
+  list: ReadonlyArray<A>,
+  other: ReadonlyArray<string>,
+  key: (a: A) => string,
+) => {
+  const counts = new Map<string, number>();
+  for (const item of other) counts.set(item, (counts.get(item) ?? 0) + 1);
+  return list.filter((item) => {
+    const count = counts.get(key(item)) ?? 0;
+    counts.set(key(item), count - 1);
+    return count <= 0;
+  });
+};
+
+/**
+ * Reads the provider playlist, then sends the edits in Dyad that the provider can make: the whole
+ * list with `replace`, else the new songs with `add`. Entries without a source of the provider
+ * stay only in Dyad.
+ */
+const pushPlaylist = (
+  account: LinkedAccount,
+  library: ProviderLibrary,
+  writes: ProviderPlaylists,
+  providerName: string,
+  row: PlaylistRow,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const playlistId = row.id;
+    const link = row.link;
+    if (link === null) return;
+
+    if (row.deleted) {
+      if (link.remoteId === null || writes.delete === undefined) return;
+      yield* writes.delete(account.credentials, link.remoteId);
+      const remoteId = link.remoteId;
+      return yield* writeIfLinked(
+        account,
+        db.delete(libraryRemotePlaylist).where(remotePlaylistOf(account, remoteId)),
+      );
+    }
+
+    const remoteId =
+      link.remoteId ??
+      (writes.create === undefined ? null : yield* writes.create(account.credentials, row.name));
+    if (remoteId === null) {
+      return yield* patchPlaylist(playlistId, {
+        linkState: new PlaylistLinkState({
+          differs: true,
+          error: `${providerName} cannot create playlists`,
+        }),
+      });
+    }
+    if (link.remoteId === null) {
+      // An unlink during the create keeps the new provider playlist out of Dyad
+      const kept = yield* writeIfLinked(
+        account,
+        Effect.gen(function* () {
+          const current = yield* readRow("playlist", playlistId);
+          if (current?.table !== "playlist" || !Equal.equals(current.link, link)) return false;
+          yield* patchPlaylist(playlistId, { link: new PlaylistLink({ ...link, remoteId }) });
+          yield* writeRemotePlaylist(account, remoteId, {
+            playlistId,
+            snapshot: [],
+            name: row.name,
+          });
+          return true;
+        }),
+      );
+      if (!kept) return;
+    }
+
+    // A two-way link reads the songs at each push, so it needs no version
+    const pulled = yield* pullPlaylist(account, library, { playlistId, remoteId, version: null });
+    if (Option.isNone(pulled)) {
+      return yield* new LibraryError({
+        kind: "failed",
+        reason: "The provider gave a part of the playlist",
+        retryAfterSeconds: null,
+      });
+    }
+    const remote = pulled.value.recordingIds;
+
+    const entries = yield* db
+      .select({ recordingId: playlistEntry.recordingId })
+      .from(playlistEntry)
+      .where(and(eq(playlistEntry.playlistId, playlistId), eq(playlistEntry.deleted, false)))
+      .orderBy(asc(playlistEntry.position), asc(playlistEntry.id));
+    const rootOf = yield* rootsOf([...entries.map((entry) => entry.recordingId), ...remote]);
+    // A source of any recording of the group plays the entry
+    const root = sql<string>`coalesce(${recording.mergedIntoId}, ${recording.id})`;
+    const sources = yield* db
+      .select({ externalId: source.externalId, recordingId: recording.id, root })
+      .from(source)
+      .innerJoin(recording, eq(recording.id, source.recordingId))
+      .where(
+        and(
+          eq(source.provider, account.provider),
+          eq(source.availability, "available"),
+          inArray(
+            root,
+            entries.map((entry) => rootOf(entry.recordingId)),
+          ),
+        ),
+      )
+      .orderBy(asc(source.id));
+    const songOf = new Map(sources.toReversed().map((found) => [found.root, found]));
+
+    const wanted = entries.flatMap((entry) => songOf.get(rootOf(entry.recordingId)) ?? []);
+    const sameOrder = (recordingIds: ReadonlyArray<string>) =>
+      recordingIds.length === wanted.length &&
+      recordingIds.every((id, index) => rootOf(id) === wanted[index]?.root);
+
+    const written = yield* Effect.gen(function* () {
+      if (sameOrder(remote)) return remote;
+      if (writes.replace !== undefined) {
+        yield* writes.replace(
+          account.credentials,
+          remoteId,
+          wanted.map((song) => song.externalId),
+        );
+        return wanted.map((song) => song.recordingId);
+      }
+      const added = withoutEach(wanted, remote.map(rootOf), (song) => song.root);
+      if (writes.add === undefined || added.length === 0) return remote;
+      yield* writes.add(
+        account.credentials,
+        remoteId,
+        added.map((song) => song.externalId),
+      );
+      return [...remote, ...added.map((song) => song.recordingId)];
+    });
+
+    yield* writeIfLinked(
+      account,
+      Effect.gen(function* () {
+        yield* writeRemotePlaylist(account, remoteId, { playlistId, snapshot: written });
+        yield* patchPlaylist(playlistId, {
+          linkState: new PlaylistLinkState({ differs: !sameOrder(written), error: null }),
+        });
+      }),
+    );
+    yield* Effect.logInfo("Playlist sent to the provider").pipe(
+      Effect.annotateLogs({
+        provider: account.provider,
+        songs: written.length,
+        added: written.length - remote.length,
+        differs: !sameOrder(written),
+      }),
+    );
+  });
+
+const runPlaylistPush = (payload: typeof PlaylistPushPayload.Type) =>
+  Effect.gen(function* () {
+    const providers = yield* Providers;
+    const row = yield* readRow("playlist", payload.playlistId);
+    if (row?.table !== "playlist" || row.link?.direction !== "two-way") return;
+
+    const providerId = row.link.provider;
+    const provider = providers.get(providerId);
+    // The plugins unload before the jobs stop, so the queue tries again later
+    if (provider?.library === undefined) {
+      return yield* new LibraryError({
+        kind: "failed",
+        reason: "The provider has no library",
+        retryAfterSeconds: null,
+      });
+    }
+    const setError = (error: string) =>
+      patchPlaylist(row.id, { linkState: new PlaylistLinkState({ differs: true, error }) });
+
+    const account = yield* loadAccount(row.ownerId, providerId);
+    if (Option.isNone(account)) {
+      if (!row.deleted) yield* setError(`Link the ${provider.name} account to send the changes`);
+      return;
+    }
+
+    yield* pushPlaylist(
+      account.value,
+      provider.library,
+      provider.playlists ?? new ProviderPlaylists({}),
+      provider.name,
+      row,
+    ).pipe(
+      Effect.catchTag("LibraryError", (error) =>
+        Effect.gen(function* () {
+          yield* Effect.logWarning("Playlist write failed").pipe(
+            Effect.annotateLogs({ provider: providerId, kind: error.kind, reason: error.reason }),
+          );
+          if (!row.deleted) yield* setError(error.reason);
+          if (error.kind === "account") return;
+          if (error.kind === "failed") return yield* error;
+          return yield* new RetryLater({
+            retryAfterSeconds: error.retryAfterSeconds ?? throttleBaseSeconds,
+          });
+        }),
+      ),
+    );
+  }).pipe(Effect.catchTag("AccountChanged", () => Effect.void));
 
 const importLibrary = (account: LinkedAccount, library: ProviderLibrary) =>
   Effect.gen(function* () {
@@ -671,6 +904,7 @@ export const librarySyncLayer = Layer.effectDiscard(
     const jobs = yield* Jobs;
 
     yield* jobs.register(jobKind, SyncPayload, runLibrarySync);
+    yield* jobs.register(playlistPushKind, PlaylistPushPayload, runPlaylistPush);
 
     const accounts = yield* db
       .select({ userId: providerAccount.userId, provider: providerAccount.provider })

@@ -1,8 +1,14 @@
 import { PlayEventRow, PlaylistEntryRow, PlaylistRow } from "@dyad/domain";
-import type { HybridLogicalClock, PlaylistLink, SyncChange, SyncRow } from "@dyad/domain";
+import type {
+  HybridLogicalClock,
+  PlaylistLink,
+  PlaylistLinkState,
+  SyncChange,
+  SyncRow,
+} from "@dyad/domain";
 import { Match, Option } from "effect";
 
-const playlistFields = ["name", "link", "deleted"] as const;
+const playlistFields = ["name", "link", "linkState", "deleted"] as const;
 const entryFields = ["position", "deleted"] as const;
 
 const clockOf = (
@@ -84,6 +90,7 @@ export const patchRow = (
   patch: {
     readonly name?: string;
     readonly link?: PlaylistLink | null;
+    readonly linkState?: PlaylistLinkState | null;
     readonly position?: string;
     readonly deleted?: boolean;
   },
@@ -105,6 +112,7 @@ export const patchRow = (
           ...current,
           name: patch.name ?? current.name,
           link: patch.link === undefined ? current.link : patch.link,
+          linkState: patch.linkState === undefined ? current.linkState : patch.linkState,
           deleted,
           hlc,
           fieldHlc: clocks(playlistFields),

@@ -63,6 +63,7 @@ import { readCatalog } from "./catalog-sync.ts";
 import { maxClockAheadMs } from "./clock.ts";
 import { cachedProviderSource } from "./provider-cache.ts";
 import { addProviderSource } from "./sources.ts";
+import { queuePlaylistPush } from "./playlist-push.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 
 const pageLimit = 1000;
@@ -480,12 +481,15 @@ export const syncPush = (request: SyncPushRequest) =>
     const principal = yield* CurrentPrincipal;
     const replicaId = request.replicaId;
 
-    const response = yield* db.transaction(() =>
+    const { response, edited } = yield* db.transaction(() =>
       Effect.gen(function* () {
         const admitted = yield* bindReplica(replicaId);
         const first = request.mutations[0];
         if (first === undefined)
-          return new SyncPushResponse({ lastMutationId: admitted, results: [] });
+          return {
+            response: new SyncPushResponse({ lastMutationId: admitted, results: [] }),
+            edited: new Set<string>(),
+          };
 
         // The client no longer waits for the results of earlier mutations
         yield* db
@@ -505,6 +509,7 @@ export const syncPush = (request: SyncPushRequest) =>
 
         const changeSeq = yield* Effect.cached(nextChangeSeq);
         const results: Array<SyncMutationResult> = [];
+        const edited = new Set<string>();
         let last = admitted;
         for (const mutation of request.mutations) {
           if (mutation.id > last + 1) break;
@@ -530,6 +535,10 @@ export const syncPush = (request: SyncPushRequest) =>
 
           const value = yield* changeSeq;
           yield* Effect.forEach(admission.rows, (row) => writeRow(row, value), { discard: true });
+          for (const row of admission.rows) {
+            if (row.table === "playlist") edited.add(row.id);
+            if (row.table === "playlist_entry") edited.add(row.playlistId);
+          }
           if (admission.restamped) results.push(yield* mutationResult(mutation, "restamped", null));
         }
 
@@ -539,7 +548,7 @@ export const syncPush = (request: SyncPushRequest) =>
             .set({ lastMutationId: last })
             .where(eq(replica.replicaId, replicaId));
         }
-        return new SyncPushResponse({ lastMutationId: last, results });
+        return { response: new SyncPushResponse({ lastMutationId: last, results }), edited };
       }),
     );
 
@@ -551,6 +560,17 @@ export const syncPush = (request: SyncPushRequest) =>
       request.mutations.filter(
         (mutation) => mutation.id <= response.lastMutationId && !rejected.has(mutation.id),
       ),
+    );
+    yield* Effect.forEach(
+      edited,
+      (playlistId) =>
+        Effect.gen(function* () {
+          const row = yield* readRow("playlist", playlistId);
+          if (row?.table === "playlist" && row.link?.direction === "two-way") {
+            yield* queuePlaylistPush(playlistId);
+          }
+        }),
+      { discard: true },
     );
     return response;
   });

@@ -47,7 +47,11 @@ export const playlist = sqliteTable(
     link: text("link", { mode: "json" }).$type<{
       readonly provider: string;
       readonly remoteId: string | null;
-      readonly direction: "import";
+      readonly direction: "import" | "two-way";
+    }>(),
+    linkState: text("link_state", { mode: "json" }).$type<{
+      readonly differs: boolean;
+      readonly error: string | null;
     }>(),
     createdAt: integer("created_at").notNull(),
     hlc: text("hlc").notNull(),

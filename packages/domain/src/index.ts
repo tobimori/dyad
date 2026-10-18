@@ -11,6 +11,7 @@ import {
 } from "./primitives.ts";
 import {
   PlaylistLink,
+  PlaylistLinkState,
   ReplicaMismatch,
   SyncHint,
   SyncPullRequest,
@@ -229,6 +230,11 @@ export class LibraryEntry extends Schema.Class<LibraryEntry>("LibraryEntry")({
 export class PlaylistEntry extends LibraryEntry.extend<PlaylistEntry>("PlaylistEntry")({
   /** Unique in the playlist. The same recording can be in a playlist more than once. */
   entryId: Schema.String,
+  /** The playlist has a `two-way` link, and its provider has no source of the recording */
+  dyadOnly: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
 }) {}
 
 export class PlaylistSummary extends Schema.Class<PlaylistSummary>("PlaylistSummary")({
@@ -236,6 +242,7 @@ export class PlaylistSummary extends Schema.Class<PlaylistSummary>("PlaylistSumm
   name: Schema.String,
   entryCount: Schema.Int,
   link: Schema.NullOr(PlaylistLink),
+  linkState: Schema.NullOr(PlaylistLinkState),
 }) {}
 
 export class PlaylistNotFound extends Schema.TaggedError<PlaylistNotFound>()(
@@ -422,6 +429,8 @@ export class AccountProviderSummary extends Schema.Class<AccountProviderSummary>
   provider: Schema.String,
   name: Schema.String,
   login: BrowserLogin,
+  /** A new playlist can have a two-way link to a new playlist of the provider */
+  createsPlaylists: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 }) {}
 
 export class ProviderAccountSummary extends Schema.Class<ProviderAccountSummary>(

@@ -4,6 +4,7 @@ import {
   PlaylistEntryAdd,
   PlaylistEntryPatch,
   PlaylistEntryRow,
+  PlaylistLink,
   PlaylistPatch,
   PlaylistRow,
 } from "@dyad/domain";
@@ -110,13 +111,17 @@ export const playlistEdits = <E>(
     new PlaylistEntryPatch({ kind: "playlist_entry.patch", schemaVersion: 1, id, hlc, ...fields });
 
   return {
-    /** Returns the ID of the new playlist */
+    /**
+     * Returns the ID of the new playlist. With `twoWayProvider`, the server creates a playlist of
+     * that provider and sends the edits to it.
+     */
     create: (
       name: string,
       entries: ReadonlyArray<{
         readonly recordingId: RecordingId;
         readonly sourceId: string | null;
       }>,
+      twoWayProvider: string | null = null,
     ) =>
       Effect.gen(function* () {
         const ownerId = yield* owner;
@@ -129,7 +134,15 @@ export const playlistEdits = <E>(
               ownerId,
               name,
               origin: null,
-              link: null,
+              link:
+                twoWayProvider === null
+                  ? null
+                  : new PlaylistLink({
+                      provider: twoWayProvider,
+                      remoteId: null,
+                      direction: "two-way",
+                    }),
+              linkState: null,
               createdAt: yield* Clock.currentTimeMillis,
               hlc: yield* next,
               fieldHlc: null,

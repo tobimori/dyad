@@ -50,7 +50,7 @@ const playableSources = (match: SQL | undefined) =>
     const db = yield* ClientDatabase;
     const providers = Option.getOrElse(
       yield* accountProvidersState.get,
-      () => new AccountProviders({ names: {}, linked: [] }),
+      () => new AccountProviders({ names: {}, linked: [], createPlaylists: [] }),
     );
     const names = new Map(Object.entries(providers.names));
     const linked = new Set(providers.linked);
@@ -182,7 +182,7 @@ export const localPlaylistEntries = (playlistId: string) =>
   Effect.gen(function* () {
     const db = yield* ClientDatabase;
     const [found] = yield* db
-      .select({ id: playlist.id })
+      .select({ link: playlist.link })
       .from(playlist)
       .where(and(eq(playlist.id, playlistId), eq(playlist.deleted, false)))
       .pipe(Effect.orDie);
@@ -198,7 +198,7 @@ export const localPlaylistEntries = (playlistId: string) =>
       Effect.orDie,
     );
     return view
-      .playlistEntries(entries)
+      .playlistEntries(entries, found.link?.direction === "two-way" ? found.link.provider : null)
       .map((entry) =>
         notSynced(entry) ? new PlaylistEntry({ ...entry, unavailable: "not_synced" }) : entry,
       );
