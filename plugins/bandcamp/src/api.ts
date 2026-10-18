@@ -1,7 +1,7 @@
 import { CreditedArtist, ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
 import { getJson, HttpStatusError, send } from "@dyad/plugin/http";
 import type { HttpRequestError } from "@dyad/plugin/http";
-import { Effect, Schema, Stream } from "effect";
+import { Cache, Data, Effect, Exit, Schema, Stream } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 export const provider = "bandcamp";
@@ -52,7 +52,9 @@ const toProviderError = (error: HttpStatusError | HttpRequestError) =>
 // The core gives a provider search 8 seconds in total
 const durationTimeout = "4 seconds";
 
-const fetchDetails = (bandId: number, type: "a" | "t", id: number) =>
+class Release extends Data.Class<{ bandId: number; type: "a" | "t"; id: number }> {}
+
+const fetchDetails = ({ bandId, type, id }: Release) =>
   Effect.gen(function* () {
     const request = HttpClientRequest.get(detailsUrl).pipe(
       HttpClientRequest.setUrlParams({ band_id: bandId, tralbum_type: type, tralbum_id: id }),
@@ -64,7 +66,16 @@ const fetchDetails = (bandId: number, type: "a" | "t", id: number) =>
     return details.tracks;
   });
 
-export const searchTracks = (query: string) =>
+/** Each pause while the user types starts a new search, which reads the same releases again */
+export const detailsCache = Cache.makeWith(fetchDetails, {
+  capacity: 1000,
+  timeToLive: (exit) => (Exit.isSuccess(exit) ? "10 minutes" : 0),
+});
+
+export const searchTracks = (
+  details: Cache.Cache<Release, ReadonlyArray<DetailsTrack>, ProviderError>,
+  query: string,
+) =>
   Effect.gen(function* () {
     const request = HttpClientRequest.post(searchUrl).pipe(
       HttpClientRequest.bodyJsonUnsafe({
@@ -81,8 +92,8 @@ export const searchTracks = (query: string) =>
       response.auto.results.map((track) => {
         const release =
           track.album_id === undefined || track.album_id === null
-            ? { bandId: track.band_id, type: "t" as const, id: track.id }
-            : { bandId: track.band_id, type: "a" as const, id: track.album_id };
+            ? new Release({ bandId: track.band_id, type: "t", id: track.id })
+            : new Release({ bandId: track.band_id, type: "a", id: track.album_id });
         return [`${release.bandId}-${release.type}-${release.id}`, release];
       }),
     );
@@ -91,7 +102,7 @@ export const searchTracks = (query: string) =>
     yield* Effect.forEach(
       releases.values(),
       (release) =>
-        fetchDetails(release.bandId, release.type, release.id).pipe(
+        Cache.get(details, release).pipe(
           Effect.tap((tracks) =>
             Effect.sync(() => {
               for (const track of tracks) {
@@ -138,7 +149,7 @@ export const resolveTrack = (externalId: string) =>
       Effect.mapError(() => new ProviderError({ reason: "Invalid track ID" })),
     );
 
-    const tracks = yield* fetchDetails(bandId, "t", trackId);
+    const tracks = yield* fetchDetails(new Release({ bandId, type: "t", id: trackId }));
     const track = tracks.find((item) => item.track_id === trackId);
     if (track === undefined) {
       return yield* new ProviderError({ reason: "Bandcamp did not return the track" });

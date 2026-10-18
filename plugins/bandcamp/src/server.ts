@@ -2,7 +2,7 @@ import { Plugin, Provider } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
-import { provider, resolveTrack, searchTracks } from "./api.ts";
+import { detailsCache, provider, resolveTrack, searchTracks } from "./api.ts";
 
 /**
  * Searches the public Bandcamp catalog and plays the public 128 kbps MP3 streams. Bandcamp needs
@@ -13,13 +13,14 @@ export const bandcampPlugin = new Plugin({
   setup: (context) =>
     Effect.gen(function* () {
       const services = yield* Effect.context<HttpClient.HttpClient>();
+      const details = yield* detailsCache;
 
       yield* context.provider.add(
         provider,
         new Provider({
           name: "Bandcamp",
           resolve: (externalId) => resolveTrack(externalId).pipe(Effect.provide(services)),
-          search: (query) => searchTracks(query).pipe(Effect.provide(services)),
+          search: (query) => searchTracks(details, query).pipe(Effect.provide(services)),
           metadataPriority: 20,
           download: { leaseDays: 30 },
         }),
