@@ -1,4 +1,6 @@
 import {
+  artist,
+  artistCreditName,
   libraryItem,
   libraryRemoteTrack,
   playEvent,
@@ -209,6 +211,17 @@ export const replaceGroup = (group: CatalogGroup) =>
     yield* insertAll(sourceSegment, group.segments);
     yield* insertAll(sourceKey, group.sourceKeys);
     yield* insertAll(libraryRemoteTrack, group.remoteTracks);
+
+    // Credits are content-addressed and artists are shared between groups, so they are not deleted
+    for (const chunk of Arr.chunksOf(group.creditNames, chunkSize)) {
+      yield* db
+        .insert(artistCreditName)
+        .values([...chunk])
+        .onConflictDoNothing();
+    }
+    for (const row of group.artists) {
+      yield* db.insert(artist).values(row).onConflictDoUpdate({ target: artist.id, set: row });
+    }
   }).pipe(Effect.orDie);
 
 /** Replaces the provider library data of recordings that have no group */
@@ -223,6 +236,8 @@ export const replaceMissingRemoteTracks = (
 
 /** Tables of the catalog groups */
 export const catalogTables = [
+  "artist",
+  "artist_credit_name",
   "recording",
   "source",
   "source_variant",

@@ -6,6 +6,8 @@ import { HlcClock } from "@dyad/sync";
 import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
 import { Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
 
+import { artistLinksKind } from "./artist-links.ts";
+import { matchArtistsOf } from "./artist-matching.ts";
 import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
 import { isrcRecordingId, mergeId, musicbrainzRecordingId } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
@@ -47,35 +49,31 @@ class Edge extends Data.Class<{
   readonly evidence: Readonly<Record<string, string>>;
 }> {}
 
-// Writes the `system` row of the pair only when the decision changes. Returns whether it changed. A
-// reject row keeps the recording a candidate, so that the decision does not depend on arrival order.
-const writeEdge = (edge: Edge) =>
+/**
+ * Writes the `system` row of the pair only when the decision changes. Returns whether it changed. A
+ * reject row keeps the entity a candidate, so that the decision does not depend on arrival order.
+ */
+export const writeSystemMerge = (edge: {
+  readonly entityType: "recording" | "artist";
+  readonly fromId: string;
+  readonly intoId: string;
+  readonly decision: "merge" | "reject";
+  readonly method: typeof entityMerge.$inferInsert.method;
+  readonly confidence: number;
+  readonly evidence: Readonly<Record<string, string>>;
+}) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const clock = yield* HlcClock;
-    const id = yield* mergeId({ entityType: "recording", ...edge, origin: "system" });
+    const id = yield* mergeId({ ...edge, origin: "system" });
 
     const [row] = yield* db.select().from(entityMerge).where(eq(entityMerge.id, id));
     if (row?.decision === edge.decision && row.confidence === edge.confidence) return false;
 
-    // A recording exists when an edge points to it
-    if (edge.decision === "merge") {
-      yield* db
-        .insert(recording)
-        .values({ id: edge.intoId, origin: edge.intoOrigin, policyVersion: 1, revision: 0 })
-        .onConflictDoNothing();
-    }
-
     const values = {
       id,
-      entityType: "recording" as const,
-      fromId: edge.fromId,
-      intoId: edge.intoId,
-      decision: edge.decision,
+      ...edge,
       origin: "system" as const,
-      method: edge.method,
-      confidence: edge.confidence,
-      evidence: edge.evidence,
       authorUserId: null,
       hlc: yield* clock.next,
     };
@@ -89,6 +87,22 @@ const writeEdge = (edge: Edge) =>
       }),
     );
     return true;
+  });
+
+const writeEdge = (edge: Edge) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const { intoOrigin, ...merge } = edge;
+    const changed = yield* writeSystemMerge({ entityType: "recording", ...merge });
+
+    // A recording exists when an edge points to it
+    if (changed && edge.decision === "merge") {
+      yield* db
+        .insert(recording)
+        .values({ id: edge.intoId, origin: intoOrigin, policyVersion: 1, revision: 0 })
+        .onConflictDoNothing();
+    }
+    return changed;
   });
 
 const fitsDuration = (durationMs: number | null | undefined, referenceMs: number | null) =>
@@ -305,9 +319,11 @@ const matchRecording = (recordingId: string, mbid: string | null) =>
     ];
   });
 
-// Recording identity: an `admin` row on a recording freezes its `system` rows. Then the highest
-// confidence, the newest HLC and the lowest target win.
-const effectiveTarget = (rows: ReadonlyArray<typeof entityMerge.$inferSelect>) => {
+/**
+ * Identity of recordings and artists: an `admin` row on an entity freezes its `system` rows. Then
+ * the highest confidence, the newest HLC and the lowest target win.
+ */
+export const effectiveTarget = (rows: ReadonlyArray<typeof entityMerge.$inferSelect>) => {
   const admin = rows.some((row) => row.origin === "admin");
   const [edge] = rows
     .filter((row) => (!admin || row.origin === "admin") && row.decision === "merge")
@@ -319,6 +335,20 @@ const effectiveTarget = (rows: ReadonlyArray<typeof entityMerge.$inferSelect>) =
     );
   return edge?.intoId ?? null;
 };
+
+/** The end of the effective edges from an entity. In a cycle, the lowest ID is the root. */
+export const followEdges =
+  <E, R>(targetOf: (id: string) => Effect.Effect<string | null, E, R>) =>
+  (id: string) =>
+    Effect.gen(function* () {
+      const path = [id];
+      while (true) {
+        const next = yield* targetOf(path.at(-1) ?? id);
+        if (next === null) return path.at(-1) ?? id;
+        if (path.includes(next)) return path.slice(path.indexOf(next)).toSorted()[0] ?? next;
+        path.push(next);
+      }
+    });
 
 /**
  * Updates `merged_into_id` and `status` of the recordings whose root can change with the edges
@@ -356,17 +386,7 @@ export const resolveRoots = (recordingIds: Iterable<string>) =>
         return target;
       });
 
-    // In a cycle, the lowest ID is the root and its own edge does not count
-    const rootOf = (id: string) =>
-      Effect.gen(function* () {
-        const path = [id];
-        while (true) {
-          const next = yield* targetOf(path.at(-1) ?? id);
-          if (next === null) return path.at(-1) ?? id;
-          if (path.includes(next)) return path.slice(path.indexOf(next)).toSorted()[0] ?? next;
-          path.push(next);
-        }
-      });
+    const rootOf = followEdges(targetOf);
 
     const rows = yield* db
       .select({ id: recording.id, mergedIntoId: recording.mergedIntoId, status: recording.status })
@@ -406,7 +426,9 @@ export const updateRecording = (recordingId: string, mbid: string | null) =>
       .select({ mergedIntoId: recording.mergedIntoId })
       .from(recording)
       .where(eq(recording.id, recordingId));
-    yield* projectRecordings([...affected, recordingId, row?.mergedIntoId ?? recordingId]);
+    const projected = [...affected, recordingId, row?.mergedIntoId ?? recordingId];
+    yield* projectRecordings(projected);
+    yield* matchArtistsOf(projected);
   });
 
 /**
@@ -454,7 +476,9 @@ export const decideMerge = (
           .insert(entityMerge)
           .values(row)
           .onConflictDoUpdate({ target: entityMerge.id, set: row });
-        yield* projectRecordings(yield* resolveRoots([pair.fromId]));
+        const affected = yield* resolveRoots([pair.fromId]);
+        yield* projectRecordings(affected);
+        yield* matchArtistsOf(affected);
       }),
     );
   });
@@ -492,7 +516,12 @@ export const waitForMusicBrainz = (retryAfterSeconds: number) =>
     yield* db
       .update(job)
       .set({ nextRunAt: runAt })
-      .where(and(inArray(job.kind, [lookupKind, tracklistMatchKind]), lt(job.nextRunAt, runAt)));
+      .where(
+        and(
+          inArray(job.kind, [lookupKind, tracklistMatchKind, artistLinksKind]),
+          lt(job.nextRunAt, runAt),
+        ),
+      );
     return waitSeconds;
   });
 
@@ -522,6 +551,7 @@ const writeLookup = (isrc: string, recordings: ReadonlyArray<MusicBrainzRecordin
     const changed = yield* matchIsrc(isrc, null);
     const affected = changed.length === 0 ? [] : yield* resolveRoots(changed);
     yield* projectRecordings([...affected, ...assertedIds]);
+    yield* matchArtistsOf([...affected, ...assertedIds]);
   });
 
 // ISRCs that wait share the request of this job

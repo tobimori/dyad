@@ -1,4 +1,6 @@
 import {
+  artist,
+  artistCreditName,
   libraryItem,
   libraryRemoteTrack,
   localFile,
@@ -12,6 +14,8 @@ import {
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
+  ArtistCreditNameRow,
+  ArtistRow,
   CatalogCursor,
   CatalogGroup,
   CatalogPage,
@@ -107,9 +111,28 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
         ),
       );
 
+    const creditIds = [...new Set(recordings.flatMap((row) => row.artistCreditId ?? []))];
+    const creditNames = yield* db
+      .select()
+      .from(artistCreditName)
+      .where(inArray(artistCreditName.artistCreditId, creditIds));
+    // All members of the artists' merge groups, so that a client knows which providers a root has
+    const credited = [...new Set(creditNames.flatMap((row) => row.artistId ?? []))];
+    const artistRoots = yield* db
+      .select({ root: sql<string>`coalesce(${artist.mergedIntoId}, ${artist.id})` })
+      .from(artist)
+      .where(inArray(artist.id, credited));
+    const artistRootIds = [...new Set(artistRoots.map((row) => row.root))];
+    const artists = yield* db
+      .select()
+      .from(artist)
+      .where(or(inArray(artist.id, artistRootIds), inArray(artist.mergedIntoId, artistRootIds)));
+
     const decoded = yield* Schema.decodeUnknownEffect(
       Schema.Struct({
         recordings: Schema.Array(RecordingRow),
+        creditNames: Schema.Array(ArtistCreditNameRow),
+        artists: Schema.Array(ArtistRow),
         sources: Schema.Array(SourceRow),
         variants: Schema.Array(SourceVariantRow),
         segments: Schema.Array(SourceSegmentRow),
@@ -117,7 +140,12 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
         keys: Schema.Array(SourceKeyRow),
         remoteTracks: Schema.Array(LibraryRemoteTrackRow),
       }),
-    )({ recordings, sources, variants, segments, keys, remoteTracks }).pipe(Effect.orDie);
+    )({ recordings, creditNames, artists, sources, variants, segments, keys, remoteTracks }).pipe(
+      Effect.orDie,
+    );
+    const rootOfArtist = new Map(
+      decoded.artists.map((row) => [row.id, row.mergedIntoId ?? row.id]),
+    );
 
     const rootOf = new Map<string, string>(
       decoded.recordings.map((row) => [row.id, row.mergedIntoId ?? row.id]),
@@ -129,10 +157,16 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
     return roots.map((root) => {
       const sourcesOfRoot = decoded.sources.filter((row) => sourceRoot.get(row.id) === root.id);
       const inGroup = new Set(sourcesOfRoot.map((row) => row.id));
+      const recordingsOfRoot = decoded.recordings.filter((row) => rootOf.get(row.id) === root.id);
+      const credits = new Set(recordingsOfRoot.map((row) => row.artistCreditId));
+      const namesOfRoot = decoded.creditNames.filter((row) => credits.has(row.artistCreditId));
+      const artistRootsOfGroup = new Set(
+        namesOfRoot.flatMap((row) => rootOfArtist.get(row.artistId ?? "") ?? []),
+      );
       return new CatalogGroup({
         rootId: root.id,
         revision: root.revision,
-        recordings: decoded.recordings.filter((row) => rootOf.get(row.id) === root.id),
+        recordings: recordingsOfRoot,
         sources: sourcesOfRoot,
         variants: decoded.variants.filter((row) => inGroup.has(row.sourceId)),
         sourceKeys: [
@@ -144,6 +178,10 @@ const loadGroups = (userId: UserId, roots: ReadonlyArray<typeof GroupRoot.Type>)
         ],
         remoteTracks: decoded.remoteTracks.filter((row) => rootOf.get(row.recordingId) === root.id),
         segments: decoded.segments.filter((row) => inGroup.has(row.sourceId)),
+        creditNames: namesOfRoot,
+        artists: decoded.artists.filter((row) =>
+          artistRootsOfGroup.has(row.mergedIntoId ?? row.id),
+        ),
       });
     });
   });

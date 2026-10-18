@@ -272,6 +272,19 @@ export const datePrefix = /^\d{4}(-\d{2}(-\d{2})?)?/;
 // Session: Schmyt` or `Live at Wembley`
 const liveName = /\b(?:live (?:at|from|in|on)\b|home session\b|sessions?\b)|[([]live[)\]]|- live$/i;
 
+/**
+ * The artist ID of an Apple Music or iTunes artist page, for example `/us/artist/four-tet/41500` or
+ * `/us/artist/id41500`, without a request
+ */
+export const artistIdOfUrl = (url: string) => {
+  const parsed = URL.parse(url);
+  if (parsed === null || !`.${parsed.hostname}`.endsWith(".apple.com")) return null;
+
+  const parts = parsed.pathname.split("/").filter((part) => part !== "");
+  const id = parts.includes("artist") ? parts.at(-1)?.replace(/^id/, "") : undefined;
+  return id !== undefined && /^\d+$/.test(id) ? id : null;
+};
+
 const albumIdOf = (url: string | undefined) =>
   (url === undefined ? null : URL.parse(url)?.pathname.split("/").at(-1)) || null;
 

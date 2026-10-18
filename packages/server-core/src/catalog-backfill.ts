@@ -4,6 +4,9 @@ import { ProviderSource } from "@dyad/plugin";
 import { and, asc, eq, gt } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
 
+import { artistLinksLayer } from "./artist-links.ts";
+import { matchArtistsOf } from "./artist-matching.ts";
+import { uncreditedRecordings } from "./artists.ts";
 import { ParseEvidence, projectRecordings } from "./assertions.ts";
 import { tagAlbumType, tagReleaseDate } from "./editions.ts";
 import { assertionId, boundRecordingId } from "./ids.ts";
@@ -122,11 +125,16 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
     const boundIds = yield* Effect.forEach(rows, (row) =>
       boundRecordingId(row.source.provider, row.source.externalId),
     );
-    yield* projectRecordings(yield* resolveRoots(boundIds));
+    const affected = yield* resolveRoots(boundIds);
+    yield* projectRecordings(affected);
+    // Writers decide artist merges; a batch also catches merges that arrived from peers
+    yield* matchArtistsOf(affected);
     yield* assertSegmentMatches(rows.map((row) => row.source.id));
 
     const last = rows.at(-1);
     if (rows.length < batchSize || last === undefined) {
+      // Recordings without a source, for example of matched tracklist entries, are in no batch
+      yield* projectRecordings(yield* uncreditedRecordings);
       return yield* Effect.logInfo("Catalog backfill finished");
     }
     yield* jobs.enqueue(backfillKind, backfillKind, { after: last.source.id }, { priority: -1 });
@@ -138,6 +146,7 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
  */
 export const catalogLayer = Layer.mergeAll(
   matchingLayer,
+  artistLinksLayer,
   Layer.effectDiscard(
     Effect.gen(function* () {
       const db = yield* Database;

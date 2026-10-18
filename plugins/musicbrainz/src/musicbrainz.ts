@@ -123,3 +123,33 @@ export const searchRecording = (artist: string, title: string) =>
     ),
     SearchResults,
   ).pipe(Effect.map((results) => results.recordings.map(toRecording)));
+
+const ArtistRelations = Schema.Struct({
+  relations: Schema.Array(
+    Schema.Struct({
+      ended: Schema.optional(Schema.Boolean),
+      url: Schema.optional(Schema.Struct({ resource: Schema.String })),
+    }),
+  ),
+});
+
+/** The URLs of the relations of an artist that have not ended. Empty for an unknown MBID. */
+export const artistUrls = (mbid: string) =>
+  requestJson(
+    "musicbrainz",
+    HttpClientRequest.get(`https://musicbrainz.org/ws/2/artist/${encodeURIComponent(mbid)}`).pipe(
+      HttpClientRequest.setUrlParams({ inc: "url-rels", fmt: "json" }),
+    ),
+    ArtistRelations,
+  ).pipe(
+    Effect.map((artist) =>
+      Arr.dedupe(
+        artist.relations.flatMap((relation) =>
+          relation.ended === true || relation.url === undefined ? [] : [relation.url.resource],
+        ),
+      ),
+    ),
+    Effect.catchTag("LookupError", (error) =>
+      error.status === 404 ? Effect.succeed([]) : Effect.fail(error),
+    ),
+  );

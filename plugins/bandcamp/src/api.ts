@@ -1,5 +1,5 @@
 import { CreditedArtist, ProviderAudio, ProviderError, ProviderSource } from "@dyad/plugin";
-import { getJson, providerError, send } from "@dyad/plugin/http";
+import { getJson, getText, providerError, send } from "@dyad/plugin/http";
 import { Cache, Data, Effect, Exit, Schema, Stream } from "effect";
 import { HttpClientRequest } from "effect/http";
 
@@ -190,3 +190,23 @@ export const resolveTrack = (externalId: string) =>
     );
     return new ProviderAudio({ bytes });
   });
+
+// Each page of an account has the account in `data-band` (October 2026)
+const bandAttribute = /data-band="\{&quot;id&quot;:(\d+)/;
+
+/**
+ * The account ID of a `<name>.bandcamp.com` page, from one request. `null` for another site, a
+ * custom domain or a page that does not exist.
+ */
+export const bandFromUrl = (url: string) => {
+  const host = URL.parse(url)?.hostname ?? "";
+  if (!host.endsWith(".bandcamp.com")) return Effect.succeed(null);
+
+  return getText(HttpClientRequest.get(`https://${host}/`)).pipe(
+    Effect.map((html) => html.match(bandAttribute)?.[1] ?? null),
+    Effect.catchTag("HttpStatusError", (error) =>
+      error.status === 404 ? Effect.succeed(null) : Effect.fail(error),
+    ),
+    Effect.mapError(providerError("Bandcamp")),
+  );
+};

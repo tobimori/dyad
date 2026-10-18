@@ -12,6 +12,8 @@ type Service = "musicbrainz" | "listenbrainz";
 export class LookupError extends Data.TaggedError("LookupError")<{
   readonly service: Service;
   readonly reason: string;
+  /** The HTTP status, `null` for a transport or decode failure */
+  readonly status: number | null;
 }> {}
 
 /**
@@ -66,11 +68,15 @@ export const requestJson = <S extends Schema.Constraint>(
             );
           }
           return Effect.fail(
-            new LookupError({ service, reason: `Answered status ${error.status}` }),
+            new LookupError({
+              service,
+              reason: `Answered status ${error.status}`,
+              status: error.status,
+            }),
           );
         },
         HttpRequestError: (error) =>
-          Effect.fail(new LookupError({ service, reason: error.reason })),
+          Effect.fail(new LookupError({ service, reason: error.reason, status: null })),
       }),
     );
   });

@@ -5,7 +5,8 @@ import {
   ProviderRelease,
   ProviderTrack,
 } from "@dyad/plugin";
-import { Array as Arr, Effect, Schema } from "effect";
+import { getJson, providerError } from "@dyad/plugin/http";
+import { Array as Arr, Effect, Redacted, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import { api, fullStream, requestApi, Track, trackSource } from "./api.ts";
@@ -139,3 +140,40 @@ export const readSet = (withClientId: Effect.Success<typeof clientIdCache>, setI
       }),
     });
   });
+
+// `/resolve` answers the user of a profile URL, and a track or a set for other URLs
+const Resolved = Schema.Struct({ kind: Schema.String, id: Schema.Int });
+
+/**
+ * The user ID of a SoundCloud profile URL, from one request. `null` for another site, another kind
+ * of page or a profile that does not exist.
+ */
+export const userFromUrl = (withClientId: Effect.Success<typeof clientIdCache>, url: string) => {
+  const parsed = URL.parse(url);
+  const host = parsed?.hostname.replace(/^(?:www|m)\./, "");
+  const [permalink, ...rest] = parsed?.pathname.split("/").filter((part) => part !== "") ?? [];
+  if (host !== "soundcloud.com" || permalink === undefined || rest.length > 0) {
+    return Effect.succeed(null);
+  }
+
+  return withClientId((clientId) =>
+    getJson(
+      HttpClientRequest.get(`${api}/resolve`).pipe(
+        HttpClientRequest.setUrlParams({
+          url: `https://soundcloud.com/${permalink}`,
+          client_id: Redacted.value(clientId),
+        }),
+      ),
+      Resolved,
+    ),
+  ).pipe(
+    Effect.map((found) => (found.kind === "user" ? String(found.id) : null)),
+    Effect.catchTags({
+      HttpStatusError: (error) =>
+        error.status === 404
+          ? Effect.succeed(null)
+          : Effect.fail(providerError("SoundCloud")(error)),
+      HttpRequestError: (error) => Effect.fail(providerError("SoundCloud")(error)),
+    }),
+  );
+};

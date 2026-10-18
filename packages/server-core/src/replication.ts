@@ -20,6 +20,7 @@ import { Data, Effect, Equal, Option, Schema } from "effect";
 
 import { projectRecordings } from "./assertions.ts";
 import { isrcRecordingId } from "./ids.ts";
+import { deriveArtists } from "./artist-matching.ts";
 import { resolveRoots } from "./matching.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { EntryText, deriveEntryMatches, deriveTracklists } from "./tracklists.ts";
@@ -215,6 +216,7 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
         : [],
     );
     if (tracklists.length > 0) yield* deriveTracklists(tracklists);
+    yield* deriveArtists(rows);
     yield* deriveEntryMatches(
       entryMatches.flatMap((row) =>
         Option.toArray(Schema.decodeUnknownOption(EntryText)(row.evidence)),

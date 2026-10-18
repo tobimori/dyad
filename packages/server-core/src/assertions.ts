@@ -7,6 +7,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 
 import { AlbumType, ReleaseDate, shownAlbum } from "./editions.ts";
+import { projectArtists } from "./artists.ts";
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
@@ -56,22 +57,29 @@ export class ParseEvidence extends Schema.Class<ParseEvidence>("ParseEvidence")(
   removed: Schema.Array(Schema.String),
 }) {}
 
+/** The provider artist of an `mbid` assertion, so that peers know its ID without a request */
+export class ArtistLinkEvidence extends Schema.Class<ArtistLinkEvidence>("ArtistLinkEvidence")({
+  url: Schema.String,
+  provider: Schema.String,
+  externalId: Schema.String,
+}) {}
+
 const parseVersion = (revision: string | null) => Number(revision?.replace("parse:v", "") ?? 0);
 
-/**
- * One assertion for each field of `values` from one origin. `null` states that the origin has no
- * value. Unchanged assertions write nothing.
- */
-export const assertRecording = (
-  recordingId: string,
+// One assertion for each field of `values`. Unchanged assertions write nothing.
+const assertFields = (
+  entityType: "recording" | "artist",
+  entityId: string,
   origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
   originRef: string,
-  values: { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null },
+  values:
+    | { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null }
+    | { readonly links?: ReadonlyArray<string>; readonly mbid?: string | null },
   details: {
     readonly confidence?: number;
     readonly originRevision?: string;
-    readonly evidence?: ParseEvidence;
-  } = {},
+    readonly evidence?: unknown;
+  },
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -83,8 +91,8 @@ export const assertRecording = (
 
     const assertions = yield* Effect.forEach(Object.entries(values), ([field, value]) =>
       assertionId({
-        entityType: "recording",
-        entityId: recordingId,
+        entityType,
+        entityId,
         field,
         origin,
         originRef,
@@ -136,8 +144,8 @@ export const assertRecording = (
               const row = {
                 id: assertion.id,
                 workspaceId: identity.workspaceId,
-                entityType: "recording",
-                entityId: recordingId,
+                entityType,
+                entityId,
                 field: assertion.field,
                 value: assertion.value,
                 origin,
@@ -163,16 +171,43 @@ export const assertRecording = (
     return true;
   });
 
+/**
+ * One assertion for each field of `values` from one origin. `null` states that the origin has no
+ * value. Unchanged assertions write nothing.
+ */
+export const assertRecording = (
+  recordingId: string,
+  origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
+  originRef: string,
+  values: { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null },
+  details: {
+    readonly confidence?: number;
+    readonly originRevision?: string;
+    readonly evidence?: ParseEvidence;
+  } = {},
+) => assertFields("recording", recordingId, origin, originRef, values, details);
+
+/**
+ * `links`: the URL relations of a MusicBrainz artist. `mbid`: a MusicBrainz artist links to the
+ * provider artist; one assertion per MusicBrainz artist, with the provider ID in the evidence.
+ */
+export const assertArtist = (
+  artistId: string,
+  originRef: string,
+  values: { readonly links?: ReadonlyArray<string>; readonly mbid?: string | null },
+  evidence: ArtistLinkEvidence | null,
+) => assertFields("artist", artistId, "musicbrainz", originRef, values, { evidence });
+
 // Resolution policy v1. Users curate local tags. MusicBrainz titles are in the original script, where
 // providers localize. `match` and `parse` are guesses, so they only fill fields that others leave.
 const originRank = ["admin", "local", "provider", "musicbrainz", "match", "parse"];
 
-type Assertion = typeof catalogAssertion.$inferSelect;
+export type Assertion = typeof catalogAssertion.$inferSelect;
 
-const providerOf = (assertion: Assertion) => assertion.originRef.split(":")[0] ?? "";
+export const providerOf = (assertion: Assertion) => assertion.originRef.split(":")[0] ?? "";
 
 // Ties go to the lower provider ID, so that all replicas select the same assertion
-const compareAssertions =
+export const compareAssertions =
   (providers: ReadonlyMap<string, Provider>) => (a: Assertion, b: Assertion) => {
     const priority = (assertion: Assertion) =>
       providers.get(providerOf(assertion))?.metadataPriority ?? 0;
@@ -187,8 +222,11 @@ const compareAssertions =
     );
   };
 
-/** An import that has no value lets the next origin apply. Only an admin can clear a field. */
-export const resolveField = <A>(
+/**
+ * The selected assertion of `field` and its value. An import that has no value lets the next origin
+ * apply. Only an admin can clear a field.
+ */
+export const resolveAssertion = <A>(
   providers: ReadonlyMap<string, Provider>,
   assertions: ReadonlyArray<Assertion>,
   field: string,
@@ -203,10 +241,17 @@ export const resolveField = <A>(
     if (assertion.value === null) return null;
 
     const value = Schema.decodeUnknownOption(schema)(assertion.value);
-    if (Option.isSome(value)) return value.value;
+    if (Option.isSome(value)) return { assertion, value: value.value };
   }
   return null;
 };
+
+export const resolveField = <A>(
+  providers: ReadonlyMap<string, Provider>,
+  assertions: ReadonlyArray<Assertion>,
+  field: string,
+  schema: Schema.Decoder<A>,
+) => resolveAssertion(providers, assertions, field, schema)?.value ?? null;
 
 /** The value of `field` of each recording from its own assertions, without its merged recordings */
 export const resolvedValues = <F extends keyof typeof fields>(
@@ -304,5 +349,15 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
         .where(eq(recording.id, row.id))
         .pipe(Effect.as([row.id]));
     });
-    yield* touchGroups(changed.flat());
+    const credited = yield* projectArtists(
+      rows.map((row) => {
+        const members = new Set(membersOf.get(row.id));
+        return {
+          id: row.id,
+          artistCreditId: row.artistCreditId,
+          own: assertions.filter((assertion) => members.has(assertion.entityId)),
+        };
+      }),
+    );
+    yield* touchGroups([...changed.flat(), ...credited]);
   });

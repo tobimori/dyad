@@ -3,6 +3,7 @@ import { Clock, Data, Effect, Ref } from "effect";
 import { HttpClient } from "effect/http";
 
 import {
+  channelFromUrl,
   playerCache,
   provider,
   resolveAudio,
@@ -74,6 +75,7 @@ export const youtubePlugin = new Plugin({
           uploads: true,
           download: { leaseDays: 30 },
           webUrl: (id) => `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,
+          artistFromUrl: (url) => Effect.succeed(channelFromUrl(url)),
           account: {
             login: browserLogin,
             link: (credentials) =>

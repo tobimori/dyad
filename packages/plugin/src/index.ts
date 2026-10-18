@@ -461,6 +461,8 @@ export class MusicBrainzLookup extends Data.Class<{
   readonly recordingsByText: (
     items: ReadonlyArray<{ readonly key: string; readonly artist: string; readonly title: string }>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<MusicBrainzRecording>>, MusicBrainzError>;
+  /** The URLs of the current URL relations of an artist. Empty when MusicBrainz has no such artist. */
+  readonly artistUrls: (mbid: string) => Effect.Effect<ReadonlyArray<string>, MusicBrainzError>;
 }> {}
 
 /** Popularity of one recording, for search ranking */

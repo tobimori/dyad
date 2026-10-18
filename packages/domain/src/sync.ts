@@ -227,6 +227,34 @@ export class LibraryRemoteTrackRow extends Schema.Class<LibraryRemoteTrackRow>(
   seenAt: Schema.Int,
 }) {}
 
+/** An artist with an MBID or a provider ID. `mergedIntoId` is the root of its merge group. */
+export class ArtistRow extends Schema.Class<ArtistRow>("ArtistRow")({
+  id: Schema.String,
+  localKey: Schema.NullOr(Schema.String),
+  name: Schema.NullOr(Schema.String),
+  sortName: Schema.NullOr(Schema.String),
+  kind: Schema.NullOr(
+    Schema.Literals(["person", "group", "orchestra", "choir", "character", "other"]),
+  ),
+  country: Schema.NullOr(Schema.String),
+  disambiguation: Schema.NullOr(Schema.String),
+  nameKey: Schema.NullOr(Schema.String),
+  mergedIntoId: Schema.NullOr(Schema.String),
+  origin: Schema.Literals(["musicbrainz", "isrc", "provider", "local", "admin"]),
+  status: Schema.Literals(["active", "merged", "hidden"]),
+  policyVersion: Schema.Int,
+  revision: Schema.Int,
+}) {}
+
+/** One name of a content-addressed credit. `artistId` is null for a name without an artist. */
+export class ArtistCreditNameRow extends Schema.Class<ArtistCreditNameRow>("ArtistCreditNameRow")({
+  artistCreditId: Schema.String,
+  position: Schema.Int,
+  artistId: Schema.NullOr(Schema.String),
+  creditedAs: Schema.String,
+  joinPhrase: Schema.String,
+}) {}
+
 /**
  * A root recording, the recordings merged into it, their sources, variants and segments, and the
  * remote tracks of the requesting user. A client replaces its rows of the group with these.
@@ -240,6 +268,12 @@ export class CatalogGroup extends Schema.Class<CatalogGroup>("CatalogGroup")({
   sourceKeys: Schema.Array(SourceKeyRow),
   remoteTracks: Schema.Array(LibraryRemoteTrackRow),
   segments: Schema.Array(SourceSegmentRow).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  /** The names of the credits of the recordings */
+  creditNames: Schema.Array(ArtistCreditNameRow).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  /** The artists of the credits, and all artists of their merge groups */
+  artists: Schema.Array(ArtistRow).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 }) {}
 
 export class CatalogCursor extends Schema.Class<CatalogCursor>("CatalogCursor")({
@@ -470,7 +504,7 @@ export class EntityMergeRow extends Schema.Class<EntityMergeRow>("EntityMergeRow
   intoId: Schema.String,
   decision: Schema.Literals(["merge", "reject"]),
   origin: Schema.Literals(["system", "admin"]),
-  method: Schema.Literals(["mbid_tag", "isrc", "mapper", "manual"]),
+  method: Schema.Literals(["mbid_tag", "isrc", "mapper", "manual", "shared_recording", "url_rel"]),
   confidence: Schema.Finite,
   evidence: Schema.Unknown,
   authorUserId: Schema.NullOr(Schema.String),

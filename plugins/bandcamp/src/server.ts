@@ -2,7 +2,7 @@ import { Plugin, Provider } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
-import { detailsCache, provider, resolveTrack, searchTracks } from "./api.ts";
+import { bandFromUrl, detailsCache, provider, resolveTrack, searchTracks } from "./api.ts";
 import { browserLogin, readFanName } from "./login.ts";
 import { readBand, readRelease } from "./pages.ts";
 
@@ -25,6 +25,7 @@ export const bandcampPlugin = new Plugin({
           search: (query) => searchTracks(details, query).pipe(Effect.provide(services)),
           artist: (bandId) => readBand(bandId).pipe(Effect.provide(services)),
           album: (albumId) => readRelease(albumId).pipe(Effect.provide(services)),
+          artistFromUrl: (url) => bandFromUrl(url).pipe(Effect.provide(services)),
           metadataPriority: 20,
           uploads: true,
           download: { leaseDays: 30 },

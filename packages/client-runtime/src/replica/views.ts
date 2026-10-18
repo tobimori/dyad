@@ -18,6 +18,7 @@ import {
   RecordingId,
   SourceSegment,
   SourceSummary,
+  catalogArtistRef,
   libraryAlbumRef,
   libraryArtistRef,
   libraryView,
@@ -68,6 +69,17 @@ export const playableSources = (match: SQL | undefined) =>
           explicit: canonical.explicit,
           artworkUrl: canonical.artworkUrl,
         },
+        // The root of the first credited artist, when a provider can show its page
+        artistRoot: sql<string | null>`(
+          SELECT coalesce(a.merged_into_id, a.id)
+          FROM artist_credit_name AS n JOIN artist AS a ON a.id = n.artist_id
+          WHERE n.artist_credit_id = ${canonical.artistCreditId} AND n.position = 0
+            AND EXISTS (
+              SELECT 1 FROM artist AS m
+              WHERE coalesce(m.merged_into_id, m.id) = coalesce(a.merged_into_id, a.id)
+                AND m.origin = 'provider'
+            )
+        )`,
       })
       .from(source)
       .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
@@ -85,6 +97,7 @@ export const playableSources = (match: SQL | undefined) =>
       .filter((row) => row.key !== null || usable(row.source.provider))
       .map((row) => {
         const key = row.key;
+        const catalogRef = row.artistRoot === null ? null : catalogArtistRef(row.artistRoot);
         return {
           recordingId: row.source.recordingId,
           lossless: row.variant.lossless,
@@ -97,8 +110,7 @@ export const playableSources = (match: SQL | undefined) =>
             durationMs: row.source.rawDurationMs,
             codec: row.variant.codec,
             artworkUrl: row.canonical?.artworkUrl ?? null,
-            // Provider refs need the provider's IDs, which the catalog groups do not have
-            artistRef: key?.artistKey == null ? null : libraryArtistRef(key.artistKey),
+            artistRef: key?.artistKey == null ? catalogRef : libraryArtistRef(key.artistKey),
             albumRef:
               key?.albumArtistKey == null || key.albumKey == null
                 ? null

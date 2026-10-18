@@ -97,5 +97,19 @@
       "\nCREATE INDEX `source_preference_change_idx` ON `source_preference` (`user_id`,`change_seq`);",
       "\nCREATE INDEX `source_preference_seq_idx` ON `source_preference` (`change_seq`);"
     ]
+  },
+  {
+    "name": "20261018180853_add_client_artists",
+    "folderMillis": 1792346933000,
+    "hash": "c51db1c639e856ef952b1e977481796099489156807e45c89549393e3b2327ec",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `artist` (\n\t`id` text PRIMARY KEY,\n\t`local_key` text,\n\t`name` text,\n\t`sort_name` text,\n\t`kind` text,\n\t`country` text,\n\t`disambiguation` text,\n\t`name_key` text,\n\t`merged_into_id` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `artist_credit_name` (\n\t`artist_credit_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`artist_id` text,\n\t`credited_as` text NOT NULL,\n\t`join_phrase` text DEFAULT '' NOT NULL,\n\tCONSTRAINT `artist_credit_name_pk` PRIMARY KEY(`artist_credit_id`, `position`)\n);\n",
+      "\nCREATE INDEX `artist_local_key_idx` ON `artist` (`local_key`);",
+      "\nCREATE INDEX `artist_name_key_idx` ON `artist` (`name_key`);",
+      "\nCREATE INDEX `artist_merged_into_idx` ON `artist` (`merged_into_id`);",
+      "\nCREATE INDEX `artist_credit_name_artist_idx` ON `artist_credit_name` (`artist_id`);"
+    ]
   }
 ]

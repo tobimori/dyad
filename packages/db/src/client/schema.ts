@@ -1,7 +1,7 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // The synced tables of a client replica have the same columns as on the server
-export { recording } from "../schema/catalog.ts";
+export { artist, artistCreditName, recording } from "../schema/catalog.ts";
 export { playEvent } from "../schema/history.ts";
 export { libraryRemoteTrack } from "../schema/library-sync.ts";
 export { libraryItem, playlist, playlistEntry, sourcePreference } from "../schema/library.ts";

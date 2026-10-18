@@ -6,6 +6,8 @@ import type { SQLiteEffectSession } from "drizzle-orm/sqlite-core/effect/session
 import migrations from "./migrations.json" with { type: "json" };
 
 export {
+  artist,
+  artistCreditName,
   clientState,
   libraryItem,
   libraryRemoteTrack,

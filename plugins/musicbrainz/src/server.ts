@@ -6,7 +6,7 @@ import { HttpClient } from "effect/http";
 import { Pacing, RateLimited, pacingLayer } from "./http.ts";
 import type { LookupError } from "./http.ts";
 import { lookupRecordings } from "./listenbrainz.ts";
-import { lookupIsrcs, searchRecording } from "./musicbrainz.ts";
+import { artistUrls, lookupIsrcs, searchRecording } from "./musicbrainz.ts";
 import { listenbrainzRecommender } from "./recommender.ts";
 
 const toMusicBrainzError = (error: LookupError | RateLimited) =>
@@ -60,6 +60,8 @@ export const musicbrainzPlugin = new Plugin({
               Effect.mapError(toMusicBrainzError),
               Effect.provide(services),
             ),
+          artistUrls: (mbid) =>
+            artistUrls(mbid).pipe(Effect.mapError(toMusicBrainzError), Effect.provide(services)),
         }),
       );
       yield* context.recommenders.add("listenbrainz", yield* listenbrainzRecommender);

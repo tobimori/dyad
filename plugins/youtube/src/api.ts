@@ -562,3 +562,23 @@ export const videoTracklists = (externalId: string) =>
       .filter((tracklist) => tracklist.entries.length >= minimumEntries)
       .concat(yield* commentTracklist(next));
   });
+
+const youtubeHosts = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+]);
+const channelId = /^UC[\w-]{22}$/;
+
+/**
+ * The channel ID of a `/channel/UC…` URL, without a request. Handles and `/user/` URLs need a
+ * request to YouTube, so they give `null`.
+ */
+export const channelFromUrl = (url: string) => {
+  const parsed = URL.parse(url);
+  if (parsed === null || !youtubeHosts.has(parsed.hostname)) return null;
+
+  const [kind, id] = parsed.pathname.split("/").filter((part) => part !== "");
+  return kind === "channel" && id !== undefined && channelId.test(id) ? id : null;
+};

@@ -1,0 +1,394 @@
+import {
+  artist,
+  artistCredit,
+  artistCreditName,
+  catalogAssertion,
+  identifier,
+  recording,
+} from "@dyad/db";
+import { Database } from "@dyad/db/node";
+import { CurrentPrincipal, PageNotFound } from "@dyad/domain";
+import type { ArtistRef } from "@dyad/domain";
+import type { Provider } from "@dyad/plugin";
+import { artistNameKey } from "@dyad/plugin/tracklist";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { Array as Arr, Effect, Option, Schema } from "effect";
+
+import { resolveArtistRoots } from "./artist-matching.ts";
+// `assertions.ts` imports this module, so use its exports only inside functions
+import { compareAssertions, fields, providerOf, resolveAssertion } from "./assertions.ts";
+import type { Assertion } from "./assertions.ts";
+import { musicbrainzArtistId, uuidV5 } from "./ids.ts";
+import { normV1 } from "./normalize.ts";
+import { Providers, usableProviders } from "./providers.ts";
+import { catalogArtistId, providerArtistRef } from "./refs.ts";
+import { touchGroups } from "./sync-counter.ts";
+
+// Below the SQLite limit of 32766 parameters
+const chunkSize = 500;
+
+/** The `identifier.scheme` of an MBID. Provider artists use the provider ID as the scheme. */
+export const mbidScheme = "mbid";
+
+/** `mb:artist:<mbid>` or `<provider>:artist:<external ID>` */
+export const artistIdOf = (scheme: string, externalId: string) =>
+  scheme === mbidScheme
+    ? musicbrainzArtistId(externalId)
+    : uuidV5(`${scheme}:artist:${externalId}`);
+
+// The artist IDs of a credit are MBIDs in a `musicbrainz` assertion and provider IDs in a
+// `provider` or `parse` one. Other origins give no IDs.
+const schemeOf = (assertion: Assertion) => {
+  if (assertion.origin === "musicbrainz") return mbidScheme;
+  if (assertion.origin === "provider" || assertion.origin === "parse") return providerOf(assertion);
+  return null;
+};
+
+// Each credit with IDs names artists, also when another origin wins the credit
+const creditedArtists = (own: ReadonlyArray<Assertion>) =>
+  own.flatMap((assertion) => {
+    const scheme = schemeOf(assertion);
+    if (assertion.field !== "artist_credit" || scheme === null) return [];
+
+    return Option.match(Schema.decodeUnknownOption(fields.artist_credit)(assertion.value), {
+      onNone: () => [],
+      onSome: (credit) =>
+        credit.artists.flatMap((named) =>
+          named.id === null ? [] : [{ scheme, externalId: named.id, name: named.name }],
+        ),
+    });
+  });
+
+// The parse decides that an uploading account is the artist, for example a SoundCloud user
+const uploaderArtists = (own: ReadonlyArray<Assertion>) => {
+  const artistRefs = new Set(
+    own.flatMap((assertion) =>
+      assertion.field === "uploader_role" && assertion.value === "artist"
+        ? [assertion.originRef]
+        : [],
+    ),
+  );
+  return own
+    .flatMap((assertion) =>
+      assertion.field === "uploader" &&
+      assertion.origin === "provider" &&
+      artistRefs.has(assertion.originRef)
+        ? Option.toArray(Schema.decodeUnknownOption(fields.uploader)(assertion.value)).map(
+            (uploader) => ({
+              scheme: providerOf(assertion),
+              externalId: uploader.id,
+              name: uploader.name,
+            }),
+          )
+        : [],
+    )
+    .toSorted((a, b) => `${a.scheme}:${a.externalId}`.localeCompare(`${b.scheme}:${b.externalId}`));
+};
+
+// Credits give the whole text and the names, mostly without join phrases
+const joinPhrases = (text: string, names: ReadonlyArray<string>) => {
+  const starts: Array<number> = [];
+  let end = 0;
+  for (const name of names) {
+    const start = text.indexOf(name, end);
+    starts.push(start);
+    if (start !== -1) end = start + name.length;
+  }
+  return names.map((name, index) => {
+    const start = starts[index] ?? -1;
+    const next = index === names.length - 1 ? text.length : (starts[index + 1] ?? -1);
+    return start === -1 || next === -1 ? "" : text.slice(start + name.length, next);
+  });
+};
+
+/**
+ * Writes the resolved credit of a recording with its names and returns its ID. A name without an
+ * ID links to an uploader with the same name that the parse calls the artist.
+ */
+const writeCredit = (providers: ReadonlyMap<string, Provider>, own: ReadonlyArray<Assertion>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const resolved = resolveAssertion(providers, own, "artist_credit", fields.artist_credit);
+    if (resolved === null) return null;
+
+    const scheme = schemeOf(resolved.assertion);
+    const uploaders = uploaderArtists(own);
+    const credit = resolved.value;
+    const parts =
+      credit.artists.length === 0
+        ? [{ id: null, name: credit.name, joinPhrase: undefined }]
+        : credit.artists;
+    const phrases = joinPhrases(
+      credit.name,
+      parts.map((part) => part.name),
+    );
+
+    const names = yield* Effect.forEach(parts, (part, position) =>
+      Effect.gen(function* () {
+        const key = artistNameKey(part.name);
+        const uploader = uploaders.find((found) => key !== "" && artistNameKey(found.name) === key);
+        const linked =
+          part.id !== null && scheme !== null
+            ? { scheme, externalId: part.id }
+            : (uploader ?? null);
+        return {
+          position,
+          artistId: linked === null ? null : yield* artistIdOf(linked.scheme, linked.externalId),
+          creditedAs: part.name,
+          joinPhrase: part.joinPhrase ?? phrases[position] ?? "",
+        };
+      }),
+    );
+
+    const id = yield* uuidV5(
+      `credit:${JSON.stringify(
+        names.map((name) => `${name.artistId ?? ""}|${normV1(name.creditedAs)}|${name.joinPhrase}`),
+      )}`,
+    );
+    yield* db
+      .insert(artistCredit)
+      .values({ id, policyVersion: 1, revision: 0 })
+      .onConflictDoNothing();
+    yield* db
+      .insert(artistCreditName)
+      .values(names.map((name) => ({ artistCreditId: id, ...name })))
+      .onConflictDoNothing();
+    return id;
+  });
+
+const NameMention = Schema.Struct({
+  id: Schema.String,
+  externalId: Schema.String,
+  name: Schema.String,
+});
+
+// The names that credits and uploaders give each external ID
+const mentionsOf = (externalIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const chunks = yield* Effect.forEach(Arr.chunksOf(externalIds, chunkSize), (chunk) =>
+      Effect.gen(function* () {
+        const list = sql.join(
+          chunk.map((id) => sql`${id}`),
+          sql`, `,
+        );
+        const credits = yield* db.all(sql`
+          SELECT a.id AS id, json_extract(j.value, '$.id') AS externalId,
+            json_extract(j.value, '$.name') AS name
+          FROM ${catalogAssertion} AS a, json_each(a.value, '$.artists') AS j
+          WHERE a.entity_type = 'recording' AND a.field = 'artist_credit' AND a.retracted = 0
+            AND json_extract(j.value, '$.id') IN (${list})
+        `);
+        const uploaders = yield* db.all(sql`
+          SELECT a.id AS id, json_extract(a.value, '$.id') AS externalId,
+            json_extract(a.value, '$.name') AS name
+          FROM ${catalogAssertion} AS a
+          WHERE a.entity_type = 'recording' AND a.field = 'uploader' AND a.retracted = 0
+            AND a.origin = 'provider' AND json_extract(a.value, '$.id') IN (${list})
+        `);
+        const decode = Schema.decodeUnknownEffect(Schema.Array(NameMention));
+        return {
+          credits: yield* decode(credits).pipe(Effect.orDie),
+          uploaders: yield* decode(uploaders).pipe(Effect.orDie),
+        };
+      }),
+    );
+    const credits = chunks.flatMap((chunk) => chunk.credits);
+    const uploaders = chunks.flatMap((chunk) => chunk.uploaders);
+
+    const assertionIds = [...new Set([...credits, ...uploaders].map((mention) => mention.id))];
+    const assertions = new Map(
+      (yield* Effect.forEach(Arr.chunksOf(assertionIds, chunkSize), (chunk) =>
+        db
+          .select()
+          .from(catalogAssertion)
+          .where(inArray(catalogAssertion.id, [...chunk])),
+      ))
+        .flat()
+        .map((row) => [row.id, row]),
+    );
+    const withAssertion = (mentions: ReadonlyArray<typeof NameMention.Type>) =>
+      mentions.flatMap((mention) => {
+        const assertion = assertions.get(mention.id);
+        return assertion === undefined ? [] : [{ ...mention, assertion }];
+      });
+    return { credits: withAssertion(credits), uploaders: withAssertion(uploaders) };
+  });
+
+/**
+ * Upserts the artist rows and identifiers of artists with an MBID or a provider ID. The name comes
+ * from the credits that name the artist, else from its uploads, in the order of the resolution
+ * policy, so that every replica selects the same name.
+ */
+export const projectArtistRows = (
+  keys: ReadonlyArray<{ readonly scheme: string; readonly externalId: string }>,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const providers = yield* Providers;
+    const unique = [
+      ...new Map(keys.map((key) => [`${key.scheme}:${key.externalId}`, key])).values(),
+    ];
+    if (unique.length === 0) return;
+
+    const rows = yield* Effect.forEach(unique, (key) =>
+      artistIdOf(key.scheme, key.externalId).pipe(Effect.map((id) => ({ ...key, id }))),
+    );
+    for (const chunk of Arr.chunksOf(rows, chunkSize)) {
+      yield* db
+        .insert(identifier)
+        .values(
+          chunk.map((row) => ({
+            entityType: "artist" as const,
+            entityId: row.id,
+            scheme: row.scheme,
+            value: row.externalId,
+          })),
+        )
+        .onConflictDoNothing();
+    }
+
+    const mentions = yield* mentionsOf([...new Set(rows.map((row) => row.externalId))]);
+    const compare = compareAssertions(providers);
+    const nameOf = (row: (typeof rows)[number]) => {
+      const matching = (list: typeof mentions.credits) =>
+        list
+          .filter(
+            (mention) =>
+              mention.externalId === row.externalId && schemeOf(mention.assertion) === row.scheme,
+          )
+          .toSorted((a, b) => compare(a.assertion, b.assertion))[0]?.name;
+      return matching(mentions.credits) ?? matching(mentions.uploaders) ?? null;
+    };
+
+    const changed = yield* Effect.forEach(rows, (row) =>
+      Effect.gen(function* () {
+        const name = nameOf(row);
+        const values = {
+          name,
+          nameKey: name === null ? null : artistNameKey(name) || null,
+        };
+        const written = yield* db
+          .insert(artist)
+          .values({
+            id: row.id,
+            origin: row.scheme === mbidScheme ? "musicbrainz" : "provider",
+            ...values,
+            policyVersion: 1,
+            revision: 0,
+          })
+          .onConflictDoUpdate({
+            target: artist.id,
+            set: values,
+            setWhere: sql`${artist.name} IS NOT excluded.name OR ${artist.nameKey} IS NOT excluded.name_key`,
+          })
+          .returning({ id: artist.id });
+        return written.map((found) => found.id);
+      }),
+    );
+    // A merge can arrive before the artist row
+    yield* resolveArtistRoots(changed.flat());
+    yield* touchArtistGroups(changed.flat());
+  });
+
+/** Sets a new revision on the groups of the recordings whose credits name the artists */
+export const touchArtistGroups = (artistIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const ids = [...new Set(artistIds)];
+    const recordings = yield* Effect.forEach(Arr.chunksOf(ids, chunkSize), (chunk) =>
+      db
+        .select({ id: recording.id })
+        .from(recording)
+        .innerJoin(artistCreditName, eq(artistCreditName.artistCreditId, recording.artistCreditId))
+        .where(inArray(artistCreditName.artistId, [...chunk])),
+    );
+    yield* touchGroups(recordings.flat().map((row) => row.id));
+  });
+
+/**
+ * Projects the artists of the credits and uploaders of each recording, and sets its
+ * `artist_credit_id` from the resolved credit. `own` are the assertions of the recording and of
+ * the recordings merged into it. Returns the recordings whose credit changed.
+ */
+export const projectArtists = (
+  recordings: ReadonlyArray<{
+    readonly id: string;
+    readonly artistCreditId: string | null;
+    readonly own: ReadonlyArray<Assertion>;
+  }>,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const providers = yield* Providers;
+    yield* projectArtistRows(
+      recordings.flatMap((row) => [...creditedArtists(row.own), ...uploaderArtists(row.own)]),
+    );
+
+    const changed = yield* Effect.forEach(recordings, (row) =>
+      Effect.gen(function* () {
+        const creditId = yield* writeCredit(providers, row.own);
+        if (creditId === row.artistCreditId) return [];
+
+        yield* db
+          .update(recording)
+          .set({ artistCreditId: creditId })
+          .where(eq(recording.id, row.id));
+        return [row.id];
+      }),
+    );
+    return changed.flat();
+  });
+
+/**
+ * The page ref of an artist ref. A catalog ref gives the page of the provider artist in its merge
+ * group that the user can open, the provider with the highest metadata priority first.
+ */
+export const artistPageRef = (ref: ArtistRef) =>
+  Effect.gen(function* () {
+    const id = catalogArtistId(ref);
+    if (Option.isNone(id)) return ref;
+
+    const db = yield* Database;
+    const principal = yield* CurrentPrincipal;
+    const usable = yield* usableProviders(principal.userId);
+    const members = yield* db
+      .select({ provider: identifier.scheme, externalId: identifier.value })
+      .from(artist)
+      .innerJoin(
+        identifier,
+        and(eq(identifier.entityType, "artist"), eq(identifier.entityId, artist.id)),
+      )
+      .where(sql`coalesce(${artist.mergedIntoId}, ${artist.id}) = ${id.value}`);
+
+    const priority = (provider: string) => usable.get(provider)?.provider.metadataPriority ?? 0;
+    const [best] = members
+      .filter((member) => usable.get(member.provider)?.provider.artist !== undefined)
+      .toSorted(
+        (a, b) =>
+          priority(b.provider) - priority(a.provider) ||
+          a.provider.localeCompare(b.provider) ||
+          a.externalId.localeCompare(b.externalId),
+      );
+    if (best === undefined) return yield* new PageNotFound();
+    return providerArtistRef(best.provider, best.externalId);
+  });
+
+/** Recordings with a credit assertion and no projected credit, for example from before artists */
+export const uncreditedRecordings = Effect.gen(function* () {
+  const db = yield* Database;
+  const rows = yield* db
+    .selectDistinct({ id: recording.id })
+    .from(catalogAssertion)
+    .innerJoin(recording, eq(recording.id, catalogAssertion.entityId))
+    .where(
+      and(
+        eq(catalogAssertion.entityType, "recording"),
+        eq(catalogAssertion.field, "artist_credit"),
+        eq(catalogAssertion.retracted, false),
+        isNotNull(catalogAssertion.value),
+        isNull(recording.artistCreditId),
+      ),
+    );
+  return rows.map((row) => row.id);
+});

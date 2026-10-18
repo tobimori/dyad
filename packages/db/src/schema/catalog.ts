@@ -213,7 +213,11 @@ export const entityMerge = sqliteTable(
     intoId: text("into_id").notNull(),
     decision: text("decision", { enum: ["merge", "reject"] }).notNull(),
     origin: text("origin", { enum: ["system", "admin"] }).notNull(),
-    method: text("method", { enum: ["mbid_tag", "isrc", "mapper", "manual"] }).notNull(),
+    // Artists: `shared_recording` (a provider credit and a MusicBrainz credit of one merge group)
+    // and `url_rel` (a MusicBrainz URL relation)
+    method: text("method", {
+      enum: ["mbid_tag", "isrc", "mapper", "manual", "shared_recording", "url_rel"],
+    }).notNull(),
     confidence: real("confidence").notNull(),
     // Lookup response fields or tag names that support the decision
     evidence: text("evidence", { mode: "json" }),

@@ -28,6 +28,7 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
+import { artistPageRef } from "./artists.ts";
 import { albumTypeOf, editionBase, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
 import { normV1, normalizeArtist } from "./normalize.ts";
@@ -549,8 +550,13 @@ export const providerPageStream = <A, E, Page, R>(
     }).pipe(orDieOnDatabaseError(`${kind}Page`)),
   );
 
-/** A library ref gives one emission */
+/** A library ref gives one emission. A catalog ref shows the page of one provider artist. */
 export const artistPage = (ref: ArtistRef) =>
+  Stream.unwrap(
+    artistPageRef(ref).pipe(Effect.map(refArtistPage), orDieOnDatabaseError("artistPage")),
+  );
+
+const refArtistPage = (ref: ArtistRef) =>
   Option.match(providerRefParts(ref), {
     onNone: () => Stream.fromEffect(localArtistPage(ref).pipe(orDieOnDatabaseError("artistPage"))),
     onSome: (parts) =>

@@ -24,6 +24,13 @@ export const libraryAlbumRef = (albumArtistKey: string, albumKey: string) =>
     `${libraryRefPrefix}${encodeURIComponent(albumArtistKey)}/${encodeURIComponent(albumKey)}`,
   );
 
+/** The namespace of refs to canonical catalog entities. Provider IDs cannot be `catalog`. */
+export const catalogRefPrefix = "catalog:";
+
+/** `catalog:<artist ID>` of the root of the artist's merge group */
+export const catalogArtistRef = (artistId: string) =>
+  ArtistRef.make(`${catalogRefPrefix}${artistId}`);
+
 const accountPrefix = "account:";
 
 /** The origin of library items and playlists from the user's linked account */
