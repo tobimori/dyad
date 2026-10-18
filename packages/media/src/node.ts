@@ -54,7 +54,10 @@ const bitDepthOf = (parameters: CodecParameters) => {
   return null;
 };
 
-/** A byte stream for FFmpeg. The caller owns `bytes` and closes it after the media stream ends. */
+/**
+ * A byte stream for FFmpeg. The caller owns `bytes` and closes it after the media stream ends. A
+ * media stream that stops early destroys `bytes`.
+ */
 export class MediaStream extends Data.Class<{
   /** Names the input in errors. A provider stream can come from a signed URL, so use an ID. */
   readonly name: string;
@@ -137,8 +140,14 @@ export const readAudioFile = (path: string) =>
     }),
   );
 
-// Writes the packets of one output stream and closes the muxer at the end of the input
-const writePackets = (output: Muxer, index: number, packets: AsyncIterable<Packet | null>) => {
+// Writes the packets of one output stream and closes the muxer at the end of the input.
+// `drained` waits until the reader of the output takes more bytes.
+const writePackets = (
+  output: Muxer,
+  index: number,
+  packets: AsyncIterable<Packet | null>,
+  drained: () => Promise<void>,
+) => {
   const stopped = new AbortController();
   // @effect-diagnostics-next-line asyncFunction:off -- `muxStream` closes the muxer only after the last native write returns, and an interrupted fiber does not wait for its promise
   const write = async () => {
@@ -148,6 +157,7 @@ const writePackets = (output: Muxer, index: number, packets: AsyncIterable<Packe
         break;
       }
       try {
+        await drained();
         await output.writePacket(packet, index);
       } finally {
         packet?.free();
@@ -161,20 +171,28 @@ const writePackets = (output: Muxer, index: number, packets: AsyncIterable<Packe
 // Finalizers run in reverse order: the producer stops, then the muxer closes, then the caller's
 // decoder and input close. `writePackets` does not close the muxer when a write fails.
 const muxStream = (
-  name: string,
+  media: string | MediaStream,
   muxer: { readonly format: string; readonly options?: Record<string, string> },
-  run: (output: Muxer) => Pick<PipelineControl, "stop" | "completion">,
+  run: (
+    output: Muxer,
+    drained: () => Promise<void>,
+  ) => Pick<PipelineControl, "stop" | "completion">,
 ) =>
   Effect.gen(function* () {
+    const name = media instanceof MediaStream ? media.name : media;
     const body = new PassThrough();
+    // A native write holds a libuv worker until this callback returns, so it never waits for
+    // `drain`. `writePackets` waits before each packet instead.
     const write = (buffer: Buffer) => {
-      // `node-av` 6.1.1 waits for `drain` forever on a destroyed `Writable`, so the trailer that
-      // `Muxer.close` writes after a failure or disconnect would block the close
+      // `Muxer.close` writes the trailer after a failure or disconnect too
       if (body.destroyed) return AVERROR_EPIPE;
       // FFmpeg reuses the buffer after the callback returns
-      if (body.write(Buffer.from(buffer))) return buffer.length;
-      return once(body, "drain").then(() => buffer.length);
+      body.write(Buffer.from(buffer));
+      return buffer.length;
     };
+    // Only an `error` event releases a wait for `drain`, see the finalizer below
+    const drained = () =>
+      body.writableNeedDrain ? once(body, "drain").then(() => {}) : Promise.resolve();
     const output = yield* Effect.acquireRelease(
       Effect.tryPromise({
         // One stream needs no interleaving. The sync queue that `node-av` 6.1.1 uses for stream
@@ -184,7 +202,7 @@ const muxStream = (
       }),
       (output) => Effect.promise(() => output.close()),
     );
-    const control = run(output);
+    const control = run(output, drained);
     control.completion.then(
       () => body.end(),
       (cause: unknown) => body.destroy(cause instanceof Error ? cause : new Error(String(cause))),
@@ -192,8 +210,10 @@ const muxStream = (
     yield* Effect.addFinalizer(() =>
       Effect.promise(() => {
         control.stop();
-        // Only an `error` event releases a write that waits for `drain`
         if (!body.destroyed) body.destroy(new Error("Playback closed"));
+        // A native read that waits for bytes holds a libuv worker, and the pipeline completes only
+        // after it returns. The end of the bytes returns it.
+        if (media instanceof MediaStream) media.bytes.destroy();
         return control.completion.catch(() => undefined);
       }),
     );
@@ -296,13 +316,18 @@ export const remuxAudio = (media: string | MediaStream, container: string, start
           }),
           (filter) => Effect.sync(() => filter.close()),
         );
-        return yield* muxStream(name, muxer, (output) =>
-          writePackets(output, output.addStream(stream, { bsf: filter }), filter.packets(packets)),
+        return yield* muxStream(media, muxer, (output, drained) =>
+          writePackets(
+            output,
+            output.addStream(stream, { bsf: filter }),
+            filter.packets(packets),
+            drained,
+          ),
         );
       }
 
-      return yield* muxStream(name, muxer, (output) =>
-        writePackets(output, output.addStream(stream), packets),
+      return yield* muxStream(media, muxer, (output, drained) =>
+        writePackets(output, output.addStream(stream), packets, drained),
       );
     }),
   );
@@ -349,8 +374,8 @@ export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
           decoder.frames(Stream.toAsyncIterable(packetsFrom(name, input, stream, start))),
         ),
       );
-      return yield* muxStream(name, { format: "flac" }, (output) =>
-        writePackets(output, output.addStream(stream, { encoder }), packets),
+      return yield* muxStream(media, { format: "flac" }, (output, drained) =>
+        writePackets(output, output.addStream(stream, { encoder }), packets, drained),
       );
     }),
   );

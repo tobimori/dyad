@@ -70,6 +70,99 @@ index 2f4fbe0fbc8ddca9141af91db5247a9c5815d418..9c460a21304d13f0e38936749813e6e1
          // Clone frame for user (like Decoder does)
          const cloned = this.frame.clone();
          if (!cloned) {
+diff --git a/dist/api/demuxer.js b/dist/api/demuxer.js
+index 8acd8d054d6882777c537343008f0d90a749c7f5..7ae56bb07decb0ac577fe2b6dced886c37e06117 100644
+--- a/dist/api/demuxer.js
++++ b/dist/api/demuxer.js
+@@ -123,6 +123,7 @@ export class Demuxer {
+     packetQueues = new Map(); // streamIndex or 'all' -> queue
+     packetQueueConsumers = new Map(); // active consumer count per queue key
+     queueResolvers = new Map(); // Promise resolvers for waiting consumers
++    queueSpaceResolver = null; // Wakes the demux thread when a full queue has space
+     demuxThreadActive = false;
+     demuxEof = false;
+     signal;
+@@ -1265,6 +1266,7 @@ export class Demuxer {
+                 }
+                 // Try to get packet from queue
+                 let packet = queue.shift();
++                this.wakeDemuxThread();
+                 // If queue is empty, wait for next packet
+                 if (!packet) {
+                     // Check for EOF first
+@@ -1286,6 +1288,7 @@ export class Demuxer {
+                         break;
+                     }
+                     packet = queue.shift();
++                    this.wakeDemuxThread();
+                     if (!packet) {
+                         continue;
+                     }
+@@ -1318,6 +1321,7 @@ export class Demuxer {
+                 this.packetQueueConsumers.delete(queueKey);
+                 const abandoned = this.packetQueues.get(queueKey);
+                 this.packetQueues.delete(queueKey);
++                this.wakeDemuxThread();
+                 if (abandoned) {
+                     for (const p of abandoned) {
+                         p.free();
+@@ -1565,6 +1569,7 @@ export class Demuxer {
+             resolve();
+         }
+         this.queueResolvers.clear();
++        this.wakeDemuxThread();
+     }
+     /**
+      * Start the internal demux thread for handling multiple parallel packet generators.
+@@ -1678,7 +1683,11 @@ export class Demuxer {
+                         if (!queueFull) {
+                             break;
+                         }
+-                        await new Promise(setImmediate);
++                        // Wait for a consumer instead of polling with `setImmediate`, which keeps a
++                        // core busy for as long as a slow consumer leaves its queue full
++                        await new Promise((resolve) => {
++                            this.queueSpaceResolver = resolve;
++                        });
+                     }
+                     if (abandoned || !this.demuxThreadActive || this.isClosed) {
+                         packet.unref();
+@@ -1719,6 +1728,11 @@ export class Demuxer {
+             }
+         })();
+     }
++    wakeDemuxThread() {
++        const resolve = this.queueSpaceResolver;
++        this.queueSpaceResolver = null;
++        resolve?.();
++    }
+     /**
+      * Stop the internal demux thread.
+      *
+@@ -1732,6 +1746,7 @@ export class Demuxer {
+             resolve();
+         }
+         this.queueResolvers.clear();
++        this.wakeDemuxThread();
+         // Wait for demux thread with timeout to avoid hanging on blocked reads
+         if (this.demuxThread) {
+             const threadPromise = this.demuxThread;
+@@ -2028,6 +2043,7 @@ export class Demuxer {
+             resolve();
+         }
+         this.queueResolvers.clear();
++        this.wakeDemuxThread();
+         // Clear pb reference to prevent use-after-free
+         if (this.ioContext) {
+             this.formatContext.pb = null;
+@@ -2106,6 +2122,7 @@ export class Demuxer {
+         }
+         this.packetQueues.clear();
+         this.queueResolvers.clear();
++        this.wakeDemuxThread();
+         this.demuxEof = false;
+         // NOW we can safely free the IOContext
+         if (this.ioContext) {
 diff --git a/dist/api/encoder.js b/dist/api/encoder.js
 index f3694e22bb5a7d9f8cc3bc61f7f84f130778abd4..a47da042970dfeb3160094ef95a56f0180636643 100644
 --- a/dist/api/encoder.js

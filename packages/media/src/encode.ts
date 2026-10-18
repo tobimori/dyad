@@ -92,11 +92,12 @@ export const encodeAudio = (
       );
       const options = muxerOptions(output.container);
       return yield* muxStream(
-        name,
+        media,
         options === undefined
           ? { format: output.container }
           : { format: output.container, options },
-        (muxer) => writePackets(muxer, muxer.addStream(stream, { encoder }), packets),
+        (muxer, drained) =>
+          writePackets(muxer, muxer.addStream(stream, { encoder }), packets, drained),
       );
     }),
   );
