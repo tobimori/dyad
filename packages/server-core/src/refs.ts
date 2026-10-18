@@ -1,23 +1,12 @@
-import { AlbumRef, ArtistRef } from "@dyad/domain";
+import { AlbumRef, ArtistRef, libraryRefPrefix as libraryPrefix } from "@dyad/domain";
 import { Option } from "effect";
 
-// Everything after the namespace comes from the client and is untrusted. `encodeURIComponent`
-// keeps a `/` in a key, for example in `ac/dc`, from splitting an album ref.
-const libraryPrefix = "library:";
+export { libraryAlbumRef, libraryArtistRef } from "@dyad/domain";
 
+// Everything after the namespace comes from the client and is untrusted
 const decodeKey = Option.liftThrowable(decodeURIComponent);
 
-/** `library:<artist key>`, where the key is the `norm_v1` of the name */
-export const libraryArtistRef = (artistKey: string) =>
-  ArtistRef.make(`${libraryPrefix}${encodeURIComponent(artistKey)}`);
-
-/** `library:<album artist key>/<album key>` */
-export const libraryAlbumRef = (albumArtistKey: string, albumKey: string) =>
-  AlbumRef.make(
-    `${libraryPrefix}${encodeURIComponent(albumArtistKey)}/${encodeURIComponent(albumKey)}`,
-  );
-
-/** `<provider>:<external ID>`. Provider IDs cannot be `library`, so the namespaces do not overlap. */
+/** `<provider>:<external ID>` */
 export const providerArtistRef = (provider: string, externalId: string) =>
   ArtistRef.make(`${provider}:${externalId}`);
 

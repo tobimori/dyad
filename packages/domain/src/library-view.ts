@@ -1,5 +1,44 @@
-import { LibraryEntry, PlaylistEntry, RecordingId } from "./index.ts";
+import {
+  AlbumRef,
+  ArtistRef,
+  LibraryEntry,
+  PlaylistEntry,
+  PlaylistSummary,
+  RecordingId,
+} from "./index.ts";
 import type { SourceSummary } from "./index.ts";
+
+/** The namespace of refs to the server's library folder. Provider IDs cannot be `library`. */
+export const libraryRefPrefix = "library:";
+
+// `encodeURIComponent` keeps a `/` in a key, for example in `ac/dc`, from splitting an album ref
+/** `library:<artist key>`, where the key is the `norm_v1` of the name */
+export const libraryArtistRef = (artistKey: string) =>
+  ArtistRef.make(`${libraryRefPrefix}${encodeURIComponent(artistKey)}`);
+
+/** `library:<album artist key>/<album key>` */
+export const libraryAlbumRef = (albumArtistKey: string, albumKey: string) =>
+  AlbumRef.make(
+    `${libraryRefPrefix}${encodeURIComponent(albumArtistKey)}/${encodeURIComponent(albumKey)}`,
+  );
+
+const accountPrefix = "account:";
+
+/** The origin of library items and playlists from the user's linked account */
+export const accountOrigin = (provider: string) => `${accountPrefix}${provider}`;
+
+/** An imported playlist has the origin `account:<provider>` and changes only in the provider's app */
+export const playlistSummary = (
+  row: { readonly id: string; readonly name: string; readonly origin: string | null },
+  entryCount: number,
+) =>
+  new PlaylistSummary({
+    id: row.id,
+    name: row.name,
+    provider: row.origin?.startsWith(accountPrefix) ? row.origin.slice(accountPrefix.length) : null,
+    entryCount,
+    readOnly: row.origin !== null,
+  });
 
 /**
  * Builds library and playlist entries from catalog rows, so that the server and client replicas

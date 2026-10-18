@@ -33,7 +33,13 @@ import {
 import { Reactivity } from "effect/reactivity";
 
 import { ServerConnection } from "../connection.ts";
-import { ClientDatabase, stateKey } from "./database.ts";
+import {
+  AccountProviders,
+  ClientDatabase,
+  accountProvidersState,
+  missingRecordingsState,
+  stateKey,
+} from "./database.ts";
 import { catalogTables, deleteScope, mergeRows, replaceGroup, replaceRow } from "./rows.ts";
 
 const replicaIdState = stateKey("replicaId", ReplicaId);
@@ -42,8 +48,6 @@ const principalState = stateKey("principal", Principal);
 const epochState = stateKey("epoch", Schema.String);
 const catalogCursorState = stateKey("catalogCursor", Schema.NullOr(CatalogCursor));
 const nextMutationIdState = stateKey("nextMutationId", Schema.Int);
-// Recordings that the server does not have. Each stays its own root without sources.
-const missingState = stateKey("missingRecordings", Schema.Array(RecordingId));
 
 const pushLimit = 500;
 const wantLimit = 1000;
@@ -158,7 +162,7 @@ const makeReplica = Effect.gen(function* () {
 
   // Bound recordings that the replica refers to and does not have, and that the server has
   const wantedRecordings = Effect.gen(function* () {
-    const missing = Option.getOrElse(yield* missingState.get, () => []);
+    const missing = Option.getOrElse(yield* missingRecordingsState.get, () => []);
     const referenced = db
       .select({ id: libraryItem.entityId })
       .from(libraryItem)
@@ -240,8 +244,8 @@ const makeReplica = Effect.gen(function* () {
       const arrived = new Set<string>(
         catalog.groups.flatMap((group) => group.recordings.map((row) => row.id)),
       );
-      const missing = Option.getOrElse(yield* missingState.get, () => []);
-      yield* missingState.set(
+      const missing = Option.getOrElse(yield* missingRecordingsState.get, () => []);
+      yield* missingRecordingsState.set(
         [...new Set([...missing, ...catalog.missing])].filter((id) => !arrived.has(id)),
       );
       yield* catalogCursorState.set(catalog.cursor);
@@ -284,9 +288,23 @@ const makeReplica = Effect.gen(function* () {
     }
   });
 
+  // Views decide without the server which sources the user can play
+  const refreshProviders = Effect.gen(function* () {
+    const [providers, accounts] = yield* Effect.all([
+      connection.listAccountProviders(),
+      connection.listAccounts(),
+    ]);
+    const value = new AccountProviders({
+      names: Object.fromEntries(providers.map((provider) => [provider.provider, provider.name])),
+      linked: accounts.map((account) => account.provider),
+    });
+    yield* commit(accountProvidersState.set(value).pipe(Effect.as(["client_state"])));
+  });
+
   const sync = Effect.gen(function* () {
     yield* push;
     yield* pull;
+    yield* refreshProviders;
     yield* SubscriptionRef.set(status, "live");
   }).pipe(
     // Another device uses this replica ID, for example after a new sign-in

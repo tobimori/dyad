@@ -1,9 +1,17 @@
-import type { AlbumRef, ArtistRef, LibrarySyncStatus } from "@dyad/domain";
-import { Effect, Layer, Option, Stream } from "effect";
-import type { Context } from "effect";
-import { AsyncResult, Atom } from "effect/reactivity";
+import type { AlbumRef, ArtistRef } from "@dyad/domain";
+import { Context, Effect, Layer, Option, Stream } from "effect";
+import { Atom, Reactivity } from "effect/reactivity";
 
 import { ConnectionStatus, ServerConnection } from "./connection.ts";
+import { ClientDatabase, accountProvidersState } from "./replica/database.ts";
+import { catalogTables } from "./replica/rows.ts";
+import {
+  localLibrary,
+  localPlaylistEntries,
+  localPlaylists,
+  localRecentPlays,
+  localSyncProgress,
+} from "./replica/views.ts";
 
 // Idle pages keep their last emission this long, so back navigation is instant
 const pageIdleTime = "5 minutes";
@@ -22,37 +30,23 @@ const pollSyncStatus = (client: typeof ServerConnection.Service) =>
     ),
   );
 
-// Changes when a run applies songs or ends, but not at each poll
-const syncVersion = (statuses: ReadonlyArray<LibrarySyncStatus>) =>
-  statuses
-    .map((status) =>
-      [
-        status.provider,
-        status.status,
-        status.itemCount,
-        status.notPlayableCount,
-        status.lastCompleteAt,
-        status.nextRunAt,
-      ].join(":"),
-    )
-    .join(" ");
-
 /**
- * The atoms use the connection of `services`, which the session client shares. `logging` sends
- * their logs to the client's logger.
+ * The atoms use the connection of `services`, which the session client shares. Library, playlist
+ * and play views read the client replica and run again after it commits to their tables. `logging`
+ * sends their logs to the client's logger.
  */
 export const serverAtoms = (
-  services: Context.Context<ServerConnection | ConnectionStatus>,
+  services: Context.Context<
+    ServerConnection | ConnectionStatus | ClientDatabase | Reactivity.Reactivity
+  >,
   logging: Layer.Layer<never>,
 ) => {
   const runtime = Atom.runtime(Layer.succeedContext(services).pipe(Layer.provideMerge(logging)));
+  const reactivity = Context.get(services, Reactivity.Reactivity);
+  const local = <A, E>(tables: ReadonlyArray<string>, query: Effect.Effect<A, E, ClientDatabase>) =>
+    runtime.atom(reactivity.stream(tables, query));
 
   const librarySyncStatus = runtime.atom(Stream.unwrap(ServerConnection.useSync(pollSyncStatus)));
-  const refreshOnSync = Atom.makeRefreshOnSignal(
-    Atom.map(librarySyncStatus, (result) =>
-      AsyncResult.isSuccess(result) ? syncVersion(result.value) : "",
-    ),
-  );
 
   return {
     connection: runtime.atom(ServerConnection),
@@ -61,38 +55,31 @@ export const serverAtoms = (
     sources: runtime.atom(
       ServerConnection.use((client) => client.listSources()).pipe(Effect.timeout("5 seconds")),
     ),
-    library: runtime
-      .atom(
-        ServerConnection.use((client) => client.listLibrary()).pipe(Effect.timeout("5 seconds")),
-      )
-      .pipe(refreshOnSync),
-    playlists: runtime
-      .atom(
-        ServerConnection.use((client) => client.listPlaylists()).pipe(Effect.timeout("5 seconds")),
-      )
-      .pipe(refreshOnSync),
+    library: local(["library_item", ...catalogTables, "client_state"], localLibrary),
+    playlists: local(["playlist", "playlist_entry"], localPlaylists),
     playlistEntries: Atom.family((playlistId: string) =>
-      runtime
-        .atom(
-          ServerConnection.use((client) => client.listPlaylistEntries({ playlistId })).pipe(
-            Effect.timeout("5 seconds"),
-          ),
-        )
-        .pipe(refreshOnSync, Atom.setIdleTTL(pageIdleTime)),
+      local(
+        ["playlist", "playlist_entry", ...catalogTables, "client_state"],
+        localPlaylistEntries(playlistId),
+      ).pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
+    /** Which scopes are still "Syncing" */
+    syncProgress: local(["sync_scope"], localSyncProgress),
     librarySyncStatus,
-    providerNames: runtime.atom(
-      ServerConnection.use((client) => client.listAccountProviders()).pipe(
-        Effect.map(
-          (providers) =>
-            new Map(providers.map((provider) => [provider.provider, provider.name] as const)),
-        ),
-        Effect.timeout("5 seconds"),
+    providerNames: local(
+      ["client_state"],
+      Effect.map(
+        accountProvidersState.get,
+        (providers) =>
+          new Map(
+            Option.match(providers, {
+              onNone: () => [],
+              onSome: (value) => Object.entries(value.names),
+            }),
+          ),
       ),
     ),
-    recentPlays: runtime.atom(
-      ServerConnection.use((client) => client.listRecentPlays()).pipe(Effect.timeout("5 seconds")),
-    ),
+    recentPlays: local(["play_event", ...catalogTables, "client_state"], localRecentPlays),
     libraryArtists: runtime.atom(
       ServerConnection.use((client) => client.listLibraryArtists()).pipe(
         Effect.timeout("5 seconds"),

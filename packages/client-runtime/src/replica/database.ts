@@ -1,4 +1,5 @@
 import { clientState, migrateClientDatabase } from "@dyad/db/client";
+import { RecordingId } from "@dyad/domain";
 import { eq } from "drizzle-orm";
 import { EffectCache } from "drizzle-orm/cache/core/cache-effect";
 import { EffectLogger } from "drizzle-orm/effect-core";
@@ -54,3 +55,16 @@ export const stateKey = <T, E>(key: string, schema: Schema.Codec<T, E>) => ({
         .onConflictDoUpdate({ target: clientState.key, set: { value: encoded } });
     }).pipe(Effect.orDie),
 });
+
+// Recordings that the server does not have. Each stays its own root without sources.
+export const missingRecordingsState = stateKey("missingRecordings", Schema.Array(RecordingId));
+
+/** The last answers of `listAccountProviders` and `listAccounts` */
+export class AccountProviders extends Schema.Class<AccountProviders>("AccountProviders")({
+  /** Display names of the providers that need an account */
+  names: Schema.Record(Schema.String, Schema.String),
+  /** The providers of the user's linked accounts */
+  linked: Schema.Array(Schema.String),
+}) {}
+
+export const accountProvidersState = stateKey("accountProviders", AccountProviders);

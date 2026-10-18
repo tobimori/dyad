@@ -35,10 +35,14 @@ export const playlists = new Section({
       [result, names],
     );
 
+    const syncing = status.progress?.playlists ?? false;
     const empty = AsyncResult.match(result, {
       onInitial: () => "Loading the playlists",
       onFailure: () => "Cannot load the playlists. Press r to try again.",
-      onSuccess: () => status.importing ?? "No playlists. Link an account with dyad link.",
+      onSuccess: () =>
+        syncing
+          ? "Syncing the playlists…"
+          : (status.importing ?? "No playlists. Link an account with dyad link."),
     });
 
     return new SectionView({
@@ -50,7 +54,7 @@ export const playlists = new Section({
             title={title}
             detail={items.length === 0 ? "" : counted(items.length, "playlist")}
           />
-          <LibraryNotices notices={status.notices} />
+          <LibraryNotices notices={status.notices} syncing={syncing} />
           <RowList
             rows={items}
             selected={items[list.selected]?.key ?? null}

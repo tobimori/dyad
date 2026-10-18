@@ -7,7 +7,7 @@ import {
   source,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, PlaylistNotFound, PlaylistSummary, libraryView } from "@dyad/domain";
+import { CurrentPrincipal, PlaylistNotFound, libraryView, playlistSummary } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import { HlcClock } from "@dyad/sync";
 import { and, asc, count, eq, inArray, or } from "drizzle-orm";
@@ -17,10 +17,6 @@ import { generateNKeysBetween } from "fractional-indexing";
 import { uuidV5 } from "./ids.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
-
-const accountPrefix = "account:";
-
-export const accountOrigin = (provider: string) => `${accountPrefix}${provider}`;
 
 /**
  * All writes of library items and playlists go through this module, so that each changed row gets
@@ -279,18 +275,7 @@ export const listPlaylists = Effect.gen(function* () {
     .groupBy(playlist.id);
 
   return rows
-    .map(
-      (row) =>
-        new PlaylistSummary({
-          id: row.playlist.id,
-          name: row.playlist.name,
-          provider: row.playlist.origin?.startsWith(accountPrefix)
-            ? row.playlist.origin.slice(accountPrefix.length)
-            : null,
-          entryCount: row.entryCount,
-          readOnly: row.playlist.origin !== null,
-        }),
-    )
+    .map((row) => playlistSummary(row.playlist, row.entryCount))
     .toSorted((a, b) => a.name.localeCompare(b.name));
 });
 

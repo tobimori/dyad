@@ -44,8 +44,8 @@ export class ServerDescriptor extends Schema.Class<ServerDescriptor>("ServerDesc
 }) {}
 
 /**
- * An opaque page ref that the server makes, for example `apple_music:657515`. Clients never build
- * or parse refs; they get them in `SourceSummary` and in cards.
+ * An opaque page ref, for example `apple_music:657515`. Clients never parse refs. They get them in
+ * `SourceSummary` and in cards, and a client replica builds library refs with `libraryArtistRef`.
  */
 export const ArtistRef = Schema.String.pipe(Schema.brand("ArtistRef"));
 export type ArtistRef = typeof ArtistRef.Type;
@@ -196,12 +196,13 @@ export class HomePage extends Schema.Class<HomePage>("HomePage")({
  * Why the user cannot play a library entry. `library_only`: the song is only in the user's
  * provider library, for example an upload. `not_in_catalog`: the provider's catalog for the
  * user's country does not have the song. `account_required`: the user has no linked account for
- * its sources.
+ * its sources. `not_synced`: a client replica does not have the song's catalog rows yet.
  */
 export const LibraryEntryUnavailable = Schema.Literals([
   "library_only",
   "not_in_catalog",
   "account_required",
+  "not_synced",
 ]);
 
 export class LibraryEntry extends Schema.Class<LibraryEntry>("LibraryEntry")({

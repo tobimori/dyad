@@ -9,7 +9,7 @@ import {
   recording,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, LibrarySyncStatus, UserId } from "@dyad/domain";
+import { CurrentPrincipal, LibrarySyncStatus, UserId, accountOrigin } from "@dyad/domain";
 import type {
   Credentials,
   LibraryError,
@@ -28,7 +28,6 @@ import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
 import { touchGroups } from "./sync-counter.ts";
 import {
-  accountOrigin,
   mirrorPlaylist,
   removeOrigin,
   removePlaylists,

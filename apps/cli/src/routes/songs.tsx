@@ -54,7 +54,9 @@ export const songs = new Section({
       ].toSorted(byArtistAlbumTitle);
     }, [library, files]);
 
+    const syncing = status.progress?.library ?? false;
     const empty = () => {
+      if (syncing) return "Syncing the library…";
       if (AsyncResult.isInitial(library) || AsyncResult.isInitial(files)) {
         return "Loading the library";
       }
@@ -75,7 +77,7 @@ export const songs = new Section({
       render: (list) => (
         <TrackList
           title={title}
-          header={<LibraryNotices notices={status.notices} />}
+          header={<LibraryNotices notices={status.notices} syncing={syncing} />}
           items={items}
           selected={list.selected}
           playing={playsSource(app.player.current?.source.id)}

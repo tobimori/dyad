@@ -47,7 +47,7 @@ function PlaylistHeader(props: {
 }) {
   const theme = useTheme();
   const result = useAtomValue(props.atoms.playlists);
-  const names = useLibraryStatus(props.atoms).names;
+  const { names, progress } = useLibraryStatus(props.atoms);
   const playlist = AsyncResult.isSuccess(result)
     ? result.value.find((candidate) => candidate.id === props.route.id)
     : undefined;
@@ -60,6 +60,7 @@ function PlaylistHeader(props: {
   const details = [
     provider === null ? "Playlist" : `${provider} playlist`,
     totalMs === 0 ? "" : formatTotalDuration(totalMs),
+    progress?.playlist(props.route.id) === true ? "Syncing…" : "",
   ];
 
   return (
@@ -92,7 +93,10 @@ export function PlaylistView(props: {
   readonly onSelect: (index: number) => void;
   readonly onActivate: (index: number) => void;
 }) {
+  const progress = useAtomValue(props.atoms.syncProgress);
+  const syncing = AsyncResult.isSuccess(progress) && progress.value.playlist(props.route.id);
   const empty = () => {
+    if (syncing) return "Syncing the playlist…";
     if (isNotFound(props.result)) {
       return "This playlist does not exist anymore. Press esc to go back.";
     }

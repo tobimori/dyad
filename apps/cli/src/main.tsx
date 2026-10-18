@@ -33,6 +33,7 @@ import { pluginCommands } from "./commands/plugins.ts";
 import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
 import { openPlayLog } from "./context/play-log.ts";
+import { cliReplicaLayer } from "./context/replica.ts";
 import { importSavedSession, savedVolume } from "./context/session.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
 import { ThemeProvider } from "./context/theme-provider.tsx";
@@ -55,10 +56,15 @@ const player = (controller: boolean) =>
     yield* processErrorLogging(logServices);
     const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
-    // One connection for the session and the atoms
+    // One connection for the session, the replica and the atoms
     const serverUrl = yield* serverUrlConfig;
+    const token = yield* deviceToken;
     const connection = yield* Layer.build(
-      serverConnectionLayer(serverUrl, Option.some(yield* deviceToken)).pipe(
+      serverConnectionLayer(serverUrl, Option.some(token)).pipe(Layer.provide(logging)),
+    );
+    const replica = yield* Layer.build(
+      cliReplicaLayer(serverUrl, token).pipe(
+        Layer.provide(Layer.succeedContext(connection)),
         Layer.provide(logging),
       ),
     );
@@ -148,7 +154,7 @@ const player = (controller: boolean) =>
       Effect.forkScoped,
     );
 
-    const atoms = serverAtoms(connection, logging);
+    const atoms = serverAtoms(Context.merge(connection, replica), logging);
     const plugins = yield* startPluginHost(
       new ClientPluginContext({
         serverOrigin: serverUrl,
