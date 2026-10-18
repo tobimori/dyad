@@ -17,6 +17,7 @@ export function Footer(props: {
   readonly durationMs: number | null;
   /** `null` when no output plays the session */
   readonly volume: number | null;
+  readonly muted: boolean;
   readonly shuffle: boolean;
   readonly repeat: typeof RepeatMode.Type;
   readonly message: string | null;
@@ -58,7 +59,9 @@ export function Footer(props: {
             <span fg={modeColor(props.shuffle)}>⤨ shuffle </span>
             <span fg={modeColor(props.repeat !== "off")}>{`↻ ${props.repeat}`}</span>
           </text>
-          {props.volume !== null && <VolumeBar volume={props.volume} onChange={props.onVolume} />}
+          {props.volume !== null && (
+            <VolumeBar volume={props.volume} muted={props.muted} onChange={props.onVolume} />
+          )}
         </box>
         <ProgressBar
           positionMs={props.positionMs}

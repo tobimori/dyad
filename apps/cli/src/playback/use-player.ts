@@ -97,7 +97,8 @@ export function usePlayer(props: {
   const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
   const volumeTarget =
     playback.outputId ?? (view.outputs.some((output) => output.id === own) ? own : null);
-  const volume = view.outputs.find((output) => output.id === volumeTarget)?.volume ?? null;
+  const volumeOutput = view.outputs.find((output) => output.id === volumeTarget);
+  const volume = volumeOutput?.volume ?? null;
 
   // The position moves without events, so the display polls it
   useEffect(() => {
@@ -212,6 +213,7 @@ export function usePlayer(props: {
     shuffle: playback.shuffle,
     repeat: playback.repeat,
     volume,
+    muted: volumeOutput?.muted ?? false,
     error,
     /** The output stopped answering, or a URL output did not start the stream */
     lost: playback.lost && playback.state !== "stopped",

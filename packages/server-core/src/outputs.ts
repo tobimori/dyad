@@ -21,8 +21,9 @@ const makeOutputs = Effect.gen(function* () {
   const discovered = new Map<string, ReadonlyArray<OutputInfo>>();
   const holders = new Map<OutputId, Holder>();
   const opened = new Map<OutputId, UrlOutput>();
-  // The last volume that an open output reported
+  // The last volume and mute state that an open output reported
   const volumes = new Map<OutputId, number>();
+  const mutes = new Map<OutputId, boolean>();
   const changed = yield* PubSub.unbounded<void>();
 
   const notify = PubSub.publish(changed, undefined);
@@ -42,7 +43,13 @@ const makeOutputs = Effect.gen(function* () {
     [...discovered].flatMap(([registration, infos]) =>
       infos.map((info) => {
         const id = OutputId.make(`${registration}:${info.id}`);
-        return new Output({ id, kind: "url", name: info.name, volume: volumes.get(id) ?? null });
+        return new Output({
+          id,
+          kind: "url",
+          name: info.name,
+          volume: volumes.get(id) ?? null,
+          muted: mutes.get(id) ?? false,
+        });
       }),
     );
 
@@ -95,10 +102,13 @@ const makeOutputs = Effect.gen(function* () {
       return new UrlOutput({
         ...output,
         status: output.status.pipe(
-          Stream.tap(({ volume }) =>
-            volume === null || volumes.get(id) === volume
+          Stream.tap(({ volume, muted }) =>
+            (volume === null || volumes.get(id) === volume) && (mutes.get(id) ?? false) === muted
               ? Effect.void
-              : Effect.sync(() => volumes.set(id, volume)).pipe(Effect.andThen(notify)),
+              : Effect.sync(() => {
+                  if (volume !== null) volumes.set(id, volume);
+                  mutes.set(id, muted);
+                }).pipe(Effect.andThen(notify)),
           ),
         ),
       });

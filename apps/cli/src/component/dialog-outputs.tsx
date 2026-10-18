@@ -33,7 +33,12 @@ export function OutputsDialog(props: {
       new SelectOption({
         value: output.id,
         title: `${output.id === active ? "▶ " : ""}${output.name}${output.id === own ? " (this device)" : ""}`,
-        detail: output.volume === null ? "" : `${Math.round(output.volume * 100)}%`,
+        detail: [
+          output.muted ? "Muted" : "",
+          output.volume === null ? "" : `${Math.round(output.volume * 100)}%`,
+        ]
+          .join(" ")
+          .trim(),
       }),
   );
 

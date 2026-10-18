@@ -29,6 +29,9 @@ const PositionInfo = Schema.Struct({
 });
 
 const Volume = Schema.Struct({ CurrentVolume: Schema.FiniteFromString });
+const Mute = Schema.Struct({ CurrentMute: Schema.String });
+
+const isTrue = (value: string) => /^(1|true|yes)$/i.test(value);
 
 // A device that does not answer the poll for this long is lost
 const unreachableAfterMs = 15_000;
@@ -113,13 +116,15 @@ export const openUpnp = (device: UpnpDevice) =>
     const renderingControl = findService(device.services, "RenderingControl");
     const volumeControl =
       device.kind === "sonos" && groupVolume !== undefined
-        ? { service: groupVolume, get: "GetGroupVolume", set: "SetGroupVolume", args: [instance] }
+        ? { service: groupVolume, volume: "GroupVolume", mute: "GroupMute", args: [instance] }
         : renderingControl && {
             service: renderingControl,
-            get: "GetVolume",
-            set: "SetVolume",
+            volume: "Volume",
+            mute: "Mute",
             args: [instance, ["Channel", "Master"] as const],
           };
+    // Mute is optional in RenderingControl 1.0
+    const mutes = volumeControl?.service.actions.includes(`Set${volumeControl.mute}`) === true;
 
     const state = yield* SubscriptionRef.make(idleState);
     const update = (change: Partial<ConstructorParameters<typeof TargetState>[0]>) =>
@@ -132,17 +137,33 @@ export const openUpnp = (device: UpnpDevice) =>
 
     const readVolume =
       volumeControl === undefined
-        ? Effect.succeed(null)
-        : soap(name, volumeControl.service, volumeControl.get, volumeControl.args, Volume).pipe(
-            Effect.map((volume) => volume.CurrentVolume / 100),
-          );
+        ? Effect.succeed({ volume: null, muted: false })
+        : Effect.all({
+            volume: soap(
+              name,
+              volumeControl.service,
+              `Get${volumeControl.volume}`,
+              volumeControl.args,
+              Volume,
+            ).pipe(Effect.map((answer) => answer.CurrentVolume / 100)),
+            muted: mutes
+              ? soap(
+                  name,
+                  volumeControl.service,
+                  `Get${volumeControl.mute}`,
+                  volumeControl.args,
+                  Mute,
+                ).pipe(Effect.map((answer) => isTrue(answer.CurrentMute)))
+              : Effect.succeed(false),
+          });
 
     const applyEvent = (variables: ReadonlyMap<string, string>) => {
       const transportState = variables.get("TransportState");
       const transportStatus = variables.get("TransportStatus");
       const trackUri = variables.get("CurrentTrackURI");
       const trackDuration = variables.get("CurrentTrackDuration");
-      const volume = variables.get("GroupVolume") ?? variables.get("Volume");
+      const volume = volumeControl && variables.get(volumeControl.volume);
+      const mute = volumeControl && variables.get(volumeControl.mute);
 
       return SubscriptionRef.update(
         state,
@@ -153,6 +174,7 @@ export const openUpnp = (device: UpnpDevice) =>
             positionMs: current.positionMs,
             durationMs: trackDuration === undefined ? current.durationMs : parseTime(trackDuration),
             volume: volume === undefined || volume === "" ? current.volume : Number(volume) / 100,
+            muted: mute === undefined || mute === "" ? current.muted : isTrue(mute),
             error: transportStatus === undefined ? current.error : errorOf(transportStatus),
           }),
       );
@@ -181,7 +203,7 @@ export const openUpnp = (device: UpnpDevice) =>
         yield* update({
           status: statusOf(info.CurrentTransportState),
           error: errorOf(info.CurrentTransportStatus),
-          volume: yield* readVolume,
+          ...(yield* readVolume),
         });
       }
       if (active && (current.status === "idle" || current.status === "paused")) return;
@@ -290,11 +312,20 @@ export const openUpnp = (device: UpnpDevice) =>
         );
       }
 
+      const { service, args } = volumeControl;
       const level = Math.round(Math.min(Math.max(volume, 0), 1) * 100);
-      return soapCommand(name, volumeControl.service, volumeControl.set, [
-        ...volumeControl.args,
-        ["DesiredVolume", level],
-      ]).pipe(Effect.provideContext(context));
+      return Effect.gen(function* () {
+        if (mutes && (yield* SubscriptionRef.get(state)).muted) {
+          yield* soapCommand(name, service, `Set${volumeControl.mute}`, [
+            ...args,
+            ["DesiredMute", 0],
+          ]);
+        }
+        yield* soapCommand(name, service, `Set${volumeControl.volume}`, [
+          ...args,
+          ["DesiredVolume", level],
+        ]);
+      }).pipe(Effect.provideContext(context));
     };
 
     return new UrlTarget({

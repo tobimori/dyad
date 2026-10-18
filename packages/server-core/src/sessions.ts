@@ -165,7 +165,13 @@ const makeSession = (
     const outputs = () => [
       ...[...state.players].map(
         ([id, player]) =>
-          new Output({ id, kind: "device", name: player.name, volume: player.volume }),
+          new Output({
+            id,
+            kind: "device",
+            name: player.name,
+            volume: player.volume,
+            muted: false,
+          }),
       ),
       ...urlOutputs.list(),
     ];

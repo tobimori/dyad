@@ -469,6 +469,7 @@ export class Output extends Schema.Class<Output>("Output")({
   name: Schema.String,
   /** 0 to 1, `null` when unknown */
   volume: Schema.NullOr(Schema.Number),
+  muted: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 }) {}
 
 /** Removes `remove` entries at `index`, then inserts `insert` there */

@@ -45,6 +45,7 @@ const volumeLevels = "▁▂▃▄▅▆▇█";
 
 export function VolumeBar(props: {
   readonly volume: number;
+  readonly muted: boolean;
   readonly onChange: (volume: number) => void;
 }) {
   const theme = useTheme();
@@ -64,6 +65,7 @@ export function VolumeBar(props: {
         </text>
       </box>
       <text fg={theme.muted}> {String(Math.round(props.volume * 100)).padStart(3)}%</text>
+      {props.muted && <text fg={theme.error}> Muted</text>}
     </box>
   );
 }

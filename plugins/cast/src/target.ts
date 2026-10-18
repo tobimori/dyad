@@ -63,6 +63,7 @@ export class TargetState extends Data.Class<{
   readonly durationMs: number | null;
   /** From 0 to 1 */
   readonly volume: number | null;
+  readonly muted: boolean;
   /** The last playback or connection error, until the next successful status */
   readonly error: string | null;
 }> {}
@@ -118,5 +119,6 @@ export const idleState = new TargetState({
   positionMs: 0,
   durationMs: null,
   volume: null,
+  muted: false,
   error: null,
 });

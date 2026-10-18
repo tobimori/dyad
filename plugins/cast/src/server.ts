@@ -97,6 +97,7 @@ const openOutput = (device: UpnpDevice) =>
               url: state.url,
               positionMs: state.positionMs,
               volume: state.volume,
+              muted: state.muted,
             }),
         ),
         // A failed poll repeats the last state, which would report an old position again

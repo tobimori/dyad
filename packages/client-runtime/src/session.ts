@@ -361,7 +361,7 @@ const makeSessionClient = (options: {
           yield* update((latest) => ({
             outputs: latest.outputs.map((output) =>
               output.id === command.outputId
-                ? new Output({ ...output, volume: command.volume })
+                ? new Output({ ...output, volume: command.volume, muted: false })
                 : output,
             ),
           }));

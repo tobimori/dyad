@@ -231,6 +231,7 @@ export class UrlStatus extends Data.Class<{
   readonly positionMs: number;
   /** From 0 to 1 */
   readonly volume: number | null;
+  readonly muted: boolean;
 }> {}
 
 export class UrlMedia extends Data.Class<{
@@ -255,7 +256,7 @@ export class UrlOutput extends Data.Class<{
   readonly play: Effect.Effect<void, OutputError>;
   readonly pause: Effect.Effect<void, OutputError>;
   readonly stop: Effect.Effect<void, OutputError>;
-  /** `volume` is from 0 to 1 */
+  /** `volume` is from 0 to 1. A muted device unmutes. */
   readonly setVolume: (volume: number) => Effect.Effect<void, OutputError>;
   /**
    * The current status first, then each change, and at least every 5 seconds while it plays. Fails
