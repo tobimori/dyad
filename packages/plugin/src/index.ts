@@ -150,9 +150,8 @@ export class Provider extends Data.Class<{
     credentials: Credentials,
   ) => Effect.Effect<Redacted.Redacted<ReadonlyMap<string, string>>, ProviderError>;
   /**
-   * Searches the provider's catalog. The results are in the provider's order of relevance; the
-   * core uses that order when it has no popularity. The core stops waiting after 8 seconds, token
-   * refreshes and retries included.
+   * Results in the provider's order of relevance, which the core uses when it has no popularity.
+   * The core stops waiting after 8 seconds, token refreshes and retries included.
    */
   readonly search?: (
     query: string,
@@ -276,17 +275,15 @@ export class PluginContext extends Data.Class<{
   };
   readonly provider: {
     /**
-     * Adds the provider `id`, for example `apple_music`. The ID is part of every source ID of the
-     * provider, so it must never change. Setup fails if another plugin added the same ID, or if
-     * the ID is `library`, `catalog` or `local`.
+     * `id` is part of every source ID of the provider, so it must never change. Setup fails if
+     * another plugin added the same ID, or if it is `library`, `catalog` or `local`.
      */
     readonly add: (id: string, provider: Provider) => Effect.Effect<void, never, Scope.Scope>;
   };
   readonly popularity: {
     /**
-     * Adds a popularity source for search ranking. The core matches hits to results by ISRC, or
-     * else by title and artist, and uses the highest value of all sources. Setup fails if another
-     * plugin added the same name.
+     * For search ranking. The core matches hits to results by ISRC, else by title and artist, and
+     * uses the highest value of all sources. Setup fails if another plugin added the same name.
      */
     readonly add: (
       name: string,

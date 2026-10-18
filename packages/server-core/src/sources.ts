@@ -219,6 +219,10 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
     const rows = yield* limit === undefined ? query : query.limit(limit);
     return rows.map((row) => ({
       ...row,
+      tags:
+        row.tags === null
+          ? null
+          : Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({})),
       providerName: providers.get(row.source.provider)?.provider.name ?? null,
     }));
   });
@@ -265,24 +269,5 @@ export const position = (tags: typeof Tags.Type, key: "disc" | "track") =>
 export const listSources = Effect.gen(function* () {
   const principal = yield* CurrentPrincipal;
   const rows = yield* playableSources(principal.userId, isNotNull(localFile.id));
-
-  const entries = rows.map((row) => {
-    const tags = Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({}));
-    return {
-      summary: sourceSummary(row),
-      disc: position(tags, "disc") ?? 1,
-      track: position(tags, "track") ?? 0,
-    };
-  });
-
-  return entries
-    .toSorted(
-      (a, b) =>
-        (a.summary.artist ?? "").localeCompare(b.summary.artist ?? "") ||
-        (a.summary.album ?? "").localeCompare(b.summary.album ?? "") ||
-        a.disc - b.disc ||
-        a.track - b.track ||
-        (a.summary.title ?? "").localeCompare(b.summary.title ?? ""),
-    )
-    .map((entry) => entry.summary);
+  return rows.map(sourceSummary);
 });

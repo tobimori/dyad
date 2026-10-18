@@ -1,6 +1,3 @@
-// Search ranking and grouping use these rules. Recording matching must use the same rules, so that a
-// search group and a stored match agree.
-
 const isrcPattern = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
 
 /**
@@ -30,7 +27,10 @@ export const simplifyText = (text: string) =>
     .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 
-/** `simplifyText` without `feat.` parts */
+/**
+ * `simplifyText` without `feat.` parts. Recording matching must use the same rules as search, so
+ * that a search group and a stored match agree.
+ */
 export const normalizeText = (text: string) => {
   const withoutGuests = text
     .toLowerCase()
@@ -45,14 +45,12 @@ export const normalizeTitle = (title: string) => {
   return normalizeText(withoutVersion);
 };
 
-/** The first credited artist, normalized */
 export const normalizeArtist = (artist: string) =>
   normalizeText(artist.toLowerCase().split(artistSeparator)[0] ?? "");
 
 /**
- * The frozen `norm_v1` of binding: NFKC, case fold, trim and one space between words. A change
- * needs a new name and a migration of the stored keys. `toLowerCase` is the case fold, because
- * JavaScript has no full case folding.
+ * The frozen `norm_v1` of binding: a change needs a new name and a migration of the stored keys.
+ * `toLowerCase` is the case fold, because JavaScript has no full case folding.
  */
 export const normV1 = (text: string) =>
   text.normalize("NFKC").toLowerCase().trim().replaceAll(/\s+/gu, " ");

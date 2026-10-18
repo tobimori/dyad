@@ -45,7 +45,7 @@ const libraryFiles = (match: SQL | undefined) =>
       (row) =>
         new LibraryFile({
           summary: sourceSummary(row),
-          tags: Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({})),
+          tags: row.tags ?? {},
           albumArtistKey: row.albumArtistKey,
           albumKey: row.albumKey,
         }),

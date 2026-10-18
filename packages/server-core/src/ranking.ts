@@ -28,7 +28,7 @@ export class Play extends Data.Class<{
 }> {}
 
 /** The parts of the score of one result, before the weights apply */
-export class Score extends Data.Class<{
+class Score extends Data.Class<{
   /** 1 for an exact title, artist or "artist title" match, less for some matching words */
   readonly match: number;
   /** 1 when the result is a cover, remix or other version that the query does not ask for */
@@ -42,7 +42,7 @@ export class Score extends Data.Class<{
   readonly total: number;
 }> {}
 
-export class RankedResult extends Data.Class<{
+class RankedResult extends Data.Class<{
   readonly summary: SourceSummary;
   readonly score: Score;
 }> {}

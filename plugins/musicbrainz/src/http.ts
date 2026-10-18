@@ -15,9 +15,8 @@ export class LookupError extends Data.TaggedError("LookupError")<{
 }> {}
 
 /**
- * The service answered 429 or 503. The plugin does not retry, so the caller waits at least
- * `retryAfterSeconds` before the next lookup on this service. MusicBrainz sends 0 when the whole
- * server is busy (October 2026), so the caller also needs its own minimum backoff.
+ * 429 or 503. The plugin does not retry. The caller waits `retryAfterSeconds`, but at least its
+ * own minimum backoff, because MusicBrainz sends 0 when the whole server is busy (October 2026).
  */
 export class RateLimited extends Data.TaggedError("RateLimited")<{
   readonly service: Service;

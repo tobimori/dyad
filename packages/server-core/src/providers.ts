@@ -27,7 +27,7 @@ export const toCredentials = (values: Readonly<Record<string, string>>) =>
   new Map(Object.entries(values).map(([name, value]) => [name, Redacted.make(value)]));
 
 /** A provider that one user can search and play, with the user's credentials */
-export class UsableProvider extends Data.Class<{
+class UsableProvider extends Data.Class<{
   readonly provider: Provider;
   /** Empty when the provider needs no account */
   readonly credentials: Credentials;

@@ -121,9 +121,8 @@ export const appleMusicPlugin = new Plugin({
           }),
         );
 
-      // Apple's web player reads the segments while the song plays, so the signed asset URLs stay
-      // valid for at least the length of a song. A short time limit keeps a cached asset well
-      // inside that.
+      // Apple's web player reads segments while the song plays, so signed asset URLs stay valid
+      // for at least one song. A short time limit keeps a cached asset well inside that.
       const playbacks = yield* Cache.makeWith(loadPlayback, {
         capacity: 100,
         timeToLive: (exit) => (Exit.isSuccess(exit) ? "5 minutes" : 0),

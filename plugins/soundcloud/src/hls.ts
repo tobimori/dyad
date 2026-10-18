@@ -8,9 +8,8 @@ class Segment extends Data.Class<{
   readonly endMs: number | null;
 }> {}
 
-// SoundCloud media playlists (October 2026) have one `EXT-X-MAP` init section and media segments
-// without byte ranges. The init section and the segments in playlist order are one fragmented MP4
-// file.
+// SoundCloud media playlists (October 2026) have one `EXT-X-MAP` init section and segments without
+// byte ranges. The init section and the segments in playlist order are one fragmented MP4 file.
 const parseSegments = (playlistUrl: string, playlist: string) => {
   const segments: Array<Segment> = [];
   let durationMs = 0;

@@ -108,7 +108,7 @@ const pairingLifetimeMs = 5 * 60 * 1000;
  * Short-lived codes stay in memory, so a server restart cancels them. The server then logs a new
  * setup code, and a signed-in device can make a new pairing code.
  */
-export class AuthCodes extends Context.Service<
+class AuthCodes extends Context.Service<
   AuthCodes,
   {
     /** Exists only while the replica has no user */

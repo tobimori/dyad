@@ -94,9 +94,8 @@ const requestApi = <S extends Schema.Constraint>(
     }),
   );
 
-// SoundCloud gives MP3 only for the snippets of Go+ tracks (October 2026). A full stream without an
-// account is HLS of fragmented MP4 with AAC. Many label releases have only `cbc-encrypted-hls` and
-// `ctr-encrypted-hls`, which need DRM, so they have no full stream here.
+// SoundCloud (October 2026) gives MP3 only for Go+ snippets. A full stream without an account is
+// HLS of fragmented MP4 AAC. `cbc-encrypted-hls` and `ctr-encrypted-hls` need DRM and are skipped.
 const fullStream = (track: Track) => {
   if (track.policy === "SNIP" || track.policy === "BLOCK") return undefined;
 

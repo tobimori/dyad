@@ -12,7 +12,7 @@ import { normalizeIsrc } from "./normalize.ts";
 import { cacheProviderSources } from "./provider-cache.ts";
 import { Popularities, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
-import { Tags, playableSources, sourceSummary } from "./sources.ts";
+import { playableSources, sourceSummary, tagIdentifiers } from "./sources.ts";
 
 const localResultLimit = 50;
 
@@ -33,13 +33,11 @@ const searchLocalSources = (query: string, userId: UserId) =>
     const rows = yield* playableSources(userId, match, localResultLimit);
 
     return rows.map((row, position) => {
-      const tags = Schema.decodeUnknownOption(Tags)(row.tags);
-      // FFmpeg (`node-av` 6.1.1) keeps the ID3 frame name `TSRC` as the tag key of an MP3 ISRC
-      const isrc = Option.flatMapNullishOr(tags, (values) => values.isrc ?? values.tsrc);
+      const isrc = row.tags === null ? null : tagIdentifiers(row.tags).isrc;
 
       return new Candidate({
         summary: sourceSummary(row),
-        isrc: Option.getOrNull(Option.flatMapNullishOr(isrc, normalizeIsrc)),
+        isrc: isrc === null ? null : normalizeIsrc(isrc),
         position,
         local: row.tags !== null,
         lossless: row.variant.lossless,

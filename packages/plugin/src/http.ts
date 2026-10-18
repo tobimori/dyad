@@ -86,9 +86,8 @@ export const makePacer = (intervalMs: number) =>
   });
 
 /**
- * A token that a plugin reads from a provider's web client, for example a key in a script. The
- * token stays in memory for `timeToLive`. When the provider answers one of `rejectedStatuses`,
- * the plugin reads a new token and runs `use` once more.
+ * A token from a provider's web client, kept in memory for `timeToLive`. When the provider
+ * answers one of `rejectedStatuses`, the plugin reads a new token and runs `use` once more.
  */
 export const makeScrapedToken = <E, R>(
   fetchToken: Effect.Effect<Redacted.Redacted<string>, E, R>,

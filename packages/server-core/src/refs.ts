@@ -1,10 +1,8 @@
 import { AlbumRef, ArtistRef } from "@dyad/domain";
 import { Option } from "effect";
 
-// Page refs are `<namespace>:<id>`. Everything after the namespace comes from the client and is
-// untrusted. `encodeURIComponent` keeps a `/` in a key, for example in `ac/dc`, from splitting an
-// album ref.
-
+// Everything after the namespace comes from the client and is untrusted. `encodeURIComponent`
+// keeps a `/` in a key, for example in `ac/dc`, from splitting an album ref.
 const libraryPrefix = "library:";
 
 const decodeKey = Option.liftThrowable(decodeURIComponent);

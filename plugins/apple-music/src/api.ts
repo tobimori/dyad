@@ -198,8 +198,7 @@ class StorefrontRequest extends Data.Class<{
 
 /**
  * Keeps the web client token and the storefront of each subscriber in memory, because they cost
- * up to three requests, which is too slow for each search and each play. The result runs `use`
- * with the session of a subscriber.
+ * up to three requests, which is too slow for each search and each play.
  */
 export const sessionCache = Effect.gen(function* () {
   const withWebToken = yield* makeScrapedToken(getWebBearer, {
