@@ -60,6 +60,7 @@ Before you call a change done, check which of these apply and say so:
 - Use `vp` commands, not `pnpm`: `vp i`, `vp add`, `vp run <script>`. `pnpm` is only the package manager under Vite+.
 - `vp run check` is the full check: format, lint, type check and builds. Run it before you commit.
 - `packages/oxlint` has the project lint rules. Fix findings; do not suppress them. A suppression must say why (`-- reason`).
+- The CLI follows the design language of opencode's TUI: theme tokens only, few borders, one accent, dim secondary text, key hints in the footer, centered dialogs. Effects may be bold, but text stays readable.
 - `apps/cli` needs Node 26.9 or later (OpenTUI audio). Other packages must stay compatible with Node 24 and Electron.
 - Plugins import `@dyad/plugin` and shared libraries, never `server-core` or `db`.
 - Migrations: `vp run db:generate <descriptive_name>`, for example `add_source_segment`. Do not edit or rename a migration after it is committed, unless all databases are reset.
