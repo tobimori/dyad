@@ -5,12 +5,14 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dyad/plugin": "workspace:*",
     "@effect/platform-node": "catalog:",
     "dns-packet": "catalog:",
     "effect": "catalog:"

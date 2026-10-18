@@ -54,12 +54,12 @@ export class Artwork extends Data.Class<{
 
 export class TrackMetadata extends Data.Class<{
   readonly title: string;
-  readonly artist?: string;
-  readonly album?: string;
-  readonly artwork?: Artwork;
+  readonly artist?: string | undefined;
+  readonly album?: string | undefined;
+  readonly artwork?: Artwork | undefined;
   /** With `durationMs`, the receiver shows progress */
-  readonly startAt?: NtpTime;
-  readonly durationMs?: number;
+  readonly startAt?: NtpTime | undefined;
+  readonly durationMs?: number | undefined;
 }> {}
 
 export class PlayResult extends Data.Class<{
@@ -170,6 +170,36 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
   const timing = yield* openUdp;
   const audio = yield* openUdp;
 
+  const background = <A, E>(name: string, loop: Effect.Effect<A, E>) =>
+    Effect.forkScoped(
+      Effect.forever(loop).pipe(
+        Effect.tapError((error) => Effect.logWarning(`AirPlay ${name} stopped`, error)),
+        Effect.annotateLogs({ device: device.name }),
+      ),
+    );
+
+  // The receiver measures its offset to `clock` with these exchanges. Sonos (AirPlay 366.0)
+  // answers SETUP only after it has done so.
+  const answerTiming = Effect.gen(function* () {
+    const datagrams = yield* timing.reader.pull;
+    const receivedAt = yield* clock.now;
+
+    for (const datagram of datagrams) {
+      const request = new DataView(datagram.payload.buffer, datagram.payload.byteOffset);
+      if (datagram.payload.length < 32 || (request.getUint8(1) & 0x7f) !== 0x52) continue;
+
+      const reply = new Uint8Array(32);
+      const view = new DataView(reply.buffer);
+      reply.set([0x80, 0xd3, 0x00, 0x07]);
+      reply.set(datagram.payload.subarray(24, 32), 8);
+      view.setBigUint64(16, receivedAt);
+      view.setBigUint64(24, yield* clock.now);
+      yield* timing.writer.write({ payload: reply, address: datagram.address });
+    }
+  });
+
+  yield* background("timing", answerTiming);
+
   const rtsp = yield* connectRtsp({ ...device, password: options.password });
   const sessionId = randomUint32();
   const uri = `rtsp://${rtsp.localAddress}/${sessionId}`;
@@ -180,13 +210,13 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
     "Client-Instance": clientId,
   };
 
-  yield* rtsp.request("OPTIONS", "*", {
+  const methods = yield* rtsp.request("OPTIONS", "*", {
     headers: { ...client, "Apple-Challenge": base64(Crypto.randomBytes(16)) },
   });
 
-  // An AirPort Express with MFiSAP plays nothing until it gets a Curve25519 key. It does not check
-  // the key.
-  if (device.encryptions.includes(4) && device.model?.startsWith("AirPort")) {
+  // Receivers with MFiSAP, for example Sonos (AirPlay 366.0) and the AirPort Express, refuse
+  // ANNOUNCE with 403 or play nothing until they get a Curve25519 key. They do not check the key.
+  if (device.encryptions.includes(4) && methods.headers.get("public")?.includes("POST")) {
     const key = Crypto.generateKeyPairSync("x25519").publicKey.export({ format: "jwk" }).x ?? "";
     yield* rtsp.request("POST", "/auth-setup", {
       protocol: "HTTP/1.1",
@@ -272,25 +302,6 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
       .pipe(Effect.timeout("2 seconds"), Effect.ignore),
   );
 
-  // The receiver measures its offset to `clock` with these exchanges
-  const answerTiming = Effect.gen(function* () {
-    const datagrams = yield* timing.reader.pull;
-    const receivedAt = yield* clock.now;
-
-    for (const datagram of datagrams) {
-      const request = new DataView(datagram.payload.buffer, datagram.payload.byteOffset);
-      if (datagram.payload.length < 32 || (request.getUint8(1) & 0x7f) !== 0x52) continue;
-
-      const reply = new Uint8Array(32);
-      const view = new DataView(reply.buffer);
-      reply.set([0x80, 0xd3, 0x00, 0x07]);
-      reply.set(datagram.payload.subarray(24, 32), 8);
-      view.setBigUint64(16, receivedAt);
-      view.setBigUint64(24, yield* clock.now);
-      yield* timing.writer.write({ payload: reply, address: datagram.address });
-    }
-  });
-
   const history = Array.from<Uint8Array | undefined>({ length: historySize });
   let packets = 0;
   let resent = 0;
@@ -324,14 +335,6 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
     Effect.andThen(rtsp.request("OPTIONS", "*", { headers: client })),
   );
 
-  const background = <A, E>(name: string, loop: Effect.Effect<A, E>) =>
-    Effect.forkScoped(
-      Effect.forever(loop).pipe(
-        Effect.tapError((error) => Effect.logWarning(`AirPlay ${name} stopped`, error)),
-        Effect.annotateLogs({ device: device.name }),
-      ),
-    );
-  yield* background("timing", answerTiming);
   yield* background("retransmit", answerRetransmits);
   yield* background("keep-alive", keepAlive);
 

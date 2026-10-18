@@ -467,6 +467,9 @@ importers:
 
   plugins/airplay:
     dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.2.1)

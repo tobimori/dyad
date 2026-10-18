@@ -272,6 +272,46 @@ export class UrlOutputs extends Data.Class<{
   readonly open: (id: string) => Effect.Effect<UrlOutput, OutputError, Scope.Scope>;
 }> {}
 
+/** What a timed output shows for the entry that plays */
+export class TimedMedia extends Data.Class<{
+  readonly title: string | null;
+  readonly artist: string | null;
+  readonly album: string | null;
+  readonly artworkUrl: string | null;
+  /** Server time in µs at which position 0 of the entry plays, also when it started later */
+  readonly startAtUs: number;
+  readonly durationMs: number | null;
+}> {}
+
+/**
+ * A device that plays PCM at set times, for example an AirPlay receiver. Server time is
+ * `Clock.monotonicTimeNanos` in µs.
+ */
+export class TimedOutput extends Data.Class<{
+  /** How long before its play time a block must arrive */
+  readonly leadMs: number;
+  /**
+   * Queues interleaved 44.1 kHz stereo PCM whose first frame plays at `playAtUs`. Each block
+   * continues the last one; the core calls `flush` before a block that does not.
+   */
+  readonly write: (playAtUs: number, pcm: Float32Array) => Effect.Effect<void, OutputError>;
+  /** Drops all audio that is not played yet */
+  readonly flush: Effect.Effect<void, OutputError>;
+  /** `volume` is from 0 to 1 */
+  readonly setVolume: (volume: number) => Effect.Effect<void, OutputError>;
+  readonly setMedia: (media: TimedMedia) => Effect.Effect<void, OutputError>;
+  /** Fails when the device goes away or takes another sender */
+  readonly closed: Effect.Effect<void, OutputError>;
+}> {}
+
+/** Devices of one protocol that play PCM at set times */
+export class TimedOutputs extends Data.Class<{
+  /** The current devices, again after each change */
+  readonly discover: Stream.Stream<ReadonlyArray<OutputInfo>>;
+  /** Opens a device of the last `discover` list until the scope closes */
+  readonly open: (id: string) => Effect.Effect<TimedOutput, OutputError, Scope.Scope>;
+}> {}
+
 export class PluginContext extends Data.Class<{
   readonly library: {
     /**
@@ -307,6 +347,14 @@ export class PluginContext extends Data.Class<{
      * must be unique, not `device`, and without `:`.
      */
     readonly add: (id: string, outputs: UrlOutputs) => Effect.Effect<void, never, Scope.Scope>;
+    /**
+     * Adds the timed outputs of one protocol, with the same ID rules as `add`. Optional until the
+     * core registers timed outputs.
+     */
+    readonly addTimed?: (
+      id: string,
+      outputs: TimedOutputs,
+    ) => Effect.Effect<void, never, Scope.Scope>;
   };
 }> {}
 
