@@ -9,7 +9,7 @@ import { Effect, Option, Schema } from "effect";
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
 import { touchGroups } from "./sync-counter.ts";
-import { MashupPart, ParsedTitle, TitleVersion } from "./version-titles.ts";
+import { MashupPart, ParsedTitle, TitleSeries, TitleVersion } from "./version-titles.ts";
 
 const schemaVersion = 1;
 
@@ -40,6 +40,7 @@ export const fields = {
   mashup_parts: Schema.Array(MashupPart),
   uploader_role: ParsedTitle.fields.uploaderRole,
   set: Schema.Boolean,
+  series: TitleSeries,
 };
 
 /** The input of a parse, so that a new parser version can run without the provider cache */

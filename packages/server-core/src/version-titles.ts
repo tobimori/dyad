@@ -28,6 +28,12 @@ export class TitleVersion extends Schema.Class<TitleVersion>("TitleVersion")({
   by: Schema.Array(Schema.String),
 }) {}
 
+/** A show that publishes sets. The set title holds the edition: `Boiler Room: London` */
+export class TitleSeries extends Schema.Class<TitleSeries>("TitleSeries")({
+  name: Schema.String,
+  episode: Schema.NullOr(Schema.Finite),
+}) {}
+
 export class MashupPart extends Schema.Class<MashupPart>("MashupPart")({
   /** Empty when the title does not say whose song the part is */
   artists: Schema.Array(Schema.String),
@@ -50,6 +56,8 @@ export class ParsedTitle extends Schema.Class<ParsedTitle>("ParsedTitle")({
   removed: Schema.Array(Schema.String),
   /** A DJ set or mix: a work of its own, not a version of one song */
   set: Schema.Boolean,
+  /** The series of a set. A series uploader is never an artist */
+  series: Schema.NullOr(TitleSeries),
   /** Where `artists` came from. `uploader` is a guess, because uploaders are often not the artist */
   artistSource: Schema.Literals(["title", "provider", "uploader", "none"]),
   /** Nothing confirmed the `artist - title` order, so a resolver can also try the reverse order */
@@ -71,7 +79,7 @@ export const artistNameKey = (name: string) =>
     .replaceAll(/[^\p{L}\p{N}]+/gu, "");
 
 /** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
-export const parserRevision = "parse:v4";
+export const parserRevision = "parse:v5";
 
 const kindLabels = {
   remix: "Remix",
@@ -346,6 +354,58 @@ const liveAt = /(?<![\p{L}\p{N}])live (?:at|@|from)\s/iu;
 // `Bonobo Boiler Room New York DJ Set`, `Layla Benitez @ Radio 1's Essential Mix`
 const setHost =
   /^(.+?)\s+(?:boiler room|(?:bbc )?radio 1|live (?:at|@|from)|@|essential mix|at)\s/iu;
+// `Four Tet at`, `Anyma [Live at`, `Carl Cox 45 min`: the end of an artist before a series
+const seriesConnective =
+  /(?:\s*[([{\u3010\u300c\u00ab]|\s*(?:\blive\s+)?(?:\b(?:at|from|for|by)|@)|\s+\d+\s*(?:min(?:utes)?|hours?|hrs?))+$/iu;
+// `channels` are the `artistNameKey`s of the uploaders. A `place` series keeps the place after its
+// name (`Boiler Room: London`), the others keep the venue and the year (`Essential Mix: Boomtown 2026`).
+const knownSeries = [
+  { name: "Boiler Room", pattern: /\bboiler room\b/iu, channels: ["boilerroom"], edition: "place" },
+  {
+    name: "Resident Advisor",
+    pattern:
+      /\bRA\.(\d{2,4})\b|\b(?:resident advisor(?: podcast)?|RA podcast)(?:\s+#?(\d{2,4})\b)?/iu,
+    channels: ["residentadvisor"],
+    prefix: "RA.",
+  },
+  {
+    name: "Essential Mix",
+    pattern: /(?:(?:bbc\s*)?radio\s*1(?:['\u2019]s)?\s*|\bbbc1?\s*)?\bessential mix\b/iu,
+    channels: ["bbcradio1"],
+  },
+  { name: "Cercle", pattern: /\bcercle\b/iu, channels: ["cercle"] },
+  {
+    name: "Mixmag Lab",
+    pattern: /\bmixmag (?:the )?lab\b/iu,
+    channels: ["mixmag"],
+    edition: "place",
+  },
+  { name: "The Lot Radio", pattern: /\bthe ?lot ?radio\b/iu, channels: ["thelotradio"] },
+  { name: "NTS", pattern: /\bNTS(?: radio)?\b/u, channels: ["nts", "ntslatest"] },
+  { name: "Rinse FM", pattern: /\brinse fm\b/iu, channels: ["rinsefm"] },
+  {
+    name: "Tomorrowland",
+    pattern: /\btomorrowland\b/iu,
+    channels: ["tomorrowland"],
+  },
+  {
+    name: "Awakenings",
+    pattern: /\bawakenings(?: festival)?\b/iu,
+    channels: ["awakenings"],
+  },
+  {
+    name: "Ultra Music Festival",
+    pattern: /\bultra music festival\b/iu,
+    channels: ["ultramusicfestival"],
+  },
+];
+const seriesChannels = new Set(knownSeries.flatMap((known) => known.channels));
+// `Giegling Mix 07`, `LWE Podcast 152`, but not a year, `Mix 2.0` or `Mix 135 bpm`
+const genericSeries =
+  /(?<![^\s([])(\p{L}[^()[\]|:\u2013\u2014-]*?\s(?:mix|podcast))\s*#?\s*(\d{1,3})(?![\p{L}\p{N}]|[.,/]\d|\s*bpm)/iu;
+// `XLR8R.123`, but not `Mr.786` or `VOL.19`
+const dottedSeries =
+  /(?<![\p{L}\p{N}.])(?!(?:VOL|PT|NO|EP)\.)(\p{Lu}[\p{Lu}\d]{1,5})\.(\d{2,4})(?![\d.])/u;
 
 // `A - B`, `A – B`, `A ~ B`, `A | B`, `A || B`, `A // B`, `A _ B`, `A : B` and `A- B`. `A / B`
 // separates only when nothing else does: `Charli XCX - So I / Party 4 U` is one title.
@@ -508,7 +568,9 @@ export const parseVersionTitle = (input: {
     const artist = field.replace(promoPrefix, (match) => (removed.push(match.trim()), ""));
     const guests = artist.match(inlineFeaturing) ?? artist.match(withGuests);
     if (guests !== null) featured.push(...splitNames(guests[1]!));
-    return splitNames(guests === null ? artist : artist.slice(0, guests.index));
+    return splitNames(guests === null ? artist : artist.slice(0, guests.index)).filter(
+      (name) => !seriesChannels.has(artistNameKey(name)),
+    );
   });
   const providerKeys = new Set(providerArtists.map(artistNameKey));
   const isCreditName = (name: string) => {
@@ -544,7 +606,10 @@ export const parseVersionTitle = (input: {
   const longSet =
     (input.durationMs ?? 0) >= 20 * 60_000 &&
     !/\d+ ?(?:hours?|hrs?)\b/iu.test(full) &&
-    weakSetWords.test(full);
+    (weakSetWords.test(full) ||
+      dottedSeries.test(full) ||
+      seriesChannels.has(uploaderKey) ||
+      knownSeries.some((known) => known.pattern.test(full)));
   const set = setWords.test(full) || (live !== null && beforeLive.length < 2) || longSet;
   const liveVersion = live !== null && !set;
   if (liveVersion) removed.push(full.slice(live.index));
@@ -867,18 +932,114 @@ export const parseVersionTitle = (input: {
       ? fromTitle.title.match(/\s*[([]([^()[\]]+\s[x\u00d7]\s[^()[\]]+)[)\]]$/iu)
       : null;
   const titleText = cleanTitle(fromTitle.title.slice(0, pairGroup?.index));
-  // `Giegling Mix 07 - DJ Metatron - This Is Not` names a series, the artist and the set
-  const setParts = set ? title.split(splitter).map(cleanTitle) : [];
-  const series = setParts.find((part) => /^(?:\S.*\s)?mix\s*#?\s*\d{1,3}$/iu.test(part));
+  const hasSetWords = (text: string) => setWords.test(text.replaceAll(/\sb2b\s/giu, " & "));
+  const nameLike = (text: string) => {
+    const names = text.replace(trailingGroup, "");
+    return (
+      !/\bmix\b|[\d()[\]{}\u3010\u3011]/iu.test(names) &&
+      names.split(/\s+/u).length <= 4 &&
+      !hasSetWords(names)
+    );
+  };
+  // A short upload that names a series is a track: `Mean Girls (Boiler Room Mashup)`
+  const foundSeries = (() => {
+    if (!set || (input.durationMs ?? Infinity) < 15 * 60_000) return null;
+    for (const known of knownSeries) {
+      const match = known.pattern.exec(title);
+      if (match === null) continue;
+      const episode = match[1] ?? match[2];
+      const label =
+        episode !== undefined && known.prefix !== undefined ? known.prefix + episode : known.name;
+      return { ...known, match, episode, label };
+    }
+    const match = genericSeries.exec(title) ?? dottedSeries.exec(title);
+    if (match === null) return null;
+    return { name: match[1]!, match, episode: match[2], label: match[0].trim(), edition: "" };
+  })();
+  // The series becomes a part of its own, marked by `\uE001`: `Bonobo - \uE001 New York DJ Set`
+  const seriesParts = (() => {
+    if (foundSeries === null) return { text: title, bracketed: false };
+    const start = foundSeries.match.index;
+    const end = start + foundSeries.match[0].length;
+    // `This Is Not (Giegling Mix 07)`: the brackets go with the series
+    const open = /[([{\u3010]\s*$/u.exec(title.slice(0, start));
+    const close = /^\s*[)\]}\u3011]/u.exec(title.slice(end));
+    if (open === null || close === null)
+      return { text: `${title.slice(0, start)} - \uE001${title.slice(end)}`, bracketed: false };
+    const after = title.slice(end + close[0].length);
+    return { text: `${title.slice(0, open.index)} - \uE001${after}`, bracketed: true };
+  })();
+  const setParts = set ? seriesParts.text.split(splitter).map(cleanTitle) : [];
   const setNames = setParts.filter(
-    (part) => part !== "" && part !== series && !decoration.test(part),
+    (part) => part !== "" && !part.startsWith("\uE001") && !decoration.test(part),
   );
-  // `Bonobo Boiler Room New York DJ Set`, `Gorgon City - BBC Radio 1 Essential Mix`
+  // `Bonobo Boiler Room New York DJ Set`: the artist comes first, the place after the series
+  const seriesSet = (() => {
+    if (foundSeries === null) return null;
+    const at = setParts.findIndex((part) => part.startsWith("\uE001"));
+    const usable = (part: string) =>
+      part !== "" &&
+      !decoration.test(part) &&
+      !/^[([].*[)\]]$/u.test(part) &&
+      !seriesChannels.has(artistNameKey(part));
+    const before = setParts.slice(0, at).filter(usable);
+    // `Giegling Mix 05 I Traumprinz`
+    const glued = cleanTitle(setParts[at]!.slice(1)).replace(/^I\s+/u, "");
+    const after = setParts.slice(at + 1).filter(usable);
+    const episodic = foundSeries.episode !== undefined;
+    const fallback = [...(episodic ? [glued] : []), ...after].find(
+      (part) => usable(part) && nameLike(part),
+    );
+    const lead =
+      before[0] === undefined || hasSetWords(before[0].replace(trailingGroup, ""))
+        ? fallback
+        : before[0];
+    // `This Is Not (Giegling Mix 07)` names the set, not the artist
+    const artistPart = seriesParts.bracketed && before.length === 1 ? "" : (lead ?? "");
+    const artist = artistPart.replace(seriesConnective, "");
+    const host = artist.match(setHost)?.[1] ?? artist;
+    if (episodic) {
+      const own = [...before, ...(usable(glued) ? [glued] : []), ...after].filter(
+        (part) => part !== artistPart,
+      );
+      return {
+        host,
+        title: own.length === 0 ? foundSeries.label : `${own.join(" - ")} (${foundSeries.label})`,
+      };
+    }
+    // A copy repeats the year in many date forms, so only the year stays
+    const undated = (text: string) =>
+      cleanTitle(
+        text
+          .replaceAll(
+            /(?<![\p{L}\p{N}])(?:(?:19|20)\d\d|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})(?![\p{L}\p{N}])/gu,
+            "",
+          )
+          .replace(/[\s([{\u3010\u300c\u00ab,]+$/u, ""),
+      );
+    if (foundSeries.edition !== "place") {
+      const venue = [artistPart, glued]
+        .map((text) => text.match(/(?:^|[\s([])(?:live\s+)?(?:at|@|from)\s+([^()[\]|]+)/iu)?.[1])
+        .find((text) => text !== undefined);
+      const place = undated(
+        (venue ?? "").split(setWords)[0]!.replace(/\s(?:for|with|by)(?:\s.*)?$/iu, ""),
+      );
+      const year = title.match(/(?<!\d)(?:19|20)\d\d(?!\d)/u)?.[0];
+      const named = place === "" ? foundSeries.name : `${foundSeries.name}: ${place}`;
+      return { host, title: year === undefined ? named : `${named} ${year}` };
+    }
+    const place = undated(
+      glued.split(setWords)[0]!.replace(/^(?:at|@|live (?:at|@|from))\s+/iu, ""),
+    );
+    if (place === "") return { host, title: foundSeries.name };
+    // `Boiler Room x Dekmantel`, `Boiler Room Tokyo: Tohji Presents u-ha`
+    const joiner = /^(?:x|&)\s|:/iu.test(place) ? " " : ": ";
+    return { host, title: foundSeries.name + joiner + place };
+  })();
   const host = (() => {
+    if (seriesSet !== null) return seriesSet.host;
     const first = setNames[0] ?? "";
-    const names = first.replace(trailingGroup, "").replaceAll(/\sb2b\s/giu, " & ");
-    const name = !/\bmix\b|[\d()[\]{}【】]/iu.test(names) && names.split(/\s+/u).length <= 4;
-    if (setNames.length >= 2 && name && !setWords.test(names)) return first;
+    if (setNames.length >= 2 && nameLike(first)) return first;
     // `Peggy Gou - Live At Coachella`, `Anyma [Full Set] at Ultra`, `Anyma [Live at Ultra]`
     return (title.match(setHost)?.[1] ?? "")
       .replace(trailingGroup, (group) => (setWords.test(group) ? "" : group))
@@ -911,7 +1072,14 @@ export const parseVersionTitle = (input: {
     version === creditOfOriginal ? [] : [artistNameKey(version.credit)],
   );
 
-  const uploaderName = handle.test(input.uploader ?? "") ? "" : (input.uploader ?? "");
+  // `SMOKE MACHINE` uploads `Smoke Machine Podcast 090`
+  const seriesUploader =
+    seriesChannels.has(uploaderKey) ||
+    (foundSeries !== null &&
+      uploaderKey !== "" &&
+      artistNameKey(foundSeries.name).startsWith(uploaderKey));
+  const uploaderName =
+    handle.test(input.uploader ?? "") || seriesUploader ? "" : (input.uploader ?? "");
   const chosen = (() => {
     if (set && providerArtists.length === 0 && host !== "")
       return { text: host, source: "title" } as const;
@@ -976,14 +1144,24 @@ export const parseVersionTitle = (input: {
     }, []);
 
   const artistKeys = new Set(artists.map(artistNameKey));
-  // `This Is Not (Giegling Mix 07)`, as the copies that name the series in brackets
   const setTitle = (() => {
+    if (seriesSet !== null) return seriesSet.title;
     const names = setNames.filter(
       (part, index) =>
         index > 0 || !splitNames(part).every((name) => artistKeys.has(artistNameKey(name))),
     );
     if (names.length === setParts.length || names.length === 0) return cleanTitle(title);
-    return [names.join(" - "), ...(series === undefined ? [] : [`(${series})`])].join(" ");
+    return names.join(" - ");
+  })();
+  const channel = knownSeries.find((known) => known.channels.includes(uploaderKey));
+  const series = (() => {
+    if (foundSeries !== null) {
+      const episode = foundSeries.episode === undefined ? null : Number(foundSeries.episode);
+      return new TitleSeries({ name: foundSeries.name, episode });
+    }
+    return set && channel !== undefined
+      ? new TitleSeries({ name: channel.name, episode: null })
+      : null;
   })();
   const versionKeys = new Set(finalVersions.flatMap((version) => version.by.map(artistNameKey)));
   const uploaderIsArtist =
@@ -1003,7 +1181,9 @@ export const parseVersionTitle = (input: {
 
   return new ParsedTitle({
     artists,
-    b2b: /\sb2b\s/iu.test(chosenText),
+    b2b: /\sb2b\s/iu.test(
+      chosen.source === "provider" ? (input.artists ?? []).join(", ") : chosenText,
+    ),
     featured: set ? [] : [...new Set(featured)],
     title: set
       ? setTitle
@@ -1012,6 +1192,7 @@ export const parseVersionTitle = (input: {
     parts,
     removed: removed.flatMap((text) => (text.trim() === "" ? [] : [text.trim()])),
     set,
+    series,
     artistSource: artists.length === 0 ? "none" : chosen.source,
     swappable,
     uploaderRole,

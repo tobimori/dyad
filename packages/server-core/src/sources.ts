@@ -110,6 +110,7 @@ const assertParsedTitle = (
         mashup_parts: parsed.parts,
         uploader_role: item.uploader === null ? null : parsed.uploaderRole,
         set: parsed.set,
+        series: parsed.series,
       },
       {
         confidence: parsed.confidence,
