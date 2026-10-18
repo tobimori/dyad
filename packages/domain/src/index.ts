@@ -421,10 +421,7 @@ export class DownloadUnavailable extends Schema.TaggedError<DownloadUnavailable>
 
 /** Clients import only the declared cookies of `domain` and send them to `linkAccount` */
 export class BrowserLogin extends Schema.Class<BrowserLogin>("BrowserLogin")({
-  /**
-   * HTTPS only, because the client gives it to a browser as a command argument, where another
-   * value can act as a flag
-   */
+  /** The sign-in page that clients show. HTTPS only, because the user signs in there. */
   url: Schema.String.check(
     Schema.makeFilter((url) =>
       URL.parse(url)?.protocol === "https:" ? undefined : "Expected an HTTPS URL",
@@ -692,11 +689,8 @@ const PublicRpc = RpcGroup.make(
 );
 
 const UserRpc = RpcGroup.make(
-  // The files on the server. Provider sources are in `listLibrary`.
+  // The files on the server
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
-  // One entry per recording. It reads only server data, so it never waits for providers.
-  Rpc.make("listLibrary", { success: Schema.Array(LibraryEntry) }),
-  Rpc.make("listPlaylists", { success: Schema.Array(PlaylistSummary) }),
   Rpc.make("listPlaylistEntries", {
     payload: { playlistId: Schema.String },
     success: Schema.Array(PlaylistEntry),
@@ -705,8 +699,6 @@ const UserRpc = RpcGroup.make(
   Rpc.make("getLibrarySyncStatus", { success: Schema.Array(LibrarySyncStatus) }),
   // Returns at once; does nothing without a linked account
   Rpc.make("syncLibrary", { payload: { provider: Schema.String } }),
-  // The sources that the user played and can still play, newest play first, one entry per source
-  Rpc.make("listRecentPlays", { success: Schema.Array(SourceSummary) }),
   // Streams the complete ranked list again each time that a provider answers; the last list is
   // final. Clients replace their list. Every result can play at once with `preparePlayback`.
   Rpc.make("search", {

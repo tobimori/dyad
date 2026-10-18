@@ -1,6 +1,6 @@
 import type { ServerConnection } from "@dyad/client-runtime";
 import { AccountLinkFailed } from "@dyad/domain";
-import type { AccountProviderSummary, ProviderAccountSummary } from "@dyad/domain";
+import type { AccountProviderSummary, BrowserLogin, ProviderAccountSummary } from "@dyad/domain";
 import { NodeServices } from "@effect/platform-node";
 import type { InputRenderable } from "@opentui/core";
 import { Effect, Fiber, Schema } from "effect";
@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { availableCookieBrowsers, readBrowserCookies } from "../commands/browser-cookies.ts";
 import type { CookieBrowser, CookieProfile } from "../commands/browser-cookies.ts";
-import { CookieImportError, readCookieFile } from "../commands/cookie-import.ts";
+import { CookieImportError, cookieFileHint, readCookieFile } from "../commands/cookie-import.ts";
 import { commands, useCommands } from "../context/keymap.ts";
 import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
@@ -158,6 +158,7 @@ function AccountDialog(props: {
     if (value === "file") {
       dialog.replace(
         <CookieFileDialog
+          login={props.provider.login}
           onSubmit={(file) =>
             dialog.replace(
               <CookieLoginDialog
@@ -207,9 +208,7 @@ function AccountDialog(props: {
       <box marginTop={1}>
         <SelectList options={options} width={accountsWidth - 4} rows={8} onChoose={choose} />
       </box>
-      <text fg={theme.muted}>
-        Sign in in a private window, export cookies.txt, then close the window.
-      </text>
+      <text fg={theme.muted}>{cookieFileHint(props.provider.login)}</text>
       <text fg={theme.muted}>
         {`Normal browser cookies expire sooner than a private-window export. Re-import when Dyad says "Sign in to ${props.provider.name} again".`}
       </text>
@@ -218,7 +217,10 @@ function AccountDialog(props: {
   );
 }
 
-function CookieFileDialog(props: { readonly onSubmit: (file: string) => void }) {
+function CookieFileDialog(props: {
+  readonly login: BrowserLogin;
+  readonly onSubmit: (file: string) => void;
+}) {
   const theme = useTheme();
   const input = useRef<InputRenderable | null>(null);
   const [file, setFile] = useState("");
@@ -238,9 +240,7 @@ function CookieFileDialog(props: { readonly onSubmit: (file: string) => void }) 
   }, []);
   return (
     <Dialog title="Import cookie file" width={accountsWidth}>
-      <text fg={theme.muted}>
-        Sign in in a private window, export cookies.txt, then close the window.
-      </text>
+      <text fg={theme.muted}>{cookieFileHint(props.login)}</text>
       <input
         ref={input}
         value={file}

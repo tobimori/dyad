@@ -17,7 +17,6 @@ import {
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
-import { listRecentPlays } from "./history.ts";
 import { homePage } from "./home.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
@@ -33,7 +32,7 @@ import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./
 import { listSources } from "./sources.ts";
 import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
-import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
+import { listPlaylistEntries } from "./user-library.ts";
 import { prepareVideo, videoRoute } from "./video.ts";
 
 export { catalogLayer } from "./catalog-backfill.ts";
@@ -76,15 +75,12 @@ export const serverRoutes = Layer.unwrap(
       login: (payload) => login(payload).pipe(orDieOnDatabaseError("login")),
       pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError("pair")),
       listSources: () => listSources.pipe(orDieOnDatabaseError("listSources")),
-      listLibrary: () => listLibrary.pipe(orDieOnDatabaseError("listLibrary")),
-      listPlaylists: () => listPlaylists.pipe(orDieOnDatabaseError("listPlaylists")),
       listPlaylistEntries: ({ playlistId }) =>
         listPlaylistEntries(playlistId).pipe(orDieOnDatabaseError("listPlaylistEntries")),
       getLibrarySyncStatus: () =>
         getLibrarySyncStatus.pipe(orDieOnDatabaseError("getLibrarySyncStatus")),
       syncLibrary: ({ provider }) =>
         syncLibrary(provider).pipe(orDieOnDatabaseError("syncLibrary")),
-      listRecentPlays: () => listRecentPlays.pipe(orDieOnDatabaseError("listRecentPlays")),
       search: ({ query }) =>
         // Only database errors remain
         search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),

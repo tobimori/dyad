@@ -39,7 +39,7 @@ export const songs = new Section({
     const refreshFiles = useAtomRefresh(app.atoms.sources);
     const status = useLibraryStatus(app.atoms);
 
-    // `listLibrary` has only saved songs. It gives a merged local file as the entry's source, so
+    // The library has only saved songs. It gives a merged local file as the entry's source, so
     // the file shows once.
     const items = useMemo(() => {
       const entries = AsyncResult.isSuccess(library) ? library.value : [];

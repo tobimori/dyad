@@ -4,7 +4,7 @@ import { Argument, Command, Flag, Prompt } from "effect/cli";
 
 import { deviceConnection, fail, reportFailures } from "./auth.ts";
 import { availableCookieBrowsers, readBrowserCookies } from "./browser-cookies.ts";
-import { readCookieFile } from "./cookie-import.ts";
+import { cookieFileHint, readCookieFile } from "./cookie-import.ts";
 
 const accountsCommand = Command.make("accounts", {}, () =>
   Effect.gen(function* () {
@@ -53,9 +53,7 @@ const linkCommand = Command.make(
         });
         const browser = browsers[index];
         if (browser === undefined) {
-          yield* Console.log(
-            "Sign in in a private window, export cookies.txt, then close the window.",
-          );
+          yield* Console.log(cookieFileHint(accountProvider.login));
           const file = yield* Prompt.String({ message: "Cookie file" });
           return yield* readCookieFile(accountProvider.login, file);
         }

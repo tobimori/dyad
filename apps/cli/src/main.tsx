@@ -34,9 +34,7 @@ import {
 import { pluginCommands } from "./commands/plugins.ts";
 import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
-import { movePlayLog } from "./context/play-log.ts";
 import { cliReplicaLayer } from "./context/replica.ts";
-import { importSavedSession, savedVolume } from "./context/session.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
 import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
@@ -71,10 +69,6 @@ const player = (controller: boolean) =>
       ),
     );
     const replica = Context.get(replicaServices, Replica);
-    yield* movePlayLog(serverUrl, replica).pipe(
-      Effect.provideContext(logServices),
-      Effect.forkScoped,
-    );
     const recordPlay = (play: Parameters<typeof replica.appendPlay>[0]) =>
       replica.appendPlay(play).pipe(
         Effect.catchTag("ReplicaUnbound", () =>
@@ -92,10 +86,7 @@ const player = (controller: boolean) =>
         Effect.ignore,
       );
 
-    // The import of the old session removes its volume, so the volume moves to the settings first
-    const saved = settings.volume === undefined ? yield* savedVolume(serverUrl) : Option.none();
-    if (Option.isSome(saved)) yield* saveVolume(saved.value);
-    const volume = settings.volume ?? Option.getOrElse(saved, () => 1);
+    const volume = settings.volume ?? 1;
 
     const saveDownloadQuality = (quality: typeof DownloadQuality.Type) =>
       updateSettings((current) => new Settings({ ...current, downloadQuality: quality })).pipe(
@@ -159,12 +150,6 @@ const player = (controller: boolean) =>
       }).pipe(Layer.provide(Layer.succeedContext(connection)), Layer.provide(logging)),
     );
     const session = Context.get(sessionServices, SessionClient);
-
-    yield* importSavedSession(serverUrl, session).pipe(
-      Effect.catchCause((cause) => Effect.logWarning("Cannot import the old session", cause)),
-      Effect.provideContext(logServices),
-      Effect.forkScoped,
-    );
 
     const atoms = serverAtoms(Context.merge(connection, replicaServices), logging);
     // Plugin commands read the tracklist that the app shows, so that media keys act like its keys

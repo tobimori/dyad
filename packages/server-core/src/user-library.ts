@@ -14,11 +14,10 @@ import {
   PlaylistRow,
   RecordingId,
   libraryView,
-  playlistSummary,
 } from "@dyad/domain";
 import type { PlaylistLink, PlaylistLinkState, UserId } from "@dyad/domain";
 import { HlcClock, patchRow } from "@dyad/sync";
-import { and, asc, count, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
 import { generateKeyBetween } from "fractional-indexing";
 
@@ -344,40 +343,6 @@ const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
       remoteTracks,
     });
   });
-
-export const listLibrary = Effect.gen(function* () {
-  const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
-
-  const items = yield* db
-    .select({ entityId: libraryItem.entityId, addedAt: libraryItem.addedAt })
-    .from(libraryItem)
-    .where(and(eq(libraryItem.userId, principal.userId), eq(libraryItem.deleted, false)));
-  const view = yield* loadLibraryView(
-    principal.userId,
-    items.map((item) => item.entityId),
-  );
-  return view.libraryEntries(items);
-});
-
-export const listPlaylists = Effect.gen(function* () {
-  const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
-
-  const rows = yield* db
-    .select({ playlist, entryCount: count(playlistEntry.id) })
-    .from(playlist)
-    .leftJoin(
-      playlistEntry,
-      and(eq(playlistEntry.playlistId, playlist.id), eq(playlistEntry.deleted, false)),
-    )
-    .where(and(eq(playlist.ownerId, principal.userId), eq(playlist.deleted, false)))
-    .groupBy(playlist.id);
-
-  return rows
-    .map((row) => playlistSummary(row.playlist, row.entryCount))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
-});
 
 export const listPlaylistEntries = (playlistId: string) =>
   Effect.gen(function* () {

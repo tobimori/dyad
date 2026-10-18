@@ -66,6 +66,9 @@ export const parseCookieFile = (text: string) =>
     catch: () => new CookieImportError({ reason: "Not a Netscape cookies.txt file" }),
   });
 
+export const cookieFileHint = (login: BrowserLogin) =>
+  `Sign in at ${login.url} in a private window, export cookies.txt, then close the window.`;
+
 export const readCookieFile = (login: BrowserLogin, file: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

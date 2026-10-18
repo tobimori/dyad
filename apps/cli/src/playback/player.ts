@@ -1,3 +1,4 @@
+import { findSeekPoint, readSourceInfo, SeekPoint } from "@dyad/audio";
 import { ServerConnection, qualityLabel } from "@dyad/client-runtime";
 import { AudioFormat, PlaybackCapabilities } from "@dyad/domain";
 import type { AudioQuality } from "@dyad/domain";
@@ -17,8 +18,6 @@ import {
 import { HttpClient } from "effect/http";
 
 import { AudioTap } from "../visualizer/audio-feed.ts";
-import { findSeekPoint, startPoint } from "./seek.ts";
-import type { SeekPoint } from "./seek.ts";
 
 class PlaybackError extends Data.TaggedError("PlaybackError")<{ readonly cause: unknown }> {}
 
@@ -97,6 +96,8 @@ class Download extends Data.Class<{
 }> {}
 
 type Format = (typeof decoders)[number][0];
+
+const startPoint = new SeekPoint({ prefix: new Uint8Array(0), offset: 0, frame: 0 });
 
 // The grant in `path` stays valid for hours, so a new start needs no new `preparePlayback`
 const startDownload = (serverUrl: string, path: string, format: Format, startMs: number) =>
@@ -230,7 +231,7 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
     };
     yield* Effect.addFinalizer(() => Effect.sync(stopStream));
 
-    const play = (from: Download, point: SeekPoint) =>
+    const play = (from: Download, point: SeekPoint, pointMs: number) =>
       Effect.gen(function* () {
         stopStream();
 
@@ -244,7 +245,7 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
         });
 
         stream = next;
-        streamStartMs = from.startMs + point.ms;
+        streamStartMs = from.startMs + pointMs;
         next.once("ended", () => {
           if (stream === next) Deferred.doneUnsafe(ended, Effect.void);
         });
@@ -261,9 +262,20 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
       return streamStartMs + (Number(stats.framesPlayed) / stats.sampleRate) * 1000;
     };
 
-    // The start of the last received frame, relative to the start of the download
+    // OpenTUI 0.6.6 cannot seek in a stream, so a seek starts a new decoder at this point.
+    // `ms` is relative to the start of the download.
+    const seekPointIn = (bytes: Uint8Array, ms: number) => {
+      const info = readSourceInfo(bytes, format);
+      if (info === undefined) return undefined;
+      const point = findSeekPoint(bytes, info, (ms / 1000) * info.sampleRate);
+      if (point === undefined) return undefined;
+      // The MP3 priming before source frame 0 shows as 0, as when the file plays from its start
+      return { point, ms: Math.max(0, (point.frame / info.sampleRate) * 1000) };
+    };
+
+    // The last received seek point, relative to the start of the download
     const receivedMs = (bytes: Uint8Array) =>
-      findSeekPoint(bytes, format, Number.POSITIVE_INFINITY)?.ms ?? null;
+      seekPointIn(bytes, Number.POSITIVE_INFINITY)?.ms ?? null;
 
     let downloadedMs: number | null = null;
     const durationMs = () => {
@@ -281,13 +293,13 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
     // Where `from` has the audio of `ms`. Its start always plays, also before its first bytes.
     const pointIn = (from: Download, ms: number) => {
       const offsetMs = ms - from.startMs;
-      if (offsetMs === 0) return startPoint;
+      if (offsetMs === 0) return { point: startPoint, ms: 0 };
 
       const received = SubscriptionRef.getUnsafe(from.received);
       const lastMs = receivedMs(received.bytes);
       const inside =
         offsetMs > 0 && (received.state === "done" || (lastMs !== null && offsetMs <= lastMs));
-      return inside ? findSeekPoint(received.bytes, format, offsetMs) : undefined;
+      return inside ? seekPointIn(received.bytes, offsetMs) : undefined;
     };
 
     // A response of this track that no longer plays stops
@@ -302,9 +314,9 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
     const moveTo = (ms: number) =>
       Effect.gen(function* () {
         for (const from of [current, base]) {
-          const point = pointIn(from, ms);
-          if (point === undefined) continue;
-          yield* play(from, point);
+          const start = pointIn(from, ms);
+          if (start === undefined) continue;
+          yield* play(from, start.point, start.ms);
           return yield* replace(from);
         }
 
@@ -316,7 +328,7 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
         }
         // The old audio plays on until the new response starts
         const next = yield* startDownload(serverUrl, fetched.path, format, ms);
-        yield* play(next, startPoint);
+        yield* play(next, startPoint, 0);
         yield* replace(next);
       });
 
