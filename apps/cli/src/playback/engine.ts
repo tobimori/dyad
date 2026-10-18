@@ -183,7 +183,8 @@ const makeEngine = (options: {
         Effect.flatMap(
           Option.match({
             onNone: () => stream,
-            onSome: (file) => fetchFile(file.path, file.format).pipe(Effect.catch(() => stream)),
+            onSome: (file) =>
+              fetchFile(file.path, file.format, file.audio).pipe(Effect.catch(() => stream)),
           }),
         ),
       );
@@ -742,6 +743,8 @@ const makeEngine = (options: {
       durationMs: (entryId: EntryId) => trackOf(entryId)?.durationMs() ?? null,
       /** The response that plays `entryId`, for the visualizer */
       tap: (entryId: EntryId) => trackOf(entryId)?.tap() ?? null,
+      /** For example `FLAC 24/96`, `null` when this device does not play `entryId` */
+      quality: (entryId: EntryId) => trackOf(entryId)?.quality ?? null,
       /**
        * Applies a transport command to this device's audio while it plays without the server.
        * `false` when the command needs the server.

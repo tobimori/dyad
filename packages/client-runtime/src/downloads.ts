@@ -1,4 +1,10 @@
-import { AlbumRef, AudioFormat, DownloadQuality, DownloadUnavailable } from "@dyad/domain";
+import {
+  AlbumRef,
+  AudioFormat,
+  AudioQuality,
+  DownloadQuality,
+  DownloadUnavailable,
+} from "@dyad/domain";
 import type { AudioContainer, PlaybackCapabilities } from "@dyad/domain";
 import {
   Cause,
@@ -39,6 +45,8 @@ export class DownloadedFile extends Schema.Class<DownloadedFile>("DownloadedFile
   bytes: Schema.Int,
   /** Server time. The device deletes the file after it, unless a check-in renews it. */
   leaseExpiresAt: Schema.NullOr(Schema.Finite),
+  /** `null` in indexes from before it and from older servers */
+  audio: Schema.NullOr(AudioQuality).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 }) {}
 
 const DownloadIndex = Schema.fromJsonString(
@@ -232,6 +240,7 @@ const makeDownloads = (options: {
           format: plan.format,
           bytes,
           leaseExpiresAt: plan.leaseExpiresAt,
+          audio: plan.audio,
         });
         yield* fs.rename(part, pathOf(file.file));
         yield* update((current) => {
@@ -342,7 +351,7 @@ const makeDownloads = (options: {
           if (file === undefined || (file.leaseExpiresAt !== null && file.leaseExpiresAt < now)) {
             return Option.none();
           }
-          return Option.some({ path: pathOf(file.file), format: file.format });
+          return Option.some({ path: pathOf(file.file), format: file.format, audio: file.audio });
         }),
     };
   });

@@ -18,6 +18,8 @@ export function Footer(props: {
   /** `null` when no output plays the session */
   readonly volume: number | null;
   readonly muted: boolean;
+  /** `null` while the audio plays on another device */
+  readonly quality: string | null;
   readonly shuffle: boolean;
   readonly repeat: typeof RepeatMode.Type;
   readonly message: string | null;
@@ -55,6 +57,7 @@ export function Footer(props: {
             )}
             <span fg={theme.error}>{props.message === null ? "" : `  ${props.message}`}</span>
           </text>
+          {props.quality !== null && <text fg={theme.faint}>{props.quality}</text>}
           <text>
             <span fg={modeColor(props.shuffle)}>⤨ shuffle </span>
             <span fg={modeColor(props.repeat !== "off")}>{`↻ ${props.repeat}`}</span>

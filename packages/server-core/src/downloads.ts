@@ -1,9 +1,10 @@
-import { device, deviceDownload, source, sourceVariant } from "@dyad/db";
+import { device, deviceDownload, source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AudioCodec,
   AudioContainer,
   AudioFormat,
+  AudioQuality,
   CurrentPrincipal,
   DeviceId,
   DownloadLease,
@@ -30,7 +31,6 @@ import {
 } from "./playback.ts";
 import { choosePlayback, contentTypes, streamingCodecs } from "./playback-formats.ts";
 import type { SourceFormat } from "./playback-formats.ts";
-import { cachedProviderSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { addProviderSource } from "./sources.ts";
 
@@ -67,38 +67,10 @@ class DownloadChoice extends Data.Class<{
   readonly direct: boolean;
 }> {}
 
-/** What the downloads decide from. Provider sources often have no bit depth or bitrate. */
-class SourceAudio extends Data.Class<{
-  readonly lossless: boolean;
-  readonly bitDepth: number | null;
-  readonly bitrate: number | null;
-}> {}
-
-const sourceAudio = (sourceId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [variant] = yield* db
-      .select({
-        lossless: sourceVariant.lossless,
-        bitDepth: sourceVariant.bitDepth,
-        bitrate: sourceVariant.bitrate,
-      })
-      .from(sourceVariant)
-      .where(eq(sourceVariant.sourceId, sourceId))
-      .limit(1);
-    if (variant !== undefined) return new SourceAudio(variant);
-
-    const cached = yield* cachedProviderSource(sourceId);
-    return Option.match(cached, {
-      onNone: () => new SourceAudio({ lossless: false, bitDepth: null, bitrate: null }),
-      onSome: ({ source }) =>
-        new SourceAudio({ lossless: source.lossless, bitDepth: null, bitrate: source.bitrate }),
-    });
-  });
-
+// Provider sources often have no bit depth or bitrate
 const chooseDownload = (
   format: SourceFormat,
-  audio: SourceAudio,
+  audio: AudioQuality,
   quality: typeof DownloadQuality.Type,
   capabilities: PlaybackCapabilities,
 ) =>
@@ -163,7 +135,7 @@ const downloadSource = (
   capabilities: PlaybackCapabilities,
 ) =>
   Effect.gen(function* () {
-    const { playable, searchResult } = yield* findPlayableSource(sourceId, userId).pipe(
+    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId, userId).pipe(
       Effect.catchTag("PlaybackUnavailable", (error) =>
         Effect.fail(new DownloadUnavailable({ reason: error.reason })),
       ),
@@ -176,18 +148,13 @@ const downloadSource = (
           );
     if (Option.isNone(leaseDays)) return yield* new DownloadUnavailable({ reason: "not_allowed" });
 
-    const choice = yield* chooseDownload(
-      playable.format,
-      yield* sourceAudio(sourceId),
-      quality,
-      capabilities,
-    );
+    const choice = yield* chooseDownload(playable.format, audio, quality, capabilities);
     if (Option.isNone(choice)) {
       return yield* new DownloadUnavailable({ reason: "unsupported_format" });
     }
 
     if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
-    return { playable, choice: choice.value, leaseDays: leaseDays.value };
+    return { playable, audio, choice: choice.value, leaseDays: leaseDays.value };
   });
 
 class DownloadGrant extends Data.Class<{
@@ -223,7 +190,7 @@ export const prepareDownload = (
     const db = yield* Database;
     const key = yield* StreamKey;
     const principal = yield* CurrentPrincipal;
-    const { choice, leaseDays } = yield* downloadSource(
+    const { audio, choice, leaseDays } = yield* downloadSource(
       sourceId,
       principal.userId,
       quality,
@@ -260,11 +227,24 @@ export const prepareDownload = (
       expires: String(grant.expiresAt),
       signature: hex(new Uint8Array(signature)),
     });
+    const encode = choice.encode;
+    const flac = encode?.codec === "flac";
     return new DownloadPlan({
       format: choice.format,
-      bitrate: choice.encode?.bitrate ?? null,
+      bitrate: encode?.bitrate ?? null,
       path: `/download/${sourceId}?${search}`,
       leaseExpiresAt,
+      audio:
+        encode === null
+          ? audio
+          : new AudioQuality({
+              codec: encode.codec,
+              lossless: flac,
+              // Lossy encoders can resample
+              sampleRate: flac ? audio.sampleRate : null,
+              bitDepth: flac ? (encode.bitDepth ?? audio.bitDepth) : null,
+              bitrate: encode.bitrate,
+            }),
     });
   });
 

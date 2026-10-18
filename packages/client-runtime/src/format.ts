@@ -1,4 +1,4 @@
-import type { SourceSummary } from "@dyad/domain";
+import type { AudioFormat, AudioQuality, SourceSummary } from "@dyad/domain";
 
 export const formatTime = (milliseconds: number) => {
   const seconds = Math.floor(milliseconds / 1000);
@@ -27,6 +27,40 @@ export const sourceLabel = (source: SourceSummary) =>
   source.provider === "local"
     ? source.codec.toUpperCase()
     : (source.providerName ?? source.provider);
+
+const codecNames = new Map([
+  ["flac", "FLAC"],
+  ["alac", "ALAC"],
+  ["aac", "AAC"],
+  ["mp3", "MP3"],
+  ["opus", "Opus"],
+  ["vorbis", "Vorbis"],
+  ["wavpack", "WavPack"],
+]);
+
+const codecName = (codec: string) =>
+  codecNames.get(codec) ?? (codec.startsWith("pcm_") ? "PCM" : codec.toUpperCase());
+
+const audioLabel = (audio: AudioQuality) => {
+  const name = codecName(audio.codec);
+  if (!audio.lossless) {
+    return audio.bitrate === null ? name : `${name} ${Math.round(audio.bitrate / 1000)}`;
+  }
+  const kHz = audio.sampleRate === null ? null : audio.sampleRate / 1000;
+  if (audio.bitDepth !== null && kHz !== null) return `${name} ${audio.bitDepth}/${kHz}`;
+  if (kHz !== null) return `${name} ${kHz} kHz`;
+  return audio.bitDepth === null ? name : `${name} ${audio.bitDepth}-bit`;
+};
+
+/**
+ * For example `FLAC 24/96`, `AAC 256`, or `AAC 160 → FLAC` when the server transcodes `source` to
+ * `output`. It leaves out unknown values.
+ */
+export const qualityLabel = (source: AudioQuality | null, output: AudioFormat) => {
+  if (source === null) return codecName(output.codec);
+  const label = audioLabel(source);
+  return source.codec === output.codec ? label : `${label} → ${codecName(output.codec)}`;
+};
 
 export const titleOf = (track: { readonly title: string | null }) => track.title ?? "Unknown title";
 

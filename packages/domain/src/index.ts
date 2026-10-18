@@ -281,6 +281,17 @@ export class AudioFormat extends Schema.Class<AudioFormat>("AudioFormat")({
   codec: AudioCodec,
 }) {}
 
+/** What the server knows of some audio. `null` fields are unknown. */
+export class AudioQuality extends Schema.Class<AudioQuality>("AudioQuality")({
+  /** FFmpeg name, which can be a codec that no client decodes, for example `wavpack` */
+  codec: Schema.String,
+  lossless: Schema.Boolean,
+  sampleRate: Schema.NullOr(Schema.Int),
+  bitDepth: Schema.NullOr(Schema.Int),
+  /** In bit/s */
+  bitrate: Schema.NullOr(Schema.Int),
+}) {}
+
 export class PlaybackCapabilities extends Schema.Class<PlaybackCapabilities>(
   "PlaybackCapabilities",
 )({
@@ -308,6 +319,11 @@ export class PlaybackPlan extends Schema.Class<PlaybackPlan>("PlaybackPlan")({
    * position; MP3 and ADTS output can start some frames early.
    */
   path: Schema.String,
+  /**
+   * The audio of the source. When `format.codec` is another codec, the server transcodes it.
+   * `null` from older servers.
+   */
+  source: Schema.NullOr(AudioQuality).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 }) {}
 
 export class PlaybackUnavailable extends Schema.TaggedError<PlaybackUnavailable>()(
@@ -338,6 +354,8 @@ export class DownloadPlan extends Schema.Class<DownloadPlan>("DownloadPlan")({
   path: Schema.String,
   /** Server time when the device deletes the file unless a check-in renews it. `null`: no lease. */
   leaseExpiresAt: Schema.NullOr(Schema.Number),
+  /** The audio of the file. `null` from older servers. */
+  audio: Schema.NullOr(AudioQuality).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 }) {}
 
 export class DownloadLease extends Schema.Class<DownloadLease>("DownloadLease")({

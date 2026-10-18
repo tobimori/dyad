@@ -7,6 +7,7 @@ import {
   AudioCodec,
   AudioContainer,
   AudioFormat,
+  AudioQuality,
   CurrentPrincipal,
   DeviceId,
   OutputId,
@@ -194,7 +195,15 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
         },
         userId,
       );
-      return { playable, searchResult: cached };
+      const { codec, lossless, bitrate } = cached.value.source;
+      const audio = new AudioQuality({
+        codec,
+        lossless,
+        sampleRate: null,
+        bitDepth: null,
+        bitrate,
+      });
+      return { playable, audio, searchResult: cached };
     }
 
     const playable =
@@ -218,7 +227,9 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
             },
             userId,
           );
-    return { playable, searchResult: Option.none() };
+    const { codec, lossless, sampleRate, bitDepth, bitrate } = row.variant;
+    const audio = new AudioQuality({ codec, lossless, sampleRate, bitDepth, bitrate });
+    return { playable, audio, searchResult: Option.none() };
   });
 
 /**
@@ -231,11 +242,11 @@ const choosePlayableSource = (
   capabilities: PlaybackCapabilities,
 ) =>
   Effect.gen(function* () {
-    const { playable, searchResult } = yield* findPlayableSource(sourceId, userId);
+    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId, userId);
     const choice = yield* choosePlayback(playable.format, capabilities);
 
     if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
-    return { playable, choice };
+    return { playable, audio, choice };
   });
 
 /**
@@ -249,7 +260,7 @@ export const streamPlan = (
   capabilities: PlaybackCapabilities,
 ) =>
   Effect.gen(function* () {
-    const { choice } = yield* choosePlayableSource(sourceId, userId, capabilities);
+    const { audio, choice } = yield* choosePlayableSource(sourceId, userId, capabilities);
 
     const grant = new StreamGrant({
       sourceId,
@@ -270,6 +281,7 @@ export const streamPlan = (
       format: choice.format,
       path: `/stream/${sourceId}?${search}`,
       analysis: yield* sourceAnalysis(sourceId),
+      source: audio,
     });
   });
 

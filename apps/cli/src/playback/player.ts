@@ -1,5 +1,6 @@
-import { ServerConnection } from "@dyad/client-runtime";
+import { ServerConnection, qualityLabel } from "@dyad/client-runtime";
 import { AudioFormat, PlaybackCapabilities } from "@dyad/domain";
+import type { AudioQuality } from "@dyad/domain";
 import type { Audio, AudioStream } from "@opentui/core";
 import {
   Array as Arr,
@@ -127,6 +128,7 @@ export class Fetched extends Data.Class<{
   /** `null` for a downloaded file, which has all audio */
   readonly path: string | null;
   readonly format: Format;
+  readonly quality: string;
   readonly download: Download;
 }> {}
 
@@ -152,11 +154,16 @@ export const fetchSource = (serverUrl: string, sourceId: string) =>
     }
 
     const download = yield* startDownload(serverUrl, plan.path, decoder, 0);
-    return new Fetched({ path: plan.path, format: decoder, download });
+    return new Fetched({
+      path: plan.path,
+      format: decoder,
+      quality: qualityLabel(plan.source, plan.format),
+      download,
+    });
   });
 
 /** Reads a downloaded file into memory, like a complete response */
-export const fetchFile = (path: string, format: AudioFormat) =>
+export const fetchFile = (path: string, format: AudioFormat, audio: AudioQuality | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const decoder = decoderOf(format);
@@ -178,6 +185,7 @@ export const fetchFile = (path: string, format: AudioFormat) =>
     return new Fetched({
       path: null,
       format: decoder,
+      quality: qualityLabel(audio, format),
       download: new Download({ startMs: 0, received, scope, tap }),
     });
   });
@@ -196,6 +204,7 @@ export class Track extends Data.Class<{
   readonly ended: Effect.Effect<void, PlaybackError>;
   /** The response that plays now, for the visualizer */
   readonly tap: () => AudioTap;
+  readonly quality: string;
 }> {}
 
 /** Starts at `startMs`. Closing the scope stops the stream and its own requests, not `fetched`. */
@@ -326,5 +335,6 @@ export const openTrack = (audio: Audio, serverUrl: string, fetched: Fetched, sta
         ),
       ended: Deferred.await(ended),
       tap: () => current.tap,
+      quality: fetched.quality,
     });
   });

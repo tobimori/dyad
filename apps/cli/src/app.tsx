@@ -775,6 +775,7 @@ export function App(props: {
           durationMs={player.durationMs()}
           volume={player.volume}
           muted={player.muted}
+          quality={player.quality()}
           shuffle={player.shuffle}
           repeat={player.repeat}
           message={

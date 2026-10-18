@@ -223,6 +223,8 @@ export function usePlayer(props: {
     durationMs,
     /** `null` while the audio plays on another device */
     tap: () => (current === undefined ? null : (props.engine?.tap(current.id) ?? null)),
+    /** `null` while the audio plays on another device */
+    quality: () => (current === undefined ? null : (props.engine?.quality(current.id) ?? null)),
     playList: (
       sources: ReadonlyArray<SourceSummary>,
       index: number,
