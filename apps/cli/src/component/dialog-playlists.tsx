@@ -1,3 +1,4 @@
+import { providerName } from "@dyad/client-runtime";
 import type { Replica, ServerAtoms } from "@dyad/client-runtime";
 import { PlaylistName } from "@dyad/domain";
 import type { PlaylistSummary, RecordingId } from "@dyad/domain";
@@ -14,6 +15,7 @@ import { Dialog, useDialog } from "../ui/dialog.tsx";
 import { SelectList, SelectOption } from "../ui/select-list.tsx";
 import { useToast } from "../ui/toast.tsx";
 import { Action } from "./dialog-actions.tsx";
+import { useLibraryStatus } from "./library-notice.tsx";
 
 const dialogWidth = 56;
 const newPlaylist = "new";
@@ -99,9 +101,7 @@ function PickerDialog(props: {
 }) {
   const dialog = useDialog();
   const result = useAtomValue(props.atoms.playlists);
-  const playlists = AsyncResult.isSuccess(result)
-    ? result.value.filter((playlist) => !playlist.readOnly)
-    : [];
+  const playlists = AsyncResult.isSuccess(result) ? result.value : [];
   const options = [
     new SelectOption({ value: newPlaylist, title: "New playlist…", detail: "" }),
     ...playlists.map(
@@ -143,6 +143,7 @@ export function usePlaylistActions(props: {
 }) {
   const dialog = useDialog();
   const toast = useToast();
+  const { names } = useLibraryStatus(props.atoms);
   const edits = props.edits;
 
   const create = (
@@ -194,39 +195,55 @@ export function usePlaylistActions(props: {
             />,
           ),
       }),
-    /** Rename and delete. Imported playlists have none. */
-    manage: (playlist: PlaylistSummary, onDelete: () => void) =>
-      playlist.readOnly
-        ? []
-        : [
-            new Action({
-              command: commands.renamePlaylist,
-              label: "Rename the playlist…",
-              run: () =>
-                dialog.push(
-                  <NameDialog
-                    title="Rename the playlist"
-                    initial={playlist.name}
-                    onSubmit={(name) => props.run(edits.rename(playlist.id, name))}
-                  />,
-                ),
-            }),
-            new Action({
-              command: commands.deletePlaylist,
-              label: "Delete the playlist…",
-              run: () =>
-                dialog.push(
-                  <ConfirmDialog
-                    title={`Delete ${playlist.name}?`}
-                    confirm="Delete"
-                    onConfirm={() => {
-                      onDelete();
-                      props.run(edits.delete(playlist.id));
-                      toast("notice", `Deleted ${playlist.name}`);
-                    }}
-                  />,
-                ),
-            }),
-          ],
+    /** Rename, unlink and delete */
+    manage: (playlist: PlaylistSummary, onDelete: () => void) => {
+      const provider = playlist.link === null ? null : providerName(names, playlist.link.provider);
+      return [
+        new Action({
+          command: commands.renamePlaylist,
+          label: "Rename the playlist…",
+          run: () =>
+            dialog.push(
+              <NameDialog
+                title="Rename the playlist"
+                initial={playlist.name}
+                onSubmit={(name) => props.run(edits.rename(playlist.id, name))}
+              />,
+            ),
+        }),
+        ...(provider === null
+          ? []
+          : [
+              new Action({
+                command: commands.unlinkPlaylist,
+                label: `Unlink from ${provider}…`,
+                run: () =>
+                  dialog.push(
+                    <ConfirmDialog
+                      title={`Stop the sync with ${provider}?`}
+                      confirm="Unlink, keep the playlist"
+                      onConfirm={() => props.run(edits.unlink(playlist.id))}
+                    />,
+                  ),
+              }),
+            ]),
+        new Action({
+          command: commands.deletePlaylist,
+          label: "Delete the playlist…",
+          run: () =>
+            dialog.push(
+              <ConfirmDialog
+                title={`Delete ${playlist.name}?`}
+                confirm="Delete"
+                onConfirm={() => {
+                  onDelete();
+                  props.run(edits.delete(playlist.id));
+                  toast("notice", `Deleted ${playlist.name}`);
+                }}
+              />,
+            ),
+        }),
+      ];
+    },
   };
 }

@@ -10,7 +10,7 @@ import {
 } from "./primitives.ts";
 
 /** A client and a server sync only when they have the same version */
-export const syncProtocolVersion = 2;
+export const syncProtocolVersion = 3;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -46,12 +46,23 @@ export const FieldClocks = Schema.NullOr(Schema.Record(Schema.String, HybridLogi
   Schema.withDecodingDefaultKey(Effect.succeed(null)),
 );
 
+/**
+ * The provider playlist that the server syncs with a playlist. `import`: the server applies the
+ * provider's changes and keeps the edits in Dyad.
+ */
+export class PlaylistLink extends Schema.Class<PlaylistLink>("PlaylistLink")({
+  provider: Schema.String,
+  remoteId: Schema.NullOr(Schema.String),
+  direction: Schema.Literal("import"),
+}) {}
+
 export class PlaylistRow extends Schema.Class<PlaylistRow>("PlaylistRow")({
   table: Schema.Literal("playlist"),
   id: Uuid,
   ownerId: UserId,
   name: Schema.String,
   origin: Schema.NullOr(Schema.String),
+  link: Schema.NullOr(PlaylistLink).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   createdAt: Schema.Int,
   hlc: HybridLogicalClock,
   fieldHlc: FieldClocks,
@@ -264,7 +275,11 @@ export class PlaylistCreate extends Schema.Class<PlaylistCreate>("PlaylistCreate
   schemaVersion: Schema.Literal(1),
   row: PlaylistRow.check(
     Schema.makeFilter((row) =>
-      Schema.is(PlaylistName)(row.name) && row.origin === null && !row.deleted && !row.fieldHlc
+      Schema.is(PlaylistName)(row.name) &&
+      row.origin === null &&
+      row.link === null &&
+      !row.deleted &&
+      !row.fieldHlc
         ? undefined
         : "Expected a new named playlist without an origin",
     ),
@@ -278,6 +293,8 @@ export class PlaylistPatch extends Schema.Class<PlaylistPatch>("PlaylistPatch")(
   id: Uuid,
   hlc: HybridLogicalClock,
   name: Schema.optionalKey(PlaylistName),
+  /** Unlinks the provider playlist. The playlist stays. */
+  link: Schema.optionalKey(Schema.Null),
   deleted: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 

@@ -3,6 +3,7 @@ import {
   ArtistRef,
   LibraryEntry,
   PlaylistEntry,
+  PlaylistLink,
   PlaylistSummary,
   RecordingId,
 } from "./index.ts";
@@ -27,17 +28,19 @@ const accountPrefix = "account:";
 /** The origin of library items and playlists from the user's linked account */
 export const accountOrigin = (provider: string) => `${accountPrefix}${provider}`;
 
-/** An imported playlist has the origin `account:<provider>` and changes only in the provider's app */
 export const playlistSummary = (
-  row: { readonly id: string; readonly name: string; readonly origin: string | null },
+  row: {
+    readonly id: string;
+    readonly name: string;
+    readonly link: typeof PlaylistLink.Encoded | null;
+  },
   entryCount: number,
 ) =>
   new PlaylistSummary({
     id: row.id,
     name: row.name,
-    provider: row.origin?.startsWith(accountPrefix) ? row.origin.slice(accountPrefix.length) : null,
     entryCount,
-    readOnly: row.origin !== null,
+    link: row.link === null ? null : new PlaylistLink(row.link),
   });
 
 /**

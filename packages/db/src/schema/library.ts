@@ -41,8 +41,14 @@ export const playlist = sqliteTable(
     id: text("id").primaryKey(),
     ownerId: text("owner_id").notNull(),
     name: text("name").notNull(),
-    // `account:<provider>`: a read-only copy of a playlist of the owner's linked account
+    // `account:<provider>` for a playlist that the import added
     origin: text("origin"),
+    // The provider playlist that the server syncs with this playlist, if any
+    link: text("link", { mode: "json" }).$type<{
+      readonly provider: string;
+      readonly remoteId: string | null;
+      readonly direction: "import";
+    }>(),
     createdAt: integer("created_at").notNull(),
     hlc: text("hlc").notNull(),
     fieldHlc: fieldHlc(),

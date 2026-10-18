@@ -301,7 +301,7 @@ export const syncPull = (request: SyncPullRequest) =>
     );
   });
 
-const readRow = (table: SyncTable, id: string) =>
+export const readRow = (table: SyncTable, id: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const source = syncSources[table];
@@ -310,7 +310,7 @@ const readRow = (table: SyncTable, id: string) =>
     return yield* Schema.decodeUnknownEffect(SyncRow)({ ...row, table }).pipe(Effect.orDie);
   });
 
-const writeRow = (row: SyncRow, changeSeq: number) =>
+export const writeRow = (row: SyncRow, changeSeq: number) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const source = syncSources[row.table];
@@ -363,7 +363,7 @@ const withHlc = (change: SyncChange, hlc: HybridLogicalClock) =>
     }),
   );
 
-// Users edit only their own playlists. Imported playlists change only in the provider's app.
+// Users edit only their own playlists
 const checkChange = (
   change: SyncChange,
   current: SyncRow | undefined,
@@ -372,7 +372,7 @@ const checkChange = (
 ) => {
   const editable = (row: SyncRow | undefined) => {
     if (row?.table !== "playlist" || row.deleted) return "not_found" as const;
-    return row.ownerId === principal.userId && row.origin === null ? null : ("forbidden" as const);
+    return row.ownerId === principal.userId ? null : ("forbidden" as const);
   };
 
   return Match.value(change).pipe(

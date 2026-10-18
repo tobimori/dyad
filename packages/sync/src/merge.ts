@@ -1,8 +1,8 @@
 import { PlayEventRow, PlaylistEntryRow, PlaylistRow } from "@dyad/domain";
-import type { HybridLogicalClock, SyncChange, SyncRow } from "@dyad/domain";
+import type { HybridLogicalClock, PlaylistLink, SyncChange, SyncRow } from "@dyad/domain";
 import { Match, Option } from "effect";
 
-const playlistFields = ["name", "deleted"] as const;
+const playlistFields = ["name", "link", "deleted"] as const;
 const entryFields = ["position", "deleted"] as const;
 
 const clockOf = (
@@ -36,7 +36,9 @@ const mergeFields = <R extends PlaylistRow | PlaylistEntryRow, F extends keyof R
       : Object.fromEntries(later.map((winner) => [winner.field, winner.clock]));
 
   const changed =
-    winners.some((winner) => winner.value !== current[winner.field]) ||
+    winners.some(
+      (winner) => JSON.stringify(winner.value) !== JSON.stringify(current[winner.field]),
+    ) ||
     hlc !== current.hlc ||
     JSON.stringify(fieldHlc) !== JSON.stringify(current.fieldHlc);
   if (!changed) return Option.none<SyncRow>();
@@ -79,7 +81,12 @@ export const mergeRow = (current: SyncRow | undefined, incoming: SyncRow) =>
 /** Sets the given fields with `hlc`, like a write of only these fields on another replica */
 export const patchRow = (
   current: PlaylistRow | PlaylistEntryRow,
-  patch: { readonly name?: string; readonly position?: string; readonly deleted?: boolean },
+  patch: {
+    readonly name?: string;
+    readonly link?: PlaylistLink | null;
+    readonly position?: string;
+    readonly deleted?: boolean;
+  },
   hlc: HybridLogicalClock,
 ) => {
   const set = Object.entries(patch).flatMap(([field, value]) =>
@@ -97,6 +104,7 @@ export const patchRow = (
         new PlaylistRow({
           ...current,
           name: patch.name ?? current.name,
+          link: patch.link === undefined ? current.link : patch.link,
           deleted,
           hlc,
           fieldHlc: clocks(playlistFields),

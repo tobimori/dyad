@@ -86,6 +86,7 @@ export const commands = {
   newPlaylist: command("playlist.new", "New playlist", "Playlist", ["c"], "new"),
   renamePlaylist: command("playlist.rename", "Rename the playlist", "Playlist", ["e"], "rename"),
   deletePlaylist: command("playlist.delete", "Delete the playlist", "Playlist", []),
+  unlinkPlaylist: command("playlist.unlink", "Unlink from the provider", "Playlist", []),
   removeEntry: command(
     "playlist.removeEntry",
     "Remove from the playlist",

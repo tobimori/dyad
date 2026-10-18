@@ -52,10 +52,8 @@ function PlaylistHeader(props: {
     ? result.value.find((candidate) => candidate.id === props.route.id)
     : undefined;
 
-  const provider =
-    playlist?.provider === undefined || playlist.provider === null
-      ? null
-      : providerName(names, playlist.provider);
+  const link = playlist?.link ?? null;
+  const provider = link === null ? null : providerName(names, link.provider);
   const totalMs = props.entries.reduce((total, entry) => total + (entry.durationMs ?? 0), 0);
   const details = [
     provider === null ? "Playlist" : `${provider} playlist`,
@@ -72,7 +70,7 @@ function PlaylistHeader(props: {
         {details.filter((detail) => detail !== "").join(" · ")}
       </text>
       <text wrapMode="none" fg={theme.faint}>
-        {playlist?.readOnly === true && provider !== null ? `Edit in ${provider}` : ""}
+        {provider === null ? "" : `Gets the changes from ${provider}. Edits here stay in Dyad.`}
       </text>
     </box>
   );

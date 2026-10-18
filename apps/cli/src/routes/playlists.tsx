@@ -30,7 +30,7 @@ export const playlists = new Section({
               key: playlist.id,
               playlist,
               providerName:
-                playlist.provider === null ? null : providerName(names, playlist.provider),
+                playlist.link === null ? null : providerName(names, playlist.link.provider),
             }),
         ),
       [result, names],

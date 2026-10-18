@@ -9,7 +9,13 @@ import {
   recording,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, LibrarySyncStatus, UserId, accountOrigin } from "@dyad/domain";
+import {
+  CurrentPrincipal,
+  LibrarySyncStatus,
+  PlaylistLink,
+  UserId,
+  accountOrigin,
+} from "@dyad/domain";
 import type {
   Credentials,
   LibraryError,
@@ -27,12 +33,13 @@ import { cacheProviderSources } from "./provider-cache.ts";
 import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
 import { touchGroups } from "./sync-counter.ts";
+import { readRow } from "./sync.ts";
 import {
-  mirrorPlaylist,
-  removeOrigin,
-  removePlaylists,
-  replaceEntries,
+  addLinkedPlaylist,
+  mergeRemoteEntries,
+  patchPlaylist,
   setMembership,
+  unlinkPlaylists,
 } from "./user-library.ts";
 
 const jobKind = "provider.library";
@@ -273,10 +280,15 @@ const importSongs = (account: LinkedAccount, library: ProviderLibrary, before: L
     );
   });
 
+/**
+ * Each remote playlist has a Dyad playlist with a link to it. A read applies only the provider's
+ * changes since the last sync, so that the edits in Dyad stay. A removed remote playlist unlinks
+ * its playlist.
+ */
 const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const origin = accountOrigin(account.provider);
+    const userId = UserId.make(account.userId);
     const list = yield* library.playlists(account.credentials);
 
     const known = new Map(
@@ -291,67 +303,126 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
         )).map((row) => [row.remoteId, row]),
     );
 
-    const playlistIds = yield* Effect.forEach(list.items, (remote) =>
-      Effect.gen(function* () {
-        const playlistId = yield* uuidV5(
-          `playlist:${account.userId}:${account.provider}:${remote.remoteId}`,
-        );
-        const now = yield* Clock.currentTimeMillis;
-        const state = known.get(remote.remoteId);
-        const readDue =
-          remote.version === null ||
-          state?.version !== remote.version ||
-          state.lastCompleteAt === null ||
-          now - state.lastCompleteAt >= fullReadIntervalMs;
-
-        if (!readDue) {
-          yield* writeIfLinked(
-            account,
-            mirrorPlaylist(account.userId, origin, playlistId, remote.name),
+    yield* Effect.forEach(
+      list.items,
+      (remote) =>
+        Effect.gen(function* () {
+          const playlistId = yield* uuidV5(
+            `playlist:${account.userId}:${account.provider}:${remote.remoteId}`,
           );
-          return playlistId;
-        }
+          const now = yield* Clock.currentTimeMillis;
+          const link = new PlaylistLink({
+            provider: account.provider,
+            remoteId: remote.remoteId,
+            direction: "import",
+          });
 
-        // An incomplete read changes no entries, because a part of an ordered list has no order
-        const songs = yield* library.playlistSongs(account.credentials, remote.remoteId);
-        const changedEntries = yield* writeIfLinked(
-          account,
-          Effect.gen(function* () {
-            yield* mirrorPlaylist(account.userId, origin, playlistId, remote.name);
+          // A playlist that the user unlinked or deleted stays as it is. After a new link of the
+          // account, the provider's state is the base, so that nothing is added twice.
+          const linked = yield* writeIfLinked(
+            account,
+            Effect.gen(function* () {
+              const row = yield* readRow("playlist", playlistId);
+              const state = known.get(remote.remoteId);
+              if (row === undefined) {
+                yield* addLinkedPlaylist(
+                  userId,
+                  playlistId,
+                  remote.name,
+                  accountOrigin(account.provider),
+                  link,
+                );
+                yield* writeRemotePlaylist(account, remote.remoteId, {
+                  playlistId,
+                  snapshot: [],
+                  name: remote.name,
+                });
+                return true;
+              }
+              if (row.table !== "playlist" || row.deleted) return false;
+              if (row.link === null && state === undefined) {
+                yield* patchPlaylist(playlistId, { link });
+                yield* writeRemotePlaylist(account, remote.remoteId, {
+                  playlistId,
+                  snapshot: null,
+                  name: remote.name,
+                });
+                return true;
+              }
+              if (row.link?.provider !== link.provider || row.link.remoteId !== link.remoteId) {
+                return false;
+              }
 
-            const incompleteReason = songs.incompleteReason;
-            if (incompleteReason !== null) {
+              if (state?.name !== remote.name) {
+                yield* patchPlaylist(playlistId, { name: remote.name });
+                yield* writeRemotePlaylist(account, remote.remoteId, {
+                  playlistId,
+                  name: remote.name,
+                });
+              }
+              return true;
+            }),
+          );
+          const state = known.get(remote.remoteId);
+          const readDue =
+            linked &&
+            (remote.version === null ||
+              state?.version !== remote.version ||
+              state.lastCompleteAt === null ||
+              now - state.lastCompleteAt >= fullReadIntervalMs);
+          if (!readDue) return;
+
+          // An incomplete read changes no entries, because a part of an ordered list has no order
+          const songs = yield* library.playlistSongs(account.credentials, remote.remoteId);
+          const changedEntries = yield* writeIfLinked(
+            account,
+            Effect.gen(function* () {
+              const incompleteReason = songs.incompleteReason;
+              if (incompleteReason !== null) {
+                yield* writeRemotePlaylist(account, remote.remoteId, {
+                  playlistId,
+                  incompleteReason,
+                });
+                return 0;
+              }
+
+              const [current] = yield* db
+                .select({ snapshot: libraryRemotePlaylist.snapshot })
+                .from(libraryRemotePlaylist)
+                .where(
+                  and(
+                    eq(libraryRemotePlaylist.userId, account.userId),
+                    eq(libraryRemotePlaylist.provider, account.provider),
+                    eq(libraryRemotePlaylist.remoteId, remote.remoteId),
+                  ),
+                );
+              const recordingIds = yield* writeSongs(account, songs.items);
+              const changed = yield* mergeRemoteEntries(
+                playlistId,
+                current?.snapshot ?? null,
+                recordingIds,
+              );
               yield* writeRemotePlaylist(account, remote.remoteId, {
                 playlistId,
                 incompleteReason,
+                version: remote.version,
+                lastCompleteAt: now,
+                snapshot: recordingIds,
               });
-              return 0;
-            }
+              return changed;
+            }),
+          );
 
-            const changed = yield* replaceEntries(
-              playlistId,
-              yield* writeSongs(account, songs.items),
-            );
-            yield* writeRemotePlaylist(account, remote.remoteId, {
-              playlistId,
-              incompleteReason,
-              version: remote.version,
-              lastCompleteAt: now,
-            });
-            return changed;
-          }),
-        );
-
-        yield* Effect.logInfo("Library playlist imported").pipe(
-          Effect.annotateLogs({
-            provider: account.provider,
-            songs: songs.items.length,
-            incompleteReason: songs.incompleteReason,
-            changedEntries,
-          }),
-        );
-        return playlistId;
-      }),
+          yield* Effect.logInfo("Library playlist imported").pipe(
+            Effect.annotateLogs({
+              provider: account.provider,
+              songs: songs.items.length,
+              incompleteReason: songs.incompleteReason,
+              changedEntries,
+            }),
+          );
+        }),
+      { discard: true },
     );
 
     if (list.incompleteReason !== null) return;
@@ -359,20 +430,25 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
     yield* writeIfLinked(
       account,
       Effect.gen(function* () {
-        const removed = yield* removePlaylists(account.userId, origin, new Set(playlistIds));
+        const remoteIds = list.items.map((remote) => remote.remoteId);
+        const unlinked = yield* unlinkPlaylists(
+          account.userId,
+          account.provider,
+          new Set(remoteIds),
+        );
         yield* db
           .delete(libraryRemotePlaylist)
           .where(
             and(
               eq(libraryRemotePlaylist.userId, account.userId),
               eq(libraryRemotePlaylist.provider, account.provider),
-              notInArray(libraryRemotePlaylist.playlistId, playlistIds),
+              notInArray(libraryRemotePlaylist.remoteId, remoteIds),
             ),
           );
 
-        if (removed > 0) {
-          yield* Effect.logInfo("Library playlists removed").pipe(
-            Effect.annotateLogs({ provider: account.provider, removed }),
+        if (unlinked.length > 0) {
+          yield* Effect.logInfo("Library playlists unlinked").pipe(
+            Effect.annotateLogs({ provider: account.provider, unlinked: unlinked.length }),
           );
         }
       }),
@@ -494,13 +570,17 @@ export const queueLibrarySync = (userId: string, provider: string) =>
     yield* jobs.enqueue(jobKind, jobKey(userId, provider), { userId, provider });
   });
 
-/** Removes the imported library, its state and its job. Run it in the unlink transaction. */
+/**
+ * Removes the imported library, its state and its job, and unlinks the playlists, which stay. Run
+ * it in the unlink transaction.
+ */
 export const forgetLibrary = (userId: string, provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const jobs = yield* Jobs;
 
-    yield* removeOrigin(userId, accountOrigin(provider));
+    yield* setMembership(userId, accountOrigin(provider), new Set(), true);
+    yield* unlinkPlaylists(userId, provider, new Set());
     yield* db
       .delete(librarySyncState)
       .where(and(eq(librarySyncState.userId, userId), eq(librarySyncState.provider, provider)));

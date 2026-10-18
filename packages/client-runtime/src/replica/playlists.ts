@@ -91,7 +91,10 @@ export const playlistEdits = <E>(
   ) => Effect.Effect<A>,
   owner: Effect.Effect<UserId, E>,
 ) => {
-  const patchPlaylist = (id: string, fields: { readonly name?: string; readonly deleted?: true }) =>
+  const patchPlaylist = (
+    id: string,
+    fields: { readonly name?: string; readonly link?: null; readonly deleted?: true },
+  ) =>
     mutate((next) =>
       Effect.map(next, (hlc) => [
         undefined,
@@ -126,6 +129,7 @@ export const playlistEdits = <E>(
               ownerId,
               name,
               origin: null,
+              link: null,
               createdAt: yield* Clock.currentTimeMillis,
               hlc: yield* next,
               fieldHlc: null,
@@ -138,6 +142,8 @@ export const playlistEdits = <E>(
       }),
     rename: (id: string, name: string) => patchPlaylist(id, { name }),
     delete: (id: string) => patchPlaylist(id, { deleted: true }),
+    /** The playlist stays, and the server stops its sync with the provider */
+    unlink: (id: string) => patchPlaylist(id, { link: null }),
     /** Adds the recordings at the end. A playlist can have a recording more than once. */
     add: (
       playlistId: string,

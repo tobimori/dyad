@@ -54,5 +54,12 @@
       "ALTER TABLE `playlist` ADD `field_hlc` text;",
       "\nALTER TABLE `playlist_entry` ADD `field_hlc` text;"
     ]
+  },
+  {
+    "name": "20261018151136_link_provider_playlists",
+    "folderMillis": 1792336296000,
+    "hash": "89b0952e005edec7ed5164f255fdf050630d3f12dfd586355609c5ac14ae348b",
+    "bps": true,
+    "sql": ["ALTER TABLE `playlist` ADD `link` text;"]
   }
 ]

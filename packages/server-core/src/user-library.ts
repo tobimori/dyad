@@ -7,20 +7,30 @@ import {
   source,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, PlaylistNotFound, libraryView, playlistSummary } from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
-import { HlcClock } from "@dyad/sync";
-import { and, asc, count, eq, inArray, or } from "drizzle-orm";
-import { Array as Arr, Clock, Effect } from "effect";
-import { generateNKeysBetween } from "fractional-indexing";
+import {
+  CurrentPrincipal,
+  PlaylistEntryRow,
+  PlaylistNotFound,
+  PlaylistRow,
+  RecordingId,
+  libraryView,
+  playlistSummary,
+} from "@dyad/domain";
+import type { PlaylistLink, UserId } from "@dyad/domain";
+import { HlcClock, patchRow } from "@dyad/sync";
+import { and, asc, count, eq, inArray, or, sql } from "drizzle-orm";
+import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
+import { generateKeyBetween } from "fractional-indexing";
 
 import { uuidV5 } from "./ids.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
+import { readRow, writeRow } from "./sync.ts";
 
 /**
- * All writes of library items and playlists go through this module, so that each changed row gets
- * an HLC and a `change_seq`. With `complete`, the other items of `origin` are removed.
+ * The server's own writes of library items and playlists go through this module, so that each
+ * changed row gets an HLC and a `change_seq`. With `complete`, the other items of `origin` are
+ * removed.
  */
 export const setMembership = (
   userId: string,
@@ -72,134 +82,218 @@ export const setMembership = (
     return { added: added.length, removed: removed.length };
   });
 
-/** Adds or renames a playlist that `origin` imports. Returns whether the row changed. */
-export const mirrorPlaylist = (ownerId: string, origin: string, id: string, name: string) =>
+/** Adds a playlist of a remote playlist, linked to it */
+export const addLinkedPlaylist = (
+  ownerId: UserId,
+  id: string,
+  name: string,
+  origin: string,
+  link: PlaylistLink,
+) =>
   Effect.gen(function* () {
-    const db = yield* Database;
     const clock = yield* HlcClock;
-
-    const [row] = yield* db.select().from(playlist).where(eq(playlist.id, id));
-    if (row !== undefined && !row.deleted && row.name === name) return false;
-
-    const change = {
+    const row = new PlaylistRow({
+      table: "playlist",
+      id,
+      ownerId,
       name,
+      origin,
+      link,
+      createdAt: yield* Clock.currentTimeMillis,
       hlc: yield* clock.next,
+      fieldHlc: null,
       deleted: false,
-      changeSeq: yield* nextChangeSeq,
-    };
-    yield* db
-      .insert(playlist)
-      .values({ id, ownerId, origin, createdAt: yield* Clock.currentTimeMillis, ...change })
-      .onConflictDoUpdate({ target: playlist.id, set: change });
+    });
+    yield* writeRow(row, yield* nextChangeSeq);
+  });
+
+/** Sets the fields of a playlist with a new HLC. Returns whether the row changed. */
+export const patchPlaylist = (
+  id: string,
+  fields: { readonly name?: string; readonly link?: PlaylistLink | null },
+) =>
+  Effect.gen(function* () {
+    const clock = yield* HlcClock;
+    const current = yield* readRow("playlist", id);
+    if (current?.table !== "playlist") return false;
+
+    const next = patchRow(current, fields, yield* clock.next);
+    if (Option.isNone(next)) return false;
+    yield* writeRow(next.value, yield* nextChangeSeq);
     return true;
   });
 
+/** The canonical recording of each of `recordingIds` */
+export const rootsOf = (recordingIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const rows = yield* db
+      .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
+      .from(recording)
+      .where(inArray(recording.id, [...new Set(recordingIds)]));
+    const roots = new Map(rows.map((row) => [row.id, row.mergedIntoId ?? row.id]));
+    return (id: string) => roots.get(id) ?? id;
+  });
+
+// The `n`th occurrence of each key, so that a list can have a recording more than once
+const occurrences = (keys: ReadonlyArray<string>) => {
+  const counts = new Map<string, number>();
+  return keys.map((key) => {
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    return `${key}#${n}`;
+  });
+};
+
 /**
- * Entry IDs come from the recording and its occurrence, so a reorder changes only positions. The
- * first keys of `generateNKeysBetween` do not depend on the count, so appended entries keep them.
+ * Applies the changes of a remote playlist since `base` to the entries, so that the edits in Dyad
+ * stay. `null`: the base is not known, so the provider has no changes. Entries match by canonical
+ * recording and occurrence. Returns the number of changed entries.
  */
-export const replaceEntries = (playlistId: string, recordingIds: ReadonlyArray<string>) =>
+export const mergeRemoteEntries = (
+  playlistId: string,
+  base: ReadonlyArray<string> | null,
+  remote: ReadonlyArray<string>,
+) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const clock = yield* HlcClock;
     const now = yield* Clock.currentTimeMillis;
 
-    const rows = yield* db
-      .select()
-      .from(playlistEntry)
-      .where(eq(playlistEntry.playlistId, playlistId));
-    const known = new Map(rows.map((row) => [row.id, row]));
-
-    const occurrences = new Map<string, number>();
-    const positions = generateNKeysBetween(null, null, recordingIds.length);
-    const entries = yield* Effect.forEach(
-      Arr.zip(recordingIds, positions),
-      ([recordingId, position]) => {
-        const occurrence = (occurrences.get(recordingId) ?? 0) + 1;
-        occurrences.set(recordingId, occurrence);
-
-        return uuidV5(`playlist_entry:${playlistId}:${recordingId}:${occurrence}`).pipe(
-          Effect.map((id) => ({ id, recordingId, position })),
-        );
-      },
-    );
-
-    const changed = entries.filter((entry) => {
-      const row = known.get(entry.id);
-      return row === undefined || row.deleted || row.position !== entry.position;
-    });
-    const kept = new Set(entries.map((entry) => entry.id));
-    const removed = rows.filter((row) => !row.deleted && !kept.has(row.id));
-    if (changed.length === 0 && removed.length === 0) return 0;
-
-    const changeSeq = yield* nextChangeSeq;
-    yield* Effect.forEach(
-      changed,
-      (entry) =>
-        Effect.gen(function* () {
-          const hlc = yield* clock.next;
-          if (known.get(entry.id)?.deleted === false) {
-            return yield* db
-              .update(playlistEntry)
-              .set({ position: entry.position, hlc, changeSeq })
-              .where(eq(playlistEntry.id, entry.id));
-          }
-
-          const row = { ...entry, playlistId, addedAt: now, hlc, deleted: false, changeSeq };
-          yield* db
-            .insert(playlistEntry)
-            .values(row)
-            .onConflictDoUpdate({ target: playlistEntry.id, set: row });
-        }),
-      { discard: true },
-    );
-
-    if (removed.length > 0) {
+    const stored = yield* Effect.forEach(
       yield* db
-        .update(playlistEntry)
-        .set({ deleted: true, hlc: yield* clock.next, changeSeq })
-        .where(
-          inArray(
-            playlistEntry.id,
-            removed.map((row) => row.id),
-          ),
-        );
+        .select()
+        .from(playlistEntry)
+        .where(eq(playlistEntry.playlistId, playlistId))
+        .orderBy(asc(playlistEntry.position), asc(playlistEntry.id)),
+      (row) =>
+        Schema.decodeUnknownEffect(PlaylistEntryRow)({ ...row, table: "playlist_entry" }).pipe(
+          Effect.orDie,
+        ),
+    );
+    const live = stored.filter((row) => !row.deleted);
+
+    const keyOf = yield* rootsOf([
+      ...live.map((row) => row.recordingId),
+      ...remote,
+      ...(base ?? []),
+    ]);
+
+    const remoteTokens = occurrences(remote.map(keyOf));
+    const baseTokens = base === null ? remoteTokens : occurrences(base.map(keyOf));
+    const inRemote = new Set(remoteTokens);
+    const inBase = new Set(baseTokens);
+
+    // The provider removed the later occurrences of a recording: remove as many from the end
+    const removals = new Map<string, number>();
+    for (const token of baseTokens.filter((token) => !inRemote.has(token))) {
+      const key = token.slice(0, token.lastIndexOf("#"));
+      removals.set(key, (removals.get(key) ?? 0) + 1);
+    }
+    const removed = new Set<string>();
+    for (const row of live.toReversed()) {
+      const key = keyOf(row.recordingId);
+      const count = removals.get(key) ?? 0;
+      if (count === 0) continue;
+      removals.set(key, count - 1);
+      removed.add(row.id);
+    }
+    const kept = live.filter((row) => !removed.has(row.id));
+    const entryOf = new Map(Arr.zip(occurrences(kept.map((row) => keyOf(row.recordingId))), kept));
+    const positions = new Map(kept.map((row) => [row.id, row.position]));
+
+    // A changed order of the common entries on the provider moves them within their own places
+    const common = remoteTokens.filter((token) => inBase.has(token) && entryOf.has(token));
+    const baseCommon = baseTokens.filter((token) => inRemote.has(token) && entryOf.has(token));
+    if (common.some((token, index) => token !== baseCommon[index])) {
+      const moved = new Set(common.map((token) => entryOf.get(token)));
+      const slots = kept.filter((row) => moved.has(row)).map((row) => row.position);
+      for (const [index, token] of common.entries()) {
+        const row = entryOf.get(token);
+        const slot = slots[index];
+        if (row !== undefined && slot !== undefined) positions.set(row.id, slot);
+      }
     }
 
-    return changed.length + removed.length;
+    // An added entry goes after the entry of the remote song before it
+    const ids = new Set(stored.map((row) => row.id));
+    const added: Array<PlaylistEntryRow> = [];
+    let previous: string | null = null;
+    for (const [index, token] of remoteTokens.entries()) {
+      const recordingId = remote[index] ?? "";
+      if (inBase.has(token)) {
+        const row = entryOf.get(token);
+        if (row !== undefined) previous = positions.get(row.id) ?? previous;
+        continue;
+      }
+
+      const following = [...positions.values(), ...added.map((row) => row.position)]
+        .filter((position) => previous === null || position > previous)
+        .toSorted()[0];
+      const position = generateKeyBetween(previous, following ?? null);
+      let n = 1;
+      let id = yield* uuidV5(`playlist_entry:${playlistId}:${recordingId}:${n}`);
+      while (ids.has(id)) {
+        n += 1;
+        id = yield* uuidV5(`playlist_entry:${playlistId}:${recordingId}:${n}`);
+      }
+      ids.add(id);
+      added.push(
+        new PlaylistEntryRow({
+          table: "playlist_entry",
+          id,
+          playlistId,
+          recordingId: RecordingId.make(recordingId),
+          position,
+          addedAt: now,
+          hlc: yield* clock.next,
+          fieldHlc: null,
+          deleted: false,
+        }),
+      );
+      previous = position;
+    }
+
+    const patched = yield* Effect.forEach(live, (row) =>
+      Effect.gen(function* () {
+        const position = positions.get(row.id) ?? row.position;
+        if (!removed.has(row.id) && position === row.position) return Option.none();
+        const fields = removed.has(row.id) ? { deleted: true } : { position };
+        return patchRow(row, fields, yield* clock.next);
+      }),
+    );
+    const changes = [...patched.flatMap((row) => Option.toArray(row)), ...added];
+    if (changes.length === 0) return 0;
+
+    const changeSeq = yield* nextChangeSeq;
+    yield* Effect.forEach(changes, (row) => writeRow(row, changeSeq), { discard: true });
+    return changes.length;
   });
 
-export const removePlaylists = (ownerId: string, origin: string, keep: ReadonlySet<string>) =>
+/**
+ * Unlinks the playlists of `provider` whose remote playlist is not in `keep`. The playlists stay.
+ * Returns their IDs.
+ */
+export const unlinkPlaylists = (ownerId: string, provider: string, keep: ReadonlySet<string>) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const clock = yield* HlcClock;
-
     const rows = yield* db
-      .select({ id: playlist.id })
+      .select({ id: playlist.id, link: playlist.link })
       .from(playlist)
       .where(
         and(
           eq(playlist.ownerId, ownerId),
-          eq(playlist.origin, origin),
           eq(playlist.deleted, false),
+          sql`json_extract(${playlist.link}, '$.provider') = ${provider}`,
         ),
       );
-    const removed = rows.map((row) => row.id).filter((id) => !keep.has(id));
-    if (removed.length === 0) return 0;
-
-    const change = { deleted: true, hlc: yield* clock.next, changeSeq: yield* nextChangeSeq };
-    yield* db.update(playlist).set(change).where(inArray(playlist.id, removed));
-    yield* db
-      .update(playlistEntry)
-      .set(change)
-      .where(and(inArray(playlistEntry.playlistId, removed), eq(playlistEntry.deleted, false)));
-    return removed.length;
-  });
-
-export const removeOrigin = (userId: string, origin: string) =>
-  Effect.gen(function* () {
-    yield* setMembership(userId, origin, new Set(), true);
-    yield* removePlaylists(userId, origin, new Set());
+    const unlinked = rows.filter(
+      (row) => row.link?.remoteId == null || !keep.has(row.link.remoteId),
+    );
+    yield* Effect.forEach(unlinked, (row) => patchPlaylist(row.id, { link: null }), {
+      discard: true,
+    });
+    return unlinked.map((row) => row.id);
   });
 
 // The canonical recording is `coalesce(merged_into_id, id)`

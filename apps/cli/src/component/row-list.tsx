@@ -41,7 +41,7 @@ export class ArtistRow extends Data.Class<{
 export class PlaylistRow extends Data.Class<{
   readonly key: string;
   readonly playlist: PlaylistSummary;
-  /** The display name of the provider of an imported playlist */
+  /** The display name of the provider of a linked playlist */
   readonly providerName: string | null;
 }> {}
 

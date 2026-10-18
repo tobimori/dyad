@@ -736,7 +736,7 @@ export function App(props: {
     props.run(props.playlists.removeEntry(entryId));
   };
   const entryCommands: ReadonlyArray<readonly [Command, () => void]> =
-    route instanceof PlaylistRoute && shownPlaylist?.readOnly === false
+    route instanceof PlaylistRoute && shownPlaylist !== undefined
       ? [
           [commands.removeEntry, () => editEntry(removeEntry)],
           [

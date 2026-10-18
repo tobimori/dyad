@@ -52,6 +52,10 @@ export const libraryRemotePlaylist = sqliteTable(
     playlistId: text("playlist_id").notNull(),
     // The provider's version at the last complete read of the songs
     version: text("version"),
+    // The bound recordings and the name that the provider had at the last sync. A sync applies only
+    // the provider's changes since then, so that the edits in Dyad stay.
+    snapshot: text("snapshot", { mode: "json" }).$type<ReadonlyArray<string>>(),
+    name: text("name"),
     lastCompleteAt: integer("last_complete_at"),
     incompleteReason: text("incomplete_reason"),
   },

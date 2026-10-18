@@ -10,6 +10,7 @@ import {
   WorkspaceId,
 } from "./primitives.ts";
 import {
+  PlaylistLink,
   ReplicaMismatch,
   SyncHint,
   SyncPullRequest,
@@ -233,10 +234,8 @@ export class PlaylistEntry extends LibraryEntry.extend<PlaylistEntry>("PlaylistE
 export class PlaylistSummary extends Schema.Class<PlaylistSummary>("PlaylistSummary")({
   id: Schema.String,
   name: Schema.String,
-  provider: Schema.NullOr(Schema.String),
   entryCount: Schema.Int,
-  /** An imported playlist changes only in the provider's app */
-  readOnly: Schema.Boolean,
+  link: Schema.NullOr(PlaylistLink),
 }) {}
 
 export class PlaylistNotFound extends Schema.TaggedError<PlaylistNotFound>()(
