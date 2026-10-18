@@ -14,11 +14,18 @@ const truePeakCeiling = -1;
 // A typical modern master is about -10 LUFS
 const unanalyzedGainDb = -8;
 
-/** One constant gain for the whole source: no compression and no limiter */
-export const loudnessGain = (loudness: Loudness | undefined) => {
+// Loud lossy masters reach about +2 dBTP
+const unanalyzedTruePeak = 2;
+
+/** The true peak ceiling as a linear sample value */
+export const peakCeiling = 10 ** (truePeakCeiling / 20);
+
+/** One constant gain for the whole source and the true peak after it, with no limiter */
+export const entryLevel = (loudness: Loudness | undefined) => {
+  const truePeak = loudness?.truePeak ?? unanalyzedTruePeak;
   const db =
     loudness === undefined
       ? unanalyzedGainDb
-      : Math.min(targetLufs - loudness.integrated, truePeakCeiling - loudness.truePeak);
-  return 10 ** (db / 20);
+      : Math.min(targetLufs - loudness.integrated, truePeakCeiling - truePeak);
+  return { gain: 10 ** (db / 20), peak: 10 ** ((truePeak + db) / 20) };
 };

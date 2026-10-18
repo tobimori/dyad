@@ -119,6 +119,13 @@ export class Resampler {
     return this.ended && this.output >= this.outputAt(this.inputEnd);
   }
 
+  /** Output frames that `pull` can write now */
+  get available() {
+    const last = this.ended ? this.outputAt(this.inputEnd) : Number.POSITIVE_INFINITY;
+    const buffered = this.outputAt(this.first + this.length - this.taps + this.before + 1);
+    return Math.max(0, Math.min(last, buffered) - this.output);
+  }
+
   /** Writes up to `frames` interleaved stereo frames to `out` from frame `at`. Gives the count. */
   pull(out: Float32Array, at: number, frames: number) {
     const last = this.ended ? this.outputAt(this.inputEnd) : Number.POSITIVE_INFINITY;
