@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dyad/domain": "workspace:*",
     "@dyad/plugin": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "effect": "catalog:"
   }
 }

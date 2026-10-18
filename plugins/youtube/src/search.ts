@@ -21,6 +21,14 @@ const Run = Schema.Struct({
   text: Schema.String,
   navigationEndpoint: Schema.optional(
     Schema.Struct({
+      // On the title run of a result
+      watchEndpoint: Schema.optional(
+        Schema.Struct({
+          watchEndpointMusicSupportedConfigs: Schema.Struct({
+            watchEndpointMusicConfig: Schema.Struct({ musicVideoType: Schema.String }),
+          }),
+        }),
+      ),
       browseEndpoint: Schema.optional(
         Schema.Struct({
           browseId: Schema.String,
@@ -91,6 +99,9 @@ const MusicSearch = Schema.Struct({
     }),
   }),
 });
+
+// YouTube Music 2026-10: songs are `MUSIC_VIDEO_TYPE_ATV`, a still cover with the audio
+const videoTypes = new Set(["MUSIC_VIDEO_TYPE_OMV", "MUSIC_VIDEO_TYPE_UGC"]);
 
 const pageType = (run: typeof Run.Type) =>
   run.navigationEndpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs
@@ -172,6 +183,10 @@ const musicSources = (query: string, song: boolean) =>
                 ? null
                 : new CreditedArtist({ id: channelId, name: channel.text }),
             albumId: null,
+            video: videoTypes.has(
+              title[0]?.navigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs
+                .watchEndpointMusicConfig.musicVideoType ?? "",
+            ),
           }),
         ];
       });

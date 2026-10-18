@@ -1,4 +1,6 @@
 const segmentId = 0x18538067;
+const cuesId = 0x1c53bb6b;
+const clusterId = 0x1f43b675;
 const cuePointId = 0xbb;
 const cueTimeId = 0xb3;
 const cueTrackPositionsId = 0xb7;
@@ -36,6 +38,24 @@ const readUint = (view: DataView, start: number, end: number) => {
   let value = 0;
   for (let offset = start; offset < end; offset++) value = value * 256 + view.getUint8(offset);
   return value;
+};
+
+/**
+ * The offsets of the `Cues` element, which YouTube puts before the first cluster. Throws when
+ * `head` ends before the header of `Cues`.
+ */
+export const findCues = (head: Uint8Array) => {
+  const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+  const header = readElement(view, 0);
+  const segment = readElement(view, header.end);
+  if (segment.id !== segmentId) throw new RangeError("No WebM segment");
+
+  for (let offset = segment.start; ;) {
+    const element = readElement(view, offset);
+    if (element.id === cuesId) return { start: offset, end: element.end };
+    if (element.id === clusterId) throw new RangeError("No WebM cues before the clusters");
+    offset = element.end;
+  }
 };
 
 /**

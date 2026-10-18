@@ -4,11 +4,12 @@ import {
   ProviderError,
   ProviderSource,
   ProviderTracklist,
+  ProviderVideo,
 } from "@dyad/plugin";
 import { getJson, HttpStatusError, makeScrapedToken, send } from "@dyad/plugin/http";
 import type { HttpRequestError } from "@dyad/plugin/http";
 import { clockMs, parseTracklist, tracklistEntry } from "@dyad/plugin/tracklist";
-import { Effect, Option, Redacted, Schema, Stream } from "effect";
+import { Cache, Duration, Effect, Exit, Option, Redacted, Schema, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import { clusterOffset } from "./webm.ts";
@@ -17,7 +18,7 @@ export const provider = "youtube";
 
 const api = "https://www.youtube.com/youtubei/v1";
 
-const web = { clientName: "WEB", clientVersion: "2.20260623.01.00", hl: "en", gl: "US" };
+export const web = { clientName: "WEB", clientVersion: "2.20260623.01.00", hl: "en", gl: "US" };
 
 // yt-dlp 2026.08.19: the only client whose audio URLs need no PO token and no player JavaScript.
 // `ANDROID_VR` now needs a PO token.
@@ -99,6 +100,16 @@ const OpusFormat = Schema.Struct({
   isDrc: Schema.optional(Schema.Boolean),
   // Dubbed videos have one audio track per language
   audioTrack: Schema.optional(Schema.Struct({ audioIsDefault: Schema.Boolean })),
+});
+
+// HDR streams are `vp09.02…` with 10-bit samples, which this schema skips
+const Vp9Format = Schema.Struct({
+  url: Schema.String,
+  mimeType: Schema.String.check(Schema.isStartingWith('video/webm; codecs="vp9"')),
+  bitrate: Schema.Int,
+  height: Schema.Int,
+  contentLength: Schema.FiniteFromString,
+  indexRange: Range,
 });
 
 const Player = Schema.Struct({
@@ -317,6 +328,34 @@ const readPlayer = (withVisitor: Effect.Success<typeof visitorCache>, videoId: s
     return player;
   });
 
+// The URLs expire after 6 hours (October 2026), so a stream that starts from a cached answer
+// still has 5 hours
+const playerLifetime = "1 hour";
+
+/**
+ * The `/player` answers by video ID. Each call can get the bot check, so the audio and the video
+ * of a video share one answer. Failures are not cached.
+ */
+export const playerCache = (withVisitor: Effect.Success<typeof visitorCache>) =>
+  Cache.makeWith((videoId: string) => readPlayer(withVisitor, videoId), {
+    capacity: 256,
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? playerLifetime : Duration.zero),
+  });
+
+type Players = Effect.Success<ReturnType<typeof playerCache>>;
+
+const adaptiveFormats = <S extends Schema.ConstraintDecoder<unknown>>(
+  players: Players,
+  externalId: string,
+  schema: S,
+) =>
+  Effect.gen(function* () {
+    const player = yield* Cache.get(players, yield* decodeVideoId(externalId));
+    return (player.streamingData?.adaptiveFormats ?? []).flatMap((item) =>
+      Option.toArray(Schema.decodeUnknownOption(schema)(item)),
+    );
+  });
+
 // Itag 251, which nearly every video has, is Opus of up to 160 kbit/s
 const opusBitrate = 160_000;
 
@@ -360,6 +399,7 @@ export const searchVideos = (query: string) =>
                   ? null
                   : new CreditedArtist({ id: channelId, name: channel.text }),
               albumId: null,
+              video: true,
             }),
           ];
         }),
@@ -369,7 +409,7 @@ export const searchVideos = (query: string) =>
 // A request without a bounded range (October 2026) is throttled to about twice real time
 const chunkBytes = 10 * 1024 * 1024;
 
-const readChunks = (url: string, start: number, end: number) =>
+export const readChunks = (url: string, start: number, end: number) =>
   Stream.range(0, Math.ceil((end - start) / chunkBytes) - 1).pipe(
     Stream.flatMap((index) => {
       const from = start + index * chunkBytes;
@@ -383,22 +423,16 @@ const readChunks = (url: string, start: number, end: number) =>
     }),
   );
 
-/** Streams the Opus audio of a video in its WebM file */
-export const resolveVideo = (
-  withVisitor: Effect.Success<typeof visitorCache>,
-  externalId: string,
+// A WebM file of YouTube: the head has the `Cues` index, so a start skips to the cluster before it
+const webmStream = (
+  format: {
+    readonly url: string;
+    readonly contentLength: number;
+    readonly indexRange: { readonly start: number; readonly end: number };
+  },
+  kind: "audio" | "video",
 ) =>
   Effect.gen(function* () {
-    const player = yield* readPlayer(withVisitor, yield* decodeVideoId(externalId));
-
-    const format = (player.streamingData?.adaptiveFormats ?? [])
-      .flatMap((item) => Option.toArray(Schema.decodeUnknownOption(OpusFormat)(item)))
-      .filter((item) => item.isDrc !== true && item.audioTrack?.audioIsDefault !== false)
-      .toSorted((a, b) => b.bitrate - a.bitrate)[0];
-    if (format === undefined) {
-      return yield* new ProviderError({ reason: "The video has no Opus audio" });
-    }
-
     const services = yield* Effect.context<HttpClient.HttpClient>();
     // Errors contain the signed URL
     const safe = <E>(stream: Stream.Stream<Uint8Array, E, HttpClient.HttpClient>) =>
@@ -409,13 +443,12 @@ export const resolveVideo = (
               reason:
                 error instanceof HttpStatusError
                   ? `YouTube answered status ${error.status}`
-                  : "Cannot read the audio stream",
+                  : `Cannot read the ${kind} stream`,
             }),
         ),
         Stream.provideContext(services),
       );
 
-    // The head is the WebM header and the `Cues` index. A start skips to the cluster before it.
     const bytesFrom = (startMs: number) =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -433,10 +466,32 @@ export const resolveVideo = (
         }),
       ).pipe(safe);
 
-    return new ProviderAudio({
-      bytes: readChunks(format.url, 0, format.contentLength).pipe(safe),
-      bytesFrom,
-    });
+    return { bytes: readChunks(format.url, 0, format.contentLength).pipe(safe), bytesFrom };
+  });
+
+/** Streams the Opus audio of a video in its WebM file */
+export const resolveAudio = (players: Players, externalId: string) =>
+  Effect.gen(function* () {
+    const format = (yield* adaptiveFormats(players, externalId, OpusFormat))
+      .filter((item) => item.isDrc !== true && item.audioTrack?.audioIsDefault !== false)
+      .toSorted((a, b) => b.bitrate - a.bitrate)[0];
+    if (format === undefined) {
+      return yield* new ProviderError({ reason: "The video has no Opus audio" });
+    }
+    return new ProviderAudio(yield* webmStream(format, "audio"));
+  });
+
+/** Of streams with equal height, the lowest bitrate wins, which skips 60 fps streams */
+export const resolveVideo = (players: Players, externalId: string, maxHeight: number) =>
+  Effect.gen(function* () {
+    const formats = (yield* adaptiveFormats(players, externalId, Vp9Format)).toSorted(
+      (a, b) => b.height - a.height || a.bitrate - b.bitrate,
+    );
+    const format = formats.find((item) => item.height <= maxHeight) ?? formats.at(-1);
+    if (format === undefined) {
+      return yield* new ProviderError({ reason: "The video has no VP9 stream" });
+    }
+    return new ProviderVideo(yield* webmStream(format, "video"));
   });
 
 // YouTube makes chapters from the description. `AUTO_CHAPTERS` are topics, not tracks.

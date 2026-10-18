@@ -50,6 +50,11 @@ export class ProviderSource extends Schema.Class<ProviderSource>("ProviderSource
   uploader: Schema.NullOr(CreditedArtist).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** The `externalId` of the provider's release, for `Provider.album` */
   albumId: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** The source has a moving picture for `Provider.video`, not only a still cover */
+  video: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
 }) {}
 
 /** One release on a provider page. The core caches pages on its replica, so they are schemas. */
@@ -123,6 +128,13 @@ export class ProviderAudio extends Data.Class<{
   readonly bytesFrom?: (startMs: number) => Stream.Stream<Uint8Array, ProviderError>;
   /** CENC content keys in hex by key ID, for encrypted sources. FFmpeg selects the key per sample. */
   readonly decryptionKeys?: Redacted.Redacted<ReadonlyMap<string, string>>;
+}> {}
+
+/** VP9 video in WebM with `Cues`, without audio, on the timeline of the source's audio */
+export class ProviderVideo extends Data.Class<{
+  readonly bytes: Stream.Stream<Uint8Array, ProviderError>;
+  /** The WebM head, then the clusters from the cue at or before `startMs` */
+  readonly bytesFrom: (startMs: number) => Stream.Stream<Uint8Array, ProviderError>;
 }> {}
 
 /**
@@ -244,6 +256,15 @@ export class Provider extends Data.Class<{
     externalId: string,
     credentials: Credentials,
   ) => Effect.Effect<Redacted.Redacted<ReadonlyMap<string, string>>, ProviderError>;
+  /**
+   * The video of a source with `ProviderSource.video`: the tallest stream that is at most
+   * `maxHeight` pixels high, else the smallest
+   */
+  readonly video?: (
+    externalId: string,
+    credentials: Credentials,
+    maxHeight: number,
+  ) => Effect.Effect<ProviderVideo, ProviderError>;
   /**
    * Results in the provider's order of relevance, which the core uses when it has no popularity.
    * The core stops waiting after 8 seconds, token refreshes and retries included.
