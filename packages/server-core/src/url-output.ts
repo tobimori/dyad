@@ -26,7 +26,7 @@ export class UrlDesired extends Data.Class<{
   readonly next: QueueEntry | undefined;
 }> {}
 
-export class UrlReport extends Data.Class<{
+export class OutputReport extends Data.Class<{
   readonly revision: number;
   readonly entryId: EntryId;
   /** `stalled`: the device did not start this entry nor the entry before it */
@@ -61,7 +61,7 @@ export const driveUrlOutput = (options: {
   readonly userId: UserId;
   readonly outputId: OutputId;
   readonly desired: UrlDesired;
-  readonly report: (report: UrlReport) => Effect.Effect<void>;
+  readonly report: (report: OutputReport) => Effect.Effect<void>;
   /** Another session or another controller took the output */
   readonly taken: Effect.Effect<void>;
 }) =>
@@ -99,8 +99,8 @@ export const driveUrlOutput = (options: {
         stalls: 0,
       };
 
-      const report = (state: UrlReport["state"], entryId: EntryId, positionMs: number) =>
-        options.report(new UrlReport({ revision: local.revision, entryId, state, positionMs }));
+      const report = (state: OutputReport["state"], entryId: EntryId, positionMs: number) =>
+        options.report(new OutputReport({ revision: local.revision, entryId, state, positionMs }));
 
       const command = (state: UrlStatus["state"], effect: Effect.Effect<void, OutputError>) =>
         Effect.gen(function* () {

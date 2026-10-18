@@ -268,6 +268,9 @@ export function usePlayer(props: {
     /** Plays the session on `outputId` from the current position */
     transfer: (outputId: OutputId) =>
       send(SessionCommand.cases.Transfer.make({ outputId, play: null })),
+    /** Plays the session on all `outputIds` in sync */
+    group: (outputIds: readonly [OutputId, ...Array<OutputId>]) =>
+      send(SessionCommand.cases.SetGroup.make({ outputIds })),
     toggleShuffle: () => send(SessionCommand.cases.SetShuffle.make({ on: !playback.shuffle })),
     cycleRepeat: () =>
       send(SessionCommand.cases.SetRepeat.make({ mode: nextRepeatMode[playback.repeat] })),

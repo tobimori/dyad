@@ -18,6 +18,7 @@ class SavedPlayback extends Schema.Class<SavedPlayback>("SavedPlayback")({
   entryId: Schema.NullOr(EntryId),
   positionMs: Schema.Number,
   outputId: Schema.NullOr(OutputId),
+  group: Schema.Array(OutputId).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   shuffle: Schema.Boolean,
   repeat: RepeatMode,
 }) {}
@@ -73,6 +74,7 @@ export const saveSession = (userId: UserId, state: SessionState) =>
           entryId: playback.entryId,
           positionMs: playback.positionMs,
           outputId: playback.outputId,
+          group: playback.group,
           shuffle: playback.shuffle,
           repeat: playback.repeat,
         }),

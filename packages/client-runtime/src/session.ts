@@ -64,6 +64,7 @@ const stoppedPlayback = new Playback({
   rate: 0,
   revision: 0,
   outputId: null,
+  group: [],
   lost: false,
   shuffle: false,
   repeat: "off",

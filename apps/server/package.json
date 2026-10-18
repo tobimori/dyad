@@ -15,6 +15,7 @@
     "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
     "@dyad/plugin": "workspace:*",
+    "@dyad/plugin-airplay": "workspace:*",
     "@dyad/plugin-apple-music": "workspace:*",
     "@dyad/plugin-bandcamp": "workspace:*",
     "@dyad/plugin-cast": "workspace:*",

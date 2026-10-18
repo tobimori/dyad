@@ -106,8 +106,8 @@ const frameAt = (epoch: Epoch, us: number) =>
   epoch.frame + Math.floor(((us - epoch.playAtUs) * timelineRate) / 1_000_000);
 
 /** `input` gives the audio of an entry. Closing the scope stops the renderer. */
-export const openSessionRenderer = <E>(
-  input: (entry: QueueEntry) => Effect.Effect<RenderInput<E>, E>,
+export const openSessionRenderer = <E, F>(
+  input: (entry: QueueEntry) => Effect.Effect<RenderInput<F>, E>,
 ) =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
@@ -118,7 +118,7 @@ export const openSessionRenderer = <E>(
       string,
       { readonly output: TimedOutput; readonly watch: Fiber.Fiber<void> }
     >();
-    const inputs = new Map<EntryId, Input<E>>();
+    const inputs = new Map<EntryId, Input<E | F>>();
     const resolved = new Map<EntryId, Entry>();
 
     let queue: ReadonlyArray<QueueEntry> = [];
@@ -180,7 +180,7 @@ export const openSessionRenderer = <E>(
 
     const load = (entry: QueueEntry) =>
       Effect.gen(function* () {
-        const ready = yield* Deferred.make<Entry, E>();
+        const ready = yield* Deferred.make<Entry, E | F>();
         const loading = Effect.gen(function* () {
           const audio = yield* input(entry);
           let bytes = new Uint8Array(1 << 20);
@@ -279,7 +279,7 @@ export const openSessionRenderer = <E>(
         );
       });
 
-    const runEpoch = (ready: Deferred.Deferred<Entry, E>, positionMs: number) =>
+    const runEpoch = (ready: Deferred.Deferred<Entry, E | F>, positionMs: number) =>
       Effect.gen(function* () {
         // The loader publishes the failure
         if (Exit.isFailure(yield* Effect.exit(Deferred.await(ready)))) return;

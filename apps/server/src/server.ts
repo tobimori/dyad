@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
 import { ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
+import { airplayPlugin } from "@dyad/plugin-airplay/server";
 import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
 import { castPlugin } from "@dyad/plugin-cast/server";
@@ -36,6 +37,7 @@ import { webApplicationLayer } from "./web.ts";
 
 const builtinPlugins: ReadonlyArray<Plugin> = [
   localFilesPlugin,
+  airplayPlugin,
   appleMusicPlugin,
   bandcampPlugin,
   castPlugin,

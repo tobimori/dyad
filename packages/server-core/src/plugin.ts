@@ -1,6 +1,6 @@
 import type { Database, ReplicaDatabase } from "@dyad/db/node";
 import { PluginContext } from "@dyad/plugin";
-import type { Plugin } from "@dyad/plugin";
+import type { Plugin, TimedOutputs, UrlOutputs } from "@dyad/plugin";
 import type { HlcClock } from "@dyad/sync";
 import { Effect, Exit, Layer, Scope } from "effect";
 import type { Crypto, FileSystem, Path } from "effect";
@@ -94,6 +94,14 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         | Path.Path
       >();
 
+      // `device:<DeviceId>` is the output ID of a Dyad device
+      const addOutputs = (id: string, registration: UrlOutputs | TimedOutputs) =>
+        id === "device" || id.includes(":")
+          ? Effect.die(new Error(`"${id}" is not a valid output ID`))
+          : register(outputs.registrations, id, registration).pipe(
+              Effect.andThen(outputs.follow(id, registration)),
+            );
+
       const context = new PluginContext({
         library: {
           sync: (root, paths) =>
@@ -117,15 +125,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         tracklists: {
           add: (id, lookup) => register(tracklists.sites, id, lookup),
         },
-        outputs: {
-          // `device:<DeviceId>` is the output ID of a Dyad device
-          add: (id, urlOutputs) =>
-            id === "device" || id.includes(":")
-              ? Effect.die(new Error(`"${id}" is not a valid output ID`))
-              : register(outputs.registrations, id, urlOutputs).pipe(
-                  Effect.andThen(outputs.follow(id, urlOutputs)),
-                ),
-        },
+        outputs: { add: addOutputs, addTimed: addOutputs },
       });
 
       yield* Effect.forEach(

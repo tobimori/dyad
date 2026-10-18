@@ -273,7 +273,7 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
  * How the user can play the source in one of the `capabilities` formats. A search result enters
  * the shared catalog here, but only when the user can play it.
  */
-const choosePlayableSource = (
+export const choosePlayableSource = (
   sourceId: string,
   userId: UserId,
   capabilities: PlaybackCapabilities,

@@ -242,6 +242,9 @@ importers:
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
+      '@dyad/plugin-airplay':
+        specifier: workspace:*
+        version: link:../../plugins/airplay
       '@dyad/plugin-apple-music':
         specifier: workspace:*
         version: link:../../plugins/apple-music

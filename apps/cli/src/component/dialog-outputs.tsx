@@ -19,6 +19,7 @@ export function OutputsDialog(props: {
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly transfer: (outputId: OutputId) => void;
+  readonly group: (outputIds: readonly [OutputId, ...Array<OutputId>]) => void;
   readonly setVolume: (outputId: OutputId, volume: number) => void;
 }) {
   const dialog = useDialog();
@@ -27,13 +28,15 @@ export function OutputsDialog(props: {
   const [highlighted, setHighlighted] = useState<OutputId | null>(null);
 
   const active = view.playback.outputId;
+  const members = active === null ? [] : [active, ...view.playback.group];
   const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
   const options = view.outputs.map(
     (output) =>
       new SelectOption({
         value: output.id,
-        title: `${output.id === active ? "▶ " : ""}${output.name}${output.id === own ? " (this device)" : ""}`,
+        title: `${members.includes(output.id) ? "▶ " : ""}${output.name}${output.id === own ? " (this device)" : ""}`,
         detail: [
+          output.kind === "timed" ? "sync" : "",
           output.muted ? "Muted" : "",
           output.volume === null ? "" : `${Math.round(output.volume * 100)}%`,
         ]
@@ -48,17 +51,32 @@ export function OutputsDialog(props: {
     props.setVolume(output.id, output.volume + direction * volumeStep);
   };
 
+  // Only timed outputs play in sync, so the group keeps only those
+  const toggleGroup = () => {
+    const output = view.outputs.find((candidate) => candidate.id === highlighted);
+    if (output?.kind !== "timed") return;
+    const timed = members.filter((id) =>
+      view.outputs.some((candidate) => candidate.id === id && candidate.kind === "timed"),
+    );
+    const [first, ...rest] = timed.includes(output.id)
+      ? timed.filter((id) => id !== output.id)
+      : [output.id, ...timed];
+    if (first !== undefined) props.group([first, ...rest]);
+  };
+
   useCommands(
     [
       [commands.volumeUp, () => changeVolume(1)],
       [commands.volumeDown, () => changeVolume(-1)],
+      [commands.groupOutput, toggleGroup],
     ],
     { target: content, targetMode: "focus-within" },
   );
 
   const choose = (outputId: OutputId) => {
     dialog.pop();
-    if (outputId !== active) props.transfer(outputId);
+    // Choosing a member of a group plays only there
+    if (outputId !== active || members.length > 1) props.transfer(outputId);
   };
 
   return (

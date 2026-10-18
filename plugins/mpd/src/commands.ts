@@ -1,6 +1,7 @@
 import { nextEntry, positionAt, SessionCommand } from "@dyad/domain";
 import type {
   EntryId,
+  Output,
   PlayContext,
   QueueEntry,
   SessionCommandFailed,
@@ -337,6 +338,25 @@ const outputWithNumber = (current: View, server: Server, arg: string) =>
     if (output === undefined) return yield* commandAcks.output_unavailable;
     return output;
   });
+
+// The outputs that play: the active output and the timed outputs in sync with it
+const enabledOutputs = (current: View) =>
+  current.playback.outputId === null ? [] : [current.playback.outputId, ...current.playback.group];
+
+// As in MPD, enabling a second output plays on both, but only timed outputs can play in sync
+const enableCommand = (current: View, output: Output) => {
+  const active = current.outputs.find((each) => each.id === current.playback.outputId);
+  return active?.kind === "timed" && output.kind === "timed"
+    ? Command.SetGroup.make({ outputIds: [output.id, ...enabledOutputs(current)] })
+    : Command.Transfer.make({ outputId: output.id, play: null });
+};
+
+const disableCommand = (current: View, output: Output) => {
+  const [first, ...rest] = enabledOutputs(current).filter((id) => id !== output.id);
+  return first === undefined
+    ? Command.Pause.make({})
+    : Command.SetGroup.make({ outputIds: [first, ...rest] });
+};
 
 const artwork = (picture: boolean) =>
   handler(2, 2, ([uri = "", offsetArg = ""], connection) =>
@@ -947,14 +967,15 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
             field("outputid", number),
             field("outputname", output.name),
             field("plugin", output.kind),
-            field("outputenabled", output.id === current.playback.outputId ? 1 : 0),
+            field("outputenabled", enabledOutputs(current).includes(output.id) ? 1 : 0),
           ]),
       ),
     ),
     enableoutput: handler(1, 1, ([number = ""], connection) =>
       Effect.gen(function* () {
-        const output = yield* outputWithNumber(yield* view, connection.server, number);
-        yield* control(Command.Transfer.make({ outputId: output.id, play: null }));
+        const current = yield* view;
+        const output = yield* outputWithNumber(current, connection.server, number);
+        yield* control(enableCommand(current, output));
         return [];
       }),
     ),
@@ -962,7 +983,9 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
       Effect.gen(function* () {
         const current = yield* view;
         const output = yield* outputWithNumber(current, connection.server, number);
-        if (output.id === current.playback.outputId) yield* control(Command.Pause.make({}));
+        if (enabledOutputs(current).includes(output.id)) {
+          yield* control(disableCommand(current, output));
+        }
         return [];
       }),
     ),
@@ -971,9 +994,9 @@ export const sessionCommands: ReadonlyMap<string, Handler<Session>> = new Map(
         const current = yield* view;
         const output = yield* outputWithNumber(current, connection.server, number);
         yield* control(
-          output.id === current.playback.outputId
-            ? Command.Pause.make({})
-            : Command.Transfer.make({ outputId: output.id, play: null }),
+          enabledOutputs(current).includes(output.id)
+            ? disableCommand(current, output)
+            : enableCommand(current, output),
         );
         return [];
       }),

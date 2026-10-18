@@ -63,7 +63,9 @@ const subsystemsChanged = (before: View, after: View) => {
       "player",
     (left.shuffle !== right.shuffle || left.repeat !== right.repeat) && "options",
     volume(before) !== volume(after) && "mixer",
-    (left.outputId !== right.outputId || outputs(before).join() !== outputs(after).join()) &&
+    (left.outputId !== right.outputId ||
+      left.group.join() !== right.group.join() ||
+      outputs(before).join() !== outputs(after).join()) &&
       "output",
   ].filter(Predicate.isString);
 };
@@ -89,6 +91,7 @@ const emptyView = new View({
     rate: 0,
     revision: 0,
     outputId: null,
+    group: [],
     lost: false,
     shuffle: false,
     repeat: "off",

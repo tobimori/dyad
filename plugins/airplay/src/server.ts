@@ -154,7 +154,6 @@ export const airplayPlugin = new Plugin({
   id: "dyad.airplay",
   setup: (context) =>
     Effect.gen(function* () {
-      if (context.outputs.addTimed === undefined) return;
       yield* context.outputs.addTimed("airplay", yield* airplayOutputs(discover));
     }),
 });

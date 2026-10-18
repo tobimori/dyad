@@ -47,14 +47,18 @@ import { hintPrefetch } from "./playback.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSessions, saveSession } from "./session-store.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
+import { TimedDesired, driveTimedOutputs } from "./timed-output.ts";
+import type { TimedDriver } from "./timed-output.ts";
 import { UrlDesired, driveUrlOutput } from "./url-output.ts";
-import type { UrlDriver, UrlReport } from "./url-output.ts";
+import type { OutputReport, UrlDriver } from "./url-output.ts";
 
 const maxEntries = 10_000;
 // An output that plays and sends no report for this long is lost
 const lostAfterMs = 15_000;
 const requestLimit = 1000;
 const requestLifetimeMs = 10 * 60 * 1000;
+// Timed outputs get this many entries ahead; the window moves at each entry start
+const timedWindow = 8;
 
 type Event = typeof SessionEvent.Type;
 type Command = typeof SessionCommand.Type;
@@ -73,6 +77,7 @@ const emptyState = new SessionState({
     rate: 0,
     revision: 0,
     outputId: null,
+    group: [],
     lost: false,
     shuffle: false,
     repeat: "off",
@@ -129,6 +134,8 @@ const makeSession = (
     const urlOutputs = yield* Outputs;
     const driverServices =
       yield* Effect.context<Effect.Services<ReturnType<typeof driveUrlOutput>>>();
+    const timedServices =
+      yield* Effect.context<Effect.Services<ReturnType<typeof driveTimedOutputs>>>();
     const lock = yield* Semaphore.make(1);
     // Changed only under `lock`
     const state = {
@@ -152,6 +159,8 @@ const makeSession = (
       prefetched: "",
       // Set while the output is a URL output
       urlDriver: Option.none<UrlDriver>(),
+      // Set while the output is a timed output
+      timedDriver: Option.none<TimedDriver>(),
       // A play on a URL output counts for the device that sent the last command
       commandDevice: Option.none<DeviceId>(),
       // The play of an entry that the output started offline. The server continues it.
@@ -171,6 +180,7 @@ const makeSession = (
             name: player.name,
             volume: player.volume,
             muted: false,
+            delayMs: 0,
           }),
       ),
       ...urlOutputs.list(),
@@ -224,6 +234,7 @@ const makeSession = (
         rate: 0,
         revision: state.playback.revision + 1,
         outputId,
+        group: outputId === state.playback.outputId ? state.playback.group : [],
         lost: outputId !== null && !available(outputId),
       });
 
@@ -297,7 +308,9 @@ const makeSession = (
           playback.outputId === null ? undefined : state.players.get(playback.outputId);
         const deviceId =
           output?.connection.deviceId ??
-          (Option.isSome(state.urlDriver) ? Option.getOrUndefined(state.commandDevice) : undefined);
+          (Option.isSome(state.urlDriver) || Option.isSome(state.timedDriver)
+            ? Option.getOrUndefined(state.commandDevice)
+            : undefined);
         if (Option.isNone(state.play) && playback.rate === 1 && entry && deviceId) {
           const handover = Option.getOrUndefined(state.handover)?.play;
           state.handover = Option.none();
@@ -343,7 +356,7 @@ const makeSession = (
         next: nextEntry(state.entries, entryId, repeat, "end"),
       });
       if (Option.isSome(state.urlDriver)) return yield* state.urlDriver.value.desire(desired);
-      if (!urlOutputs.has(outputId)) return;
+      if (!urlOutputs.has(outputId) || urlOutputs.isTimed(outputId)) return;
 
       const created: UrlDriver = yield* driveUrlOutput({
         userId,
@@ -353,6 +366,47 @@ const makeSession = (
         taken: Effect.suspend(() => outputTaken(created)),
       }).pipe(Effect.provideContext(driverServices));
       state.urlDriver = Option.some(created);
+    });
+
+    // The current entry and the entries that follow it, until one repeats
+    const playOrder = () => {
+      const first = currentEntry();
+      if (first === undefined) return [];
+      const order = [first];
+      while (order.length < timedWindow) {
+        const next = nextEntry(
+          state.entries,
+          order.at(-1)?.id ?? null,
+          state.playback.repeat,
+          "end",
+        );
+        if (next === undefined || order.includes(next)) break;
+        order.push(next);
+      }
+      return order;
+    };
+
+    // Like `syncUrlOutput`. One driver serves all outputs of the group.
+    const syncTimedOutput: Effect.Effect<void> = Effect.gen(function* () {
+      const { outputId } = state.playback;
+      const timed = outputId !== null && urlOutputs.isTimed(outputId);
+      const driver = Option.getOrUndefined(state.timedDriver);
+      if (driver !== undefined && !timed) {
+        state.timedDriver = Option.none();
+        yield* driver.close;
+      }
+      if (!timed) return;
+
+      const desired = new TimedDesired({ playback: state.playback, entries: playOrder() });
+      if (driver !== undefined) return yield* driver.desire(desired);
+
+      const created: TimedDriver = yield* driveTimedOutputs({
+        userId,
+        desired,
+        report: (received) => reportTimed(created, received),
+        taken: (taken) => memberTaken(created, taken),
+      }).pipe(Effect.provideContext(timedServices));
+      state.timedDriver = Option.some(created);
     });
 
     // Runs `change` under the lock and publishes the new playback once
@@ -386,7 +440,10 @@ const makeSession = (
             );
           }
           // A queue edit can change the entry that the URL output plays next
-          if (changed) yield* syncUrlOutput;
+          if (changed) {
+            yield* syncUrlOutput;
+            yield* syncTimedOutput;
+          }
           return yield* exit;
         }),
       );
@@ -401,6 +458,33 @@ const makeSession = (
     ) => {
       const playback = state.playback;
       const position = positionAt(playback, now);
+
+      const transfer = (outputId: OutputId, play: boolean | null, group: ReadonlyArray<OutputId>) =>
+        Effect.gen(function* () {
+          if (!available(outputId)) return yield* fail("output_unavailable");
+
+          if (play ?? playback.state === "playing") {
+            const entry = currentEntry() ?? nextEntry(state.entries, null, playback.repeat, "skip");
+            if (entry === undefined) return yield* fail("nothing_to_play");
+
+            const continues = playback.state !== "stopped" && entry.id === playback.entryId;
+            start(entry.id, continues ? position : 0, now, outputId);
+            setPlayback({ group });
+            return [];
+          }
+
+          setPlayback({
+            state: playback.state === "stopped" ? "stopped" : "paused",
+            positionMs: playback.state === "stopped" ? 0 : position,
+            at: now,
+            rate: 0,
+            revision: playback.revision + 1,
+            outputId,
+            group,
+            lost: false,
+          });
+          return [];
+        });
 
       return SessionCommand.match<Effect.Effect<ReadonlyArray<EntryId>, SessionCommandFailed>>(
         command,
@@ -660,29 +744,32 @@ const makeSession = (
               return [];
             }),
 
-          Transfer: (command) =>
+          Transfer: (command) => transfer(command.outputId, command.play, []),
+
+          SetGroup: (command) =>
             Effect.gen(function* () {
-              if (!available(command.outputId)) return yield* fail("output_unavailable");
-
-              if (command.play ?? playback.state === "playing") {
-                const entry =
-                  currentEntry() ?? nextEntry(state.entries, null, playback.repeat, "skip");
-                if (entry === undefined) return yield* fail("nothing_to_play");
-
-                const continues = playback.state !== "stopped" && entry.id === playback.entryId;
-                start(entry.id, continues ? position : 0, now, command.outputId);
-                return [];
+              const first = command.outputIds[0];
+              const all = [...new Set(command.outputIds)];
+              const rest = all.slice(1);
+              if (!all.every((id) => urlOutputs.isTimed(id) && urlOutputs.has(id))) {
+                return yield* fail("output_unavailable");
               }
 
-              setPlayback({
-                state: playback.state === "stopped" ? "stopped" : "paused",
-                positionMs: playback.state === "stopped" ? 0 : position,
-                at: now,
-                rate: 0,
-                revision: playback.revision + 1,
-                outputId: command.outputId,
-                lost: false,
-              });
+              // An output that plays already keeps playing, so the change needs no new transport
+              const members =
+                playback.outputId === null ? [] : [playback.outputId, ...playback.group];
+              const kept = members.find((id) => all.includes(id));
+              if (kept === undefined) return yield* transfer(first, null, rest);
+
+              setPlayback({ outputId: kept, group: all.filter((id) => id !== kept) });
+              return [];
+            }),
+
+          SetOutputDelay: (command) =>
+            Effect.gen(function* () {
+              if (!urlOutputs.isTimed(command.outputId)) return yield* fail("output_unavailable");
+              // Its outputs change gives the new delay to all sessions
+              yield* urlOutputs.setDelay(command.outputId, command.delayMs);
               return [];
             }),
 
@@ -690,10 +777,10 @@ const makeSession = (
             Effect.gen(function* () {
               const player = state.players.get(command.outputId);
               if (player === undefined) {
-                // Its status gives the new volume to all sessions
-                const output = urlOutputs.opened(command.outputId);
-                if (output === undefined) return yield* fail("output_unavailable");
-                yield* output.setVolume(command.volume).pipe(
+                // Its status or its outputs change gives the new volume to all sessions
+                const setting = urlOutputs.setVolume(command.outputId, command.volume);
+                if (setting === undefined) return yield* fail("output_unavailable");
+                yield* setting.pipe(
                   Effect.catch((error) => Effect.logWarning("Cannot set the volume", error.reason)),
                   Effect.forkDetach,
                 );
@@ -766,7 +853,7 @@ const makeSession = (
         readonly generation: number;
         readonly revision: number;
         readonly entryId: EntryId;
-        readonly state: UrlReport["state"];
+        readonly state: OutputReport["state"];
         readonly positionMs: number;
         readonly volume: number;
       },
@@ -786,7 +873,7 @@ const makeSession = (
         }),
       );
 
-    const reportOutput = (driver: UrlDriver, received: UrlReport) =>
+    const reportOutput = (driver: UrlDriver, received: OutputReport) =>
       modify((now) =>
         Effect.sync(() => {
           const outputId = state.playback.outputId;
@@ -795,13 +882,35 @@ const makeSession = (
         }),
       );
 
-    // A report of the output that plays, from its device or from its URL driver
+    const reportTimed = (driver: TimedDriver, received: OutputReport) =>
+      modify((now) =>
+        Effect.sync(() => {
+          const outputId = state.playback.outputId;
+          if (Option.getOrUndefined(state.timedDriver) !== driver || outputId === null) return;
+          applyReport(outputId, received, now);
+        }),
+      );
+
+    // Another session took one output of the group. The others play on.
+    const memberTaken = (driver: TimedDriver, taken: OutputId) =>
+      modify((now) =>
+        Effect.sync(() => {
+          if (Option.getOrUndefined(state.timedDriver) !== driver) return;
+          const { outputId, group } = state.playback;
+          if (outputId === null) return;
+          const [first, ...rest] = [outputId, ...group].filter((id) => id !== taken);
+          if (first === undefined) dropOutput(now);
+          else setPlayback({ outputId: first, group: rest });
+        }),
+      );
+
+    // A report of the output that plays, from its device or from one of its drivers
     const applyReport = (
       outputId: OutputId,
       received: {
         readonly revision: number;
         readonly entryId: EntryId;
-        readonly state: UrlReport["state"];
+        readonly state: OutputReport["state"];
         readonly positionMs: number;
       },
       now: number,
@@ -857,7 +966,7 @@ const makeSession = (
         Match.when("failed", () => {
           const index = indexOf(received.entryId);
           const entry = state.entries[index];
-          if (received.entryId !== current || entry === undefined) return;
+          if (entry === undefined || entry.unplayable) return;
 
           spliceQueue([
             new QueueSplice({
@@ -866,6 +975,8 @@ const makeSession = (
               insert: [new QueueEntry({ ...entry, unplayable: true })],
             }),
           ]);
+          // A timed output loads the next entries ahead, so they can fail before they play
+          if (received.entryId !== current) return;
           state.failures += 1;
 
           const following = nextEntry(state.entries, current, playback.repeat, "skip");
@@ -999,6 +1110,7 @@ const makeSession = (
         rate: 0,
         revision: playback.revision + 1,
         outputId: null,
+        group: [],
         lost: false,
       });
     };
@@ -1031,7 +1143,14 @@ const makeSession = (
     const tick = modify((now) =>
       Effect.sync(() => {
         const playback = state.playback;
-        if (playback.state === "playing" && !playback.lost && now > state.reportDeadline) {
+        // A timed output sends no reports while an entry plays: the renderer knows the position
+        const reports = Option.isNone(state.timedDriver);
+        if (
+          playback.state === "playing" &&
+          !playback.lost &&
+          reports &&
+          now > state.reportDeadline
+        ) {
           setPlayback({ lost: true });
         }
 

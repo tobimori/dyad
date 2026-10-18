@@ -1,7 +1,9 @@
+import { outputSetting } from "@dyad/db";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import { Output, OutputId } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
-import { OutputError, UrlOutput } from "@dyad/plugin";
-import type { OutputInfo, UrlOutputs } from "@dyad/plugin";
+import { OutputError, TimedOutput, TimedOutputs, UrlOutput, UrlOutputs } from "@dyad/plugin";
+import type { OutputInfo } from "@dyad/plugin";
 import { Context, Data, Deferred, Effect, Layer, PubSub, Stream } from "effect";
 
 /** Port of the HTTP server. URL outputs open stream URLs on it. */
@@ -17,13 +19,21 @@ class Holder extends Data.Class<{
 }> {}
 
 const makeOutputs = Effect.gen(function* () {
-  const registrations = new Map<string, UrlOutputs>();
+  const db = yield* Database;
+  const registrations = new Map<string, UrlOutputs | TimedOutputs>();
   const discovered = new Map<string, ReadonlyArray<OutputInfo>>();
   const holders = new Map<OutputId, Holder>();
-  const opened = new Map<OutputId, UrlOutput>();
-  // The last volume and mute state that an open output reported
+  const opened = new Map<OutputId, UrlOutput | TimedOutput>();
+  // The last volume and mute state that an open URL output reported, or that the core set on a
+  // timed output
   const volumes = new Map<OutputId, number>();
   const mutes = new Map<OutputId, boolean>();
+  const delays = new Map(
+    (yield* db.select().from(outputSetting)).map((row) => [
+      OutputId.make(row.outputId),
+      row.delayMs,
+    ]),
+  );
   const changed = yield* PubSub.unbounded<void>();
 
   const notify = PubSub.publish(changed, undefined);
@@ -39,22 +49,27 @@ const makeOutputs = Effect.gen(function* () {
     return discovered.get(registration)?.some((info) => info.id === nativeId) === true;
   };
 
+  /** Whether the output plays PCM at set times, so that it can be in a group */
+  const isTimed = (id: OutputId) =>
+    registrations.get(locate(id).registration) instanceof TimedOutputs;
+
   const list = () =>
     [...discovered].flatMap(([registration, infos]) =>
       infos.map((info) => {
         const id = OutputId.make(`${registration}:${info.id}`);
         return new Output({
           id,
-          kind: "url",
+          kind: registrations.get(registration) instanceof TimedOutputs ? "timed" : "url",
           name: info.name,
           volume: volumes.get(id) ?? null,
           muted: mutes.get(id) ?? false,
+          delayMs: delays.get(id) ?? 0,
         });
       }),
     );
 
   /** Keeps the outputs of `registration` up to date until the scope closes */
-  const follow = (registration: string, outputs: UrlOutputs) =>
+  const follow = (registration: string, outputs: UrlOutputs | TimedOutputs) =>
     Effect.gen(function* () {
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => discovered.delete(registration)).pipe(Effect.andThen(notify)),
@@ -67,8 +82,9 @@ const makeOutputs = Effect.gen(function* () {
       );
     });
 
-  /** Opens the output for the session of `userId` until the scope closes. The last open wins. */
-  const open = (
+  // The last holder wins. The earlier holder closes without a stop, so that its last commands come
+  // before ours.
+  const hold = (
     id: OutputId,
     holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
   ) =>
@@ -79,7 +95,6 @@ const makeOutputs = Effect.gen(function* () {
         return yield* new OutputError({ reason: "The output is not available" });
       }
 
-      // The earlier holder closes without a stop, so that its last commands come before ours
       const earlier = holders.get(id);
       if (earlier !== undefined) {
         yield* Effect.forkDetach(earlier.taken);
@@ -96,6 +111,19 @@ const makeOutputs = Effect.gen(function* () {
           opened.delete(id);
         }).pipe(Effect.andThen(Deferred.succeed(released, undefined))),
       );
+      return { outputs, nativeId };
+    });
+
+  const kindError = new OutputError({ reason: "The output is of another kind" });
+
+  /** Opens the URL output for the session of `userId` until the scope closes */
+  const open = (
+    id: OutputId,
+    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
+  ) =>
+    Effect.gen(function* () {
+      const { outputs, nativeId } = yield* hold(id, holder);
+      if (!(outputs instanceof UrlOutputs)) return yield* kindError;
 
       const output = yield* outputs.open(nativeId);
       opened.set(id, output);
@@ -114,14 +142,64 @@ const makeOutputs = Effect.gen(function* () {
       });
     });
 
+  const rememberVolume = (id: OutputId, volume: number) =>
+    Effect.sync(() => volumes.set(id, volume)).pipe(Effect.andThen(notify));
+
+  /**
+   * Opens the timed output like `open`. A timed device reports no volume, so the volume that the
+   * core set last applies again.
+   */
+  const openTimed = (
+    id: OutputId,
+    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
+  ) =>
+    Effect.gen(function* () {
+      const { outputs, nativeId } = yield* hold(id, holder);
+      if (!(outputs instanceof TimedOutputs)) return yield* kindError;
+
+      const output = yield* outputs.open(nativeId);
+      const volume = volumes.get(id);
+      if (volume !== undefined) yield* output.setVolume(volume);
+      const remembering = new TimedOutput({
+        ...output,
+        setVolume: (next) => output.setVolume(next).pipe(Effect.andThen(rememberVolume(id, next))),
+      });
+      opened.set(id, remembering);
+      return remembering;
+    });
+
+  /**
+   * Sets the volume of an open output, or of a timed output for its next open. `undefined` when the
+   * output cannot take a volume now.
+   */
+  const setVolume = (id: OutputId, volume: number) => {
+    const output = opened.get(id);
+    if (output !== undefined) return output.setVolume(volume);
+    return isTimed(id) && has(id) ? rememberVolume(id, volume) : undefined;
+  };
+
+  const setDelay = (id: OutputId, delayMs: number) =>
+    Effect.gen(function* () {
+      yield* db
+        .insert(outputSetting)
+        .values({ outputId: id, delayMs })
+        .onConflictDoUpdate({ target: outputSetting.outputId, set: { delayMs } })
+        .pipe(orDieOnDatabaseError("setOutputDelay"));
+      delays.set(id, delayMs);
+      yield* notify;
+    });
+
   return {
     registrations,
     follow,
     has,
+    isTimed,
     list,
     open,
-    /** The open output, for commands that do not change the session */
-    opened: (id: OutputId) => opened.get(id),
+    openTimed,
+    setVolume,
+    delayOf: (id: OutputId) => delays.get(id) ?? 0,
+    setDelay,
     /** The user whose session holds the output */
     heldBy: (id: OutputId) => holders.get(id)?.userId,
     /** Emits after each change of `list` */
@@ -134,4 +212,7 @@ export class Outputs extends Context.Service<Outputs, Effect.Success<typeof make
   "@dyad/server-core/Outputs",
 ) {}
 
-export const outputsLayer = Layer.effect(Outputs, makeOutputs);
+export const outputsLayer = Layer.effect(
+  Outputs,
+  makeOutputs.pipe(orDieOnDatabaseError("loadOutputSettings")),
+);

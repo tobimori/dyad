@@ -536,6 +536,8 @@ export class Playback extends Schema.Class<Playback>("Playback")({
   /** Changes at each command that changes the transport, but not at the natural end of an entry */
   revision: Schema.Int,
   outputId: Schema.NullOr(OutputId),
+  /** The other `timed` outputs that play in sync with `outputId` */
+  group: Schema.Array(OutputId).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   /** The output stopped reporting and can still play from its buffer, or it did not start to play */
   lost: Schema.Boolean,
   shuffle: Schema.Boolean,
@@ -549,6 +551,8 @@ export class Output extends Schema.Class<Output>("Output")({
   /** 0 to 1, `null` when unknown */
   volume: Schema.NullOr(Schema.Number),
   muted: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  /** A `timed` output plays this much later than the others in its group, or earlier when negative */
+  delayMs: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
 }) {}
 
 /** Removes `remove` entries at `index`, then inserts `insert` there */
@@ -608,8 +612,17 @@ export const SessionCommand = Schema.TaggedUnion({
   Skip: { fromEntryId: EntryId, direction: Schema.Literals([1, -1]) },
   SetShuffle: { on: Schema.Boolean },
   SetRepeat: { mode: RepeatMode },
-  /** `play: null` keeps the state */
+  /** `play: null` keeps the state. The session leaves its group. */
   Transfer: { outputId: OutputId, play: Schema.NullOr(Schema.Boolean) },
+  /**
+   * Plays on all `outputIds` in sync. Only `timed` outputs. Outputs that play already continue, and
+   * the others join; without one, it is a `Transfer`.
+   */
+  SetGroup: { outputIds: Schema.NonEmptyArray(OutputId).check(Schema.isMaxLength(32)) },
+  SetOutputDelay: {
+    outputId: OutputId,
+    delayMs: Schema.Int.check(Schema.isBetween({ minimum: -2000, maximum: 2000 })),
+  },
   SetVolume: {
     outputId: OutputId,
     volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),

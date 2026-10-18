@@ -695,6 +695,7 @@ export function App(props: {
             session={props.session}
             run={props.run}
             transfer={player.transfer}
+            group={player.group}
             setVolume={player.setOutputVolume}
           />,
         ),

@@ -541,11 +541,8 @@ export class PluginContext extends Data.Class<{
      * must be unique, not `device`, and without `:`.
      */
     readonly add: (id: string, outputs: UrlOutputs) => Effect.Effect<void, never, Scope.Scope>;
-    /**
-     * Adds the timed outputs of one protocol, with the same ID rules as `add`. Optional until the
-     * core registers timed outputs.
-     */
-    readonly addTimed?: (
+    /** Adds the timed outputs of one protocol, with the same ID rules as `add` */
+    readonly addTimed: (
       id: string,
       outputs: TimedOutputs,
     ) => Effect.Effect<void, never, Scope.Scope>;

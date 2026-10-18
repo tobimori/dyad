@@ -14,7 +14,14 @@ export const playbackSession = sqliteTable("playback_session", {
   nextEntryId: integer("next_entry_id").notNull(),
   queueVersion: integer("queue_version").notNull(),
   revision: integer("revision").notNull(),
-  // `state`, `entryId`, `positionMs`, `outputId`, `shuffle` and `repeat`
+  // `state`, `entryId`, `positionMs`, `outputId`, `group`, `shuffle` and `repeat`
   playback: text("playback", { mode: "json" }).$type<Schema.Json>().notNull(),
   updatedAt: integer("updated_at").notNull(),
+});
+
+// Replica-local: a speaker is in the household of this replica, and its delay is the same for
+// all users
+export const outputSetting = sqliteTable("output_setting", {
+  outputId: text("output_id").primaryKey(),
+  delayMs: integer("delay_ms").notNull(),
 });
