@@ -245,6 +245,9 @@ importers:
       '@dyad/plugin-deezer':
         specifier: workspace:*
         version: link:../../plugins/deezer
+      '@dyad/plugin-hypem':
+        specifier: workspace:*
+        version: link:../../plugins/hypem
       '@dyad/plugin-local-files':
         specifier: workspace:*
         version: link:../../plugins/local-files
@@ -584,6 +587,15 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.2.1)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  plugins/hypem:
+    dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
       effect:
         specifier: 'catalog:'
         version: 4.0.5

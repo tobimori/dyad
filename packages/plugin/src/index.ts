@@ -125,6 +125,15 @@ export class ProviderAudio extends Data.Class<{
   readonly decryptionKeys?: Redacted.Redacted<ReadonlyMap<string, string>>;
 }> {}
 
+/**
+ * A source of another provider that plays in place of a source, for a provider without its own
+ * audio. It must have the container and codec of the source that links to it.
+ */
+export class ProviderLink extends Data.TaggedClass("ProviderLink")<{
+  readonly provider: string;
+  readonly externalId: string;
+}> {}
+
 /** One line of a tracklist, as the provider shows it */
 export class TracklistEntry extends Schema.Class<TracklistEntry>("TracklistEntry")({
   /** `null` when the line has no time */
@@ -226,7 +235,7 @@ export class Provider extends Data.Class<{
   readonly resolve: (
     externalId: string,
     credentials: Credentials,
-  ) => Effect.Effect<ProviderAudio, ProviderError>;
+  ) => Effect.Effect<ProviderAudio | ProviderLink, ProviderError>;
   /**
    * Gives the `decryptionKeys` of `resolve` without the audio, for encrypted audio that the core
    * cached. The core caches encrypted audio only from providers that have it.

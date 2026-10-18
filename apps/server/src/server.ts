@@ -8,6 +8,7 @@ import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
 import { castPlugin } from "@dyad/plugin-cast/server";
 import { deezerPlugin } from "@dyad/plugin-deezer/server";
+import { hypemPlugin } from "@dyad/plugin-hypem/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { musicbrainzPlugin } from "@dyad/plugin-musicbrainz/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
@@ -38,6 +39,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   bandcampPlugin,
   castPlugin,
   deezerPlugin,
+  hypemPlugin,
   musicbrainzPlugin,
   soundcloudPlugin,
   youtubePlugin,

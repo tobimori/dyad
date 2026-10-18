@@ -17,8 +17,7 @@ import {
   UserId,
 } from "@dyad/domain";
 import { MediaStream, encodeFlac, remuxAudio } from "@dyad/media/node";
-import { ProviderAudio } from "@dyad/plugin";
-import type { ProviderError } from "@dyad/plugin";
+import { ProviderAudio, ProviderError, ProviderLink } from "@dyad/plugin";
 import { and, eq } from "drizzle-orm";
 import {
   Clock,
@@ -155,10 +154,28 @@ const providerPlayback = (
       return yield* new PlaybackUnavailable({ reason: "not_found" });
     }
 
-    const usable = (yield* usableProviders(userId)).get(item.provider);
+    const usableByUser = yield* usableProviders(userId);
+    const usable = usableByUser.get(item.provider);
     if (usable === undefined) {
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
+
+    const resolve = Effect.gen(function* () {
+      const audio = yield* usable.provider.resolve(item.externalId, usable.credentials);
+      if (!(audio instanceof ProviderLink)) return audio;
+
+      const linked = usableByUser.get(audio.provider);
+      if (linked === undefined) {
+        return yield* new ProviderError({
+          reason: `Cannot play the linked ${audio.provider} source`,
+        });
+      }
+      const linkedAudio = yield* linked.provider.resolve(audio.externalId, linked.credentials);
+      if (linkedAudio instanceof ProviderLink) {
+        return yield* new ProviderError({ reason: "The linked source links again" });
+      }
+      return linkedAudio;
+    });
 
     const keys = usable.provider.keys;
     // A live source does not end. Encrypted audio on disk needs a way to get its keys again.
@@ -168,7 +185,7 @@ const providerPlayback = (
       demuxer: item.container,
       provider: item.provider,
       cacheId: cacheable ? item.variantId : null,
-      resolve: usable.provider.resolve(item.externalId, usable.credentials),
+      resolve,
       keys: keys?.(item.externalId, usable.credentials),
     });
   });

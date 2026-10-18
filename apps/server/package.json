@@ -19,6 +19,7 @@
     "@dyad/plugin-bandcamp": "workspace:*",
     "@dyad/plugin-cast": "workspace:*",
     "@dyad/plugin-deezer": "workspace:*",
+    "@dyad/plugin-hypem": "workspace:*",
     "@dyad/plugin-local-files": "workspace:*",
     "@dyad/plugin-musicbrainz": "workspace:*",
     "@dyad/plugin-soundcloud": "workspace:*",
