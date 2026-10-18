@@ -10,9 +10,11 @@ import { useRenderer } from "@opentui/react";
 import { Effect, Fiber } from "effect";
 import { useEffect, useRef, useState } from "react";
 
+import { Cover } from "../component/cover.tsx";
+import type { Artwork } from "../component/use-artwork.ts";
 import { commands, keyLabel, useCommands } from "../context/keymap.ts";
 import type { Command } from "../context/keymap.ts";
-import { Settings, loadSettings, updateSettings } from "../context/settings.ts";
+import { Settings, defaultSettings, loadSettings, updateSettings } from "../context/settings.ts";
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
 import { VideoStream } from "./video-stream.ts";
@@ -23,7 +25,7 @@ const imageId = 0x5d1a7f;
 // Ghostty 1.3.1 takes compressed escape data at only about 30 MB/s
 const zlibMaxWidth = 480;
 const delayStepMs = 20;
-// A position change by more than this beyond the elapsed time is a seek
+// A position change by more than this beyond the played time is a seek
 const seekThresholdMs = 1000;
 const probeTimeoutMs = 500;
 
@@ -46,36 +48,14 @@ const copyCells = (grid: CellGrid, target: FrameBufferRenderable) => {
   target.requestRender();
 };
 
-/** Full-screen video of the source that plays, timed by its audio */
-export function VideoView(props: {
-  readonly source: SourceSummary | undefined;
-  readonly playing: boolean;
-  readonly positionMs: () => number;
-  readonly durationMs: number | null;
-  readonly connection: typeof ServerConnection.Service | null;
-  readonly serverUrl: string;
-  readonly width: number;
-  readonly height: number;
-}) {
-  const renderer = useRenderer();
-  const theme = useTheme();
-  const host = useRef<BoxRenderable | null>(null);
-  const stream = useRef<VideoStream | null>(null);
-  // The frame callback lives longer than one render, so it reads the newest values here
-  const latest = useRef(props);
-  latest.current = props;
-  const [delayMs, setDelayMs] = useState(0);
-  const delay = useRef(0);
-  delay.current = delayMs;
-  const [aspect, setAspect] = useState(16 / 9);
-  const [files, setFiles] = useState(fileFrames);
-  const [failure, setFailure] = useState<string | null>(null);
-
+// Loads on each mount, so that a delay that the full view changed applies to the cover
+const useSettings = () => {
+  const [settings, setSettings] = useState<Settings | null>(null);
   useEffect(() => {
     const loading = Effect.runFork(
       loadSettings.pipe(
-        Effect.tap((settings) => Effect.sync(() => setDelayMs(settings.videoDelayMs ?? 0))),
-        Effect.ignore,
+        Effect.orElseSucceed(() => defaultSettings),
+        Effect.tap((loaded) => Effect.sync(() => setSettings(loaded))),
         Effect.provide(NodeServices.layer),
       ),
     );
@@ -83,22 +63,34 @@ export function VideoView(props: {
       Effect.runFork(Fiber.interrupt(loading));
     };
   }, []);
+  return [settings, setSettings] as const;
+};
 
-  const changeDelay = (stepMs: number) => {
-    const next = Math.max(-2000, Math.min(2000, delay.current + stepMs));
-    setDelayMs(next);
-    Effect.runFork(
-      updateSettings((settings) => new Settings({ ...settings, videoDelayMs: next })).pipe(
-        Effect.ignore,
-        Effect.provide(NodeServices.layer),
-      ),
-    );
-  };
-
-  useCommands([
-    [commands.videoEarlier, () => changeDelay(-delayStepMs)],
-    [commands.videoLater, () => changeDelay(delayStepMs)],
-  ]);
+/** The video of a source, timed by its audio, in the largest box of its aspect in the cells */
+function VideoPicture(props: {
+  readonly sourceId: string;
+  readonly playing: boolean;
+  readonly positionMs: () => number;
+  /** Shows the video this much later than `positionMs` */
+  readonly delayMs: number;
+  readonly connection: typeof ServerConnection.Service;
+  readonly serverUrl: string;
+  readonly columns: number;
+  readonly rows: number;
+  readonly visible: boolean;
+  readonly onFrame?: () => void;
+  readonly onFailure: (reason: string) => void;
+}) {
+  const renderer = useRenderer();
+  const host = useRef<BoxRenderable | null>(null);
+  const stream = useRef<VideoStream | null>(null);
+  // The frame callback lives longer than one render, so it reads the newest values here
+  const latest = useRef(props);
+  latest.current = props;
+  const [aspect, setAspect] = useState(16 / 9);
+  const [files, setFiles] = useState(fileFrames);
+  // A paused clock brings no frame, so the renders go on until the frame after a seek shows
+  const [waiting, setWaiting] = useState(true);
 
   // The terminal answers whether it reads temporary files only on the same host
   useEffect(() => {
@@ -128,19 +120,17 @@ export function VideoView(props: {
     };
   }, []);
 
-  const columns = props.width;
-  const rows = props.height - 1;
   const resolution = renderer.resolution;
   const cellWidth = resolution === null ? 10 : resolution.width / renderer.terminalWidth;
   const cellHeight = resolution === null ? 20 : resolution.height / renderer.terminalHeight;
-  // The largest box of cells with the aspect of the video; the terminal stretches the image to it
+  // The terminal stretches the image to this box
   const boxColumns = Math.max(
     1,
-    Math.min(columns, Math.floor((rows * cellHeight * aspect) / cellWidth)),
+    Math.min(props.columns, Math.floor((props.rows * cellHeight * aspect) / cellWidth)),
   );
   const boxRows = Math.max(
     1,
-    Math.min(rows, Math.round((boxColumns * cellWidth) / aspect / cellHeight)),
+    Math.min(props.rows, Math.round((boxColumns * cellWidth) / aspect / cellHeight)),
   );
   const pixels = (() => {
     if (mode === "octants") return { width: boxColumns * 2, height: boxRows * 4 };
@@ -153,18 +143,12 @@ export function VideoView(props: {
   const pixelsRef = useRef(pixels);
   pixelsRef.current = pixels;
 
-  // Rows from the client replica do not know `video`, so the server decides
-  const sourceId = props.source?.id ?? null;
   useEffect(() => {
-    setFailure(null);
-    const connection = latest.current.connection;
-    if (sourceId === null || connection === null) return;
-
     const request = Effect.runFork(
-      connection
+      props.connection
         .prepareVideo({
-          sourceId,
-          // Cells and compressed frames need few pixels; a small stream costs less to decode
+          sourceId: props.sourceId,
+          // The smallest stream that fills the box costs the least to decode
           maxHeight: videoMaxHeight(pixelsRef.current.height),
         })
         .pipe(
@@ -173,14 +157,16 @@ export function VideoView(props: {
               stream.current = new VideoStream({
                 serverUrl: latest.current.serverUrl,
                 path: plan.path,
-                startMs: Math.max(0, latest.current.positionMs() - delay.current),
+                startMs: Math.max(0, latest.current.positionMs() - latest.current.delayMs),
                 ...pixelsRef.current,
                 onSize: (width, height) => setAspect(width / height),
-                onFailure: setFailure,
+                onFailure: (reason) => latest.current.onFailure(reason),
               });
             }),
           ),
-          Effect.catch(() => Effect.sync(() => setFailure("This track has no video"))),
+          Effect.catch(() =>
+            Effect.sync(() => latest.current.onFailure("This track has no video")),
+          ),
         ),
     );
     return () => {
@@ -188,16 +174,23 @@ export function VideoView(props: {
       stream.current?.close();
       stream.current = null;
     };
-  }, [sourceId]);
+  }, [props.sourceId]);
 
   useEffect(() => {
     stream.current?.resize(pixels.width, pixels.height);
   }, [pixels.width, pixels.height]);
 
   useEffect(() => {
+    if (!props.playing && !waiting) return;
+    renderer.requestLive();
+    return () => renderer.dropLive();
+  }, [props.playing, waiting]);
+
+  useEffect(() => {
     const box = host.current;
     if (box === null || (mode === "kitty" && files === undefined)) return;
 
+    setWaiting(true);
     const surface = new FrameBufferRenderable(renderer, { width: boxColumns, height: boxRows });
     box.add(surface);
     const grid = new CellGrid(boxColumns, boxRows);
@@ -212,18 +205,23 @@ export function VideoView(props: {
 
     let lastMs = latest.current.positionMs();
     let lastAt = performance.now();
+    let shown = false;
     const frame = () => {
       const video = stream.current;
       const at = performance.now();
       const positionMs = latest.current.positionMs();
       const jumpMs = positionMs - lastMs;
-      const seeked = jumpMs < -seekThresholdMs / 4 || jumpMs > at - lastAt + seekThresholdMs;
+      const elapsedMs = latest.current.playing ? at - lastAt : 0;
+      const seeked = jumpMs < -seekThresholdMs / 4 || jumpMs > elapsedMs + seekThresholdMs;
       lastMs = positionMs;
       lastAt = at;
       if (video === null) return Promise.resolve();
 
-      const nowMs = positionMs - delay.current;
-      if (seeked) video.seek(nowMs);
+      const nowMs = positionMs - latest.current.delayMs;
+      if (seeked) {
+        video.seek(nowMs);
+        setWaiting(true);
+      }
       const due = video.take(nowMs);
       if (due !== undefined) {
         const rgba = new Uint8Array(due.rgba);
@@ -244,6 +242,9 @@ export function VideoView(props: {
           copyCells(grid, surface);
         }
         video.release(due);
+        if (!shown) latest.current.onFrame?.();
+        shown = true;
+        setWaiting(false);
       }
       video.pull(nowMs);
       return Promise.resolve();
@@ -252,11 +253,9 @@ export function VideoView(props: {
     const targetFps = renderer.targetFps;
     renderer.targetFps = 60;
     renderer.setFrameCallback(frame);
-    renderer.requestLive();
 
     return () => {
       renderer.removeFrameCallback(frame);
-      renderer.dropLive();
       renderer.targetFps = targetFps;
       if (kitty !== null) {
         process.stdout.write(kitty.delete());
@@ -266,9 +265,56 @@ export function VideoView(props: {
       surface.destroy();
     };
     // A new surface for each source, so that no frame of the last video stays
-  }, [boxColumns, boxRows, files, sourceId]);
+  }, [boxColumns, boxRows, files, props.sourceId]);
 
+  return (
+    <box
+      ref={host}
+      width={props.columns}
+      height={props.rows}
+      alignItems="center"
+      justifyContent="center"
+      visible={props.visible}
+    />
+  );
+}
+
+/** Full-screen video of the source that plays, timed by its audio */
+export function VideoView(props: {
+  readonly source: SourceSummary | undefined;
+  readonly playing: boolean;
+  readonly positionMs: () => number;
+  readonly durationMs: number | null;
+  readonly connection: typeof ServerConnection.Service | null;
+  readonly serverUrl: string;
+  readonly width: number;
+  readonly height: number;
+}) {
+  const theme = useTheme();
+  const [settings, setSettings] = useSettings();
+  const delayMs = settings?.videoDelayMs ?? 0;
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const changeDelay = (stepMs: number) => {
+    const next = Math.max(-2000, Math.min(2000, delayMs + stepMs));
+    setSettings(new Settings({ ...(settings ?? defaultSettings), videoDelayMs: next }));
+    Effect.runFork(
+      updateSettings((current) => new Settings({ ...current, videoDelayMs: next })).pipe(
+        Effect.ignore,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+  };
+
+  useCommands([
+    [commands.videoEarlier, () => changeDelay(-delayStepMs)],
+    [commands.videoLater, () => changeDelay(delayStepMs)],
+  ]);
+
+  // Rows from the client replica do not know `video`, so the server decides
   const source = props.source;
+  useEffect(() => setFailure(null), [source?.id]);
+
   const time = `${formatDuration(props.positionMs())} / ${formatDuration(props.durationMs)}`;
   const key = (command: Command) => keyLabel(command.keys[0] ?? "");
   const sync = delayMs === 0 ? "" : `video ${delayMs > 0 ? "+" : ""}${delayMs} ms   `;
@@ -283,7 +329,22 @@ export function VideoView(props: {
 
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#000000">
-      <box ref={host} flexGrow={1} alignItems="center" justifyContent="center" />
+      <box flexGrow={1} alignItems="center" justifyContent="center">
+        {source !== undefined && props.connection !== null && settings !== null && (
+          <VideoPicture
+            sourceId={source.id}
+            playing={props.playing}
+            positionMs={props.positionMs}
+            delayMs={delayMs}
+            connection={props.connection}
+            serverUrl={props.serverUrl}
+            columns={props.width}
+            rows={props.height - 1}
+            visible
+            onFailure={setFailure}
+          />
+        )}
+      </box>
       <box flexDirection="row" height={1} paddingX={1} gap={2} backgroundColor={theme.panel}>
         <text flexGrow={1} wrapMode="none">
           <span fg={theme.accent}>{props.playing ? "▶ " : "⏸ "}</span>
@@ -296,6 +357,56 @@ export function VideoView(props: {
           {time}
         </text>
       </box>
+    </box>
+  );
+}
+
+/**
+ * The cover, or in its place the muted video of the source. Cells are too coarse for a picture
+ * this small, so only terminals with Kitty graphics show the video.
+ */
+export function CoverVideo(props: {
+  readonly source: SourceSummary;
+  readonly artwork: Artwork | null;
+  readonly playing: boolean;
+  readonly positionMs: () => number;
+  readonly connection: typeof ServerConnection.Service | null;
+  readonly serverUrl: string;
+  readonly width: number;
+  readonly height: number;
+}) {
+  const [settings] = useSettings();
+  // Source IDs, so that the next source starts with its cover and a new try
+  const [shown, setShown] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const id = props.source.id;
+  const video =
+    mode === "kitty" &&
+    props.source.video &&
+    props.connection !== null &&
+    settings !== null &&
+    settings.coverVideo !== false &&
+    failed !== id;
+  const showing = video && shown === id;
+
+  return (
+    <box width={props.width} height={props.height}>
+      {!showing && <Cover artwork={props.artwork} width={props.width} height={props.height} />}
+      {video && (
+        <VideoPicture
+          sourceId={id}
+          playing={props.playing}
+          positionMs={props.positionMs}
+          delayMs={settings.videoDelayMs ?? 0}
+          connection={props.connection}
+          serverUrl={props.serverUrl}
+          columns={props.width}
+          rows={props.height}
+          visible={showing}
+          onFrame={() => setShown(id)}
+          onFailure={() => setFailed(id)}
+        />
+      )}
     </box>
   );
 }

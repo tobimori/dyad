@@ -18,6 +18,8 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   videoDelayMs: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: -2000, maximum: 2000 })),
   ),
+  /** `false` shows the cover instead of the muted video of the source. Missing means on. */
+  coverVideo: Schema.optionalKey(Schema.Boolean),
 }) {}
 
 export const defaultSettings = new Settings({ enabledPlugins: [], disabledPlugins: [] });

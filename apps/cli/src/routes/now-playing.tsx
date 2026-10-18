@@ -2,11 +2,10 @@ import { formatDuration, songLine, sourceLabel, titleOf } from "@dyad/client-run
 import type { QueueEntry, SourceSegment } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
 import { useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import { ProgressBar } from "../component/bars.tsx";
-import { Cover } from "../component/cover.tsx";
 import { scrollOffset, useRowClick } from "../component/track-list.tsx";
-import type { Artwork } from "../component/use-artwork.ts";
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
 
@@ -112,7 +111,8 @@ export function NowPlayingPanel(props: {
   /** The track of the DJ set that plays */
   readonly segment: SourceSegment | undefined;
   readonly upNext: ReadonlyArray<QueueEntry>;
-  readonly artwork: Artwork | null;
+  /** The cover of the source that plays, in a box of `width` by `height` cells */
+  readonly cover: (width: number, height: number) => ReactNode;
   readonly width: number;
   readonly height: number;
   readonly onOpen: () => void;
@@ -149,7 +149,7 @@ export function NowPlayingPanel(props: {
     >
       {coverHeight > 0 && (
         <box marginBottom={1} alignItems="center">
-          <Cover artwork={props.artwork} width={coverHeight * 2} height={coverHeight} />
+          {props.cover(coverHeight * 2, coverHeight)}
         </box>
       )}
       <text fg={theme.text} wrapMode="none">
@@ -187,7 +187,8 @@ export function NowPlayingView(props: {
   readonly onSelectSegment: (index: number) => void;
   readonly onPlaySegment: (index: number) => void;
   readonly upNext: ReadonlyArray<QueueEntry>;
-  readonly artwork: Artwork | null;
+  /** The cover of the source that plays, in a box of `width` by `height` cells */
+  readonly cover: (width: number, height: number) => ReactNode;
   readonly positionMs: number;
   readonly durationMs: number | null;
   readonly width: number;
@@ -227,9 +228,7 @@ export function NowPlayingView(props: {
       paddingY={1}
     >
       {coverHeight > 0 && (
-        <box alignItems="center">
-          <Cover artwork={props.artwork} width={coverHeight * 2} height={coverHeight} />
-        </box>
+        <box alignItems="center">{props.cover(coverHeight * 2, coverHeight)}</box>
       )}
       <box
         flexDirection="column"
