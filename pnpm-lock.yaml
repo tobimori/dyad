@@ -669,6 +669,9 @@ importers:
 
   plugins/musicbrainz:
     dependencies:
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
