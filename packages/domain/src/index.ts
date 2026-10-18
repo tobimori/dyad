@@ -1,8 +1,19 @@
 import { Context, Effect, Schema } from "effect";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 
+import {
+  DeviceId,
+  PlayContext,
+  RecordingId,
+  ReplicaId,
+  UserId,
+  WorkspaceId,
+} from "./primitives.ts";
+
 export * from "./library-view.ts";
+export * from "./primitives.ts";
 export * from "./session.ts";
+export * from "./sync.ts";
 
 export const HttpUrl = Schema.URLFromString.check(
   Schema.makeFilter((url) =>
@@ -11,15 +22,6 @@ export const HttpUrl = Schema.URLFromString.check(
       : "Expected an HTTP or HTTPS URL",
   ),
 );
-
-export const ReplicaId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("ReplicaId"));
-export type ReplicaId = typeof ReplicaId.Type;
-
-export const WorkspaceId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("WorkspaceId"));
-export type WorkspaceId = typeof WorkspaceId.Type;
-
-export const RecordingId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("RecordingId"));
-export type RecordingId = typeof RecordingId.Type;
 
 export class ServerDescriptor extends Schema.Class<ServerDescriptor>("ServerDescriptor")({
   replicaId: ReplicaId,
@@ -241,17 +243,6 @@ export class SearchResults extends Schema.Class<SearchResults>("SearchResults")(
   unavailable: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 }) {}
 
-/** Where the user started a play */
-export const PlayContext = Schema.Literals([
-  "library",
-  "search",
-  "history",
-  "album",
-  "artist",
-  "home",
-  "playlist",
-]);
-
 export const AudioContainer = Schema.Literals(["mp3", "flac", "mp4", "adts", "ogg", "webm"]);
 export const AudioCodec = Schema.Literals(["mp3", "flac", "aac", "alac", "opus", "vorbis"]);
 
@@ -371,12 +362,6 @@ export class AccountLinkFailed extends Schema.TaggedError<AccountLinkFailed>()(
   "AccountLinkFailed",
   { reason: Schema.String },
 ) {}
-
-export const UserId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("UserId"));
-export type UserId = typeof UserId.Type;
-
-export const DeviceId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("DeviceId"));
-export type DeviceId = typeof DeviceId.Type;
 
 const Username = Schema.String.check(Schema.isPattern(/^[a-z0-9._-]{1,64}$/));
 const DeviceName = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100));

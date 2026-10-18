@@ -1,19 +1,13 @@
+import { HybridLogicalClock } from "@dyad/domain";
 import type { ReplicaId } from "@dyad/domain";
-import { Clock, Context, Data, Effect, Layer, Ref, Schema } from "effect";
+import { Clock, Context, Data, Effect, Layer, Ref } from "effect";
+
+export { HybridLogicalClock } from "@dyad/domain";
 
 // Fixed widths make string order the same as clock order
 const wallTimeDigits = 15;
 const counterDigits = 4;
 const maxCounter = 36 ** counterDigits - 1;
-
-/**
- * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
- * Values sort as strings. The replica ID makes values from different replicas unique.
- */
-export const HybridLogicalClock = Schema.String.check(
-  Schema.isPattern(/^\d{15}-[0-9a-z]{4}-[0-9a-f-]{36}$/),
-).pipe(Schema.brand("HybridLogicalClock"));
-export type HybridLogicalClock = typeof HybridLogicalClock.Type;
 
 class ClockTime extends Data.Class<{ readonly wallTime: number; readonly counter: number }> {}
 
