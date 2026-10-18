@@ -1,11 +1,12 @@
 import { titleOf } from "@dyad/client-runtime";
-import type { QueueEntry, RepeatMode } from "@dyad/domain";
-import { Fragment } from "react";
+import type { QueueEntry, RepeatMode, SourceSegment } from "@dyad/domain";
+import { Fragment, useState } from "react";
 
 import { ProgressBar, VolumeBar } from "./bars.tsx";
 import { useHints } from "../context/keymap.ts";
 import { Cover } from "./cover.tsx";
 import { useTheme } from "../theme/theme.ts";
+import { fit } from "../ui/format.ts";
 import type { Artwork } from "./use-artwork.ts";
 
 const stateIcons = { stopped: "■", loading: "…", playing: "▶", paused: "⏸" };
@@ -15,6 +16,10 @@ export function Footer(props: {
   readonly state: keyof typeof stateIcons;
   readonly positionMs: number;
   readonly durationMs: number | null;
+  /** The tracklist of a DJ set */
+  readonly segments: ReadonlyArray<SourceSegment>;
+  /** `-1` before the first track of the set */
+  readonly currentSegment: number;
   /** `null` when no output plays the session */
   readonly volume: number | null;
   readonly muted: boolean;
@@ -33,6 +38,15 @@ export function Footer(props: {
   const theme = useTheme();
   const hints = useHints();
   const modeColor = (on: boolean) => (on ? theme.accent : theme.faint);
+  const [titleWidth, setTitleWidth] = useState(0);
+
+  const segment = props.segments[props.currentSegment];
+  const artist = segment === undefined ? (props.entry?.source.artist ?? null) : segment.artist;
+  const artistText = artist === null ? "" : `  ${artist}`;
+  const messageText = props.message === null ? "" : `  ${props.message}`;
+  const setPrefix = `  ·  ${props.currentSegment + 1}/${props.segments.length} · `;
+  const setRoom =
+    titleWidth - `▶ ${segment?.title ?? ""}${artistText}${setPrefix}${messageText}`.length;
 
   return (
     <box flexDirection="row" height={3} paddingX={1} gap={1} backgroundColor={theme.panel}>
@@ -43,20 +57,32 @@ export function Footer(props: {
       )}
       <box flexDirection="column" flexGrow={1}>
         <box flexDirection="row" height={1} gap={2}>
-          <text flexGrow={1} flexBasis={0} wrapMode="none" onMouseDown={props.onOpen}>
-            <span fg={theme.accent}>{stateIcons[props.state]} </span>
-            {props.entry === undefined ? (
-              <span fg={theme.muted}>Nothing is playing</span>
-            ) : (
-              <>
-                <strong fg={theme.text}>{titleOf(props.entry.source)}</strong>
-                <span fg={theme.muted}>
-                  {props.entry.source.artist === null ? "" : `  ${props.entry.source.artist}`}
-                </span>
-              </>
-            )}
-            <span fg={theme.error}>{props.message === null ? "" : `  ${props.message}`}</span>
-          </text>
+          <box
+            flexGrow={1}
+            flexBasis={0}
+            overflow="hidden"
+            onSizeChange={function () {
+              setTitleWidth(this.width);
+            }}
+          >
+            <text wrapMode="none" onMouseDown={props.onOpen}>
+              <span fg={theme.accent}>{stateIcons[props.state]} </span>
+              {props.entry === undefined ? (
+                <span fg={theme.muted}>Nothing is playing</span>
+              ) : (
+                <>
+                  <strong fg={theme.text}>{segment?.title ?? titleOf(props.entry.source)}</strong>
+                  <span fg={theme.muted}>{artistText}</span>
+                  {segment !== undefined && (
+                    <span fg={theme.faint}>
+                      {setPrefix + fit(titleOf(props.entry.source), setRoom)}
+                    </span>
+                  )}
+                </>
+              )}
+              <span fg={theme.error}>{messageText}</span>
+            </text>
+          </box>
           {props.quality !== null && <text fg={theme.faint}>{props.quality}</text>}
           <text>
             <span fg={modeColor(props.shuffle)}>⤨ shuffle </span>
@@ -69,6 +95,7 @@ export function Footer(props: {
         <ProgressBar
           positionMs={props.positionMs}
           durationMs={props.durationMs}
+          marks={props.segments.flatMap((each) => (each.startMs === null ? [] : [each.startMs]))}
           onSeek={props.onSeek}
         />
         <text wrapMode="none">

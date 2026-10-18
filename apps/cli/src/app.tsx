@@ -875,6 +875,8 @@ export function App(props: {
           }
           artwork={artwork}
           showCover={view === "browse" && !showPanel}
+          segments={segments}
+          currentSegment={currentSegment}
           onOpen={openNowPlaying}
           onSeek={player.seekTo}
           onVolume={player.setVolume}

@@ -6,15 +6,27 @@ import { useTheme } from "../theme/theme.ts";
 export function ProgressBar(props: {
   readonly positionMs: number;
   readonly durationMs: number | null;
+  /** Positions in ms that get a tick, for example the tracks of a DJ set */
+  readonly marks?: ReadonlyArray<number>;
   readonly onSeek: (ms: number) => void;
 }) {
   const theme = useTheme();
   const [width, setWidth] = useState(0);
 
+  const { durationMs } = props;
   const elapsed = formatTime(props.positionMs);
-  const total = props.durationMs === null ? "--:--" : formatTime(props.durationMs);
-  const fraction = props.durationMs === null ? 0 : Math.min(1, props.positionMs / props.durationMs);
+  const total = durationMs === null ? "--:--" : formatTime(durationMs);
+  const fraction = durationMs === null ? 0 : Math.min(1, props.positionMs / durationMs);
   const filled = Math.round(width * fraction);
+  const ticks = new Set(
+    durationMs === null
+      ? []
+      : (props.marks ?? []).map((ms) => Math.floor((width * ms) / durationMs)),
+  );
+  const line = (from: number, to: number, plain: string, tick: string) =>
+    Array.from({ length: Math.max(0, to - from) }, (_, index) =>
+      ticks.has(from + index) ? tick : plain,
+    ).join("");
 
   return (
     <box flexDirection="row" height={1} gap={1}>
@@ -32,8 +44,8 @@ export function ProgressBar(props: {
         }}
       >
         <text wrapMode="none">
-          <span fg={theme.accent}>{"━".repeat(filled)}</span>
-          <span fg={theme.faint}>{"─".repeat(Math.max(0, width - filled))}</span>
+          <span fg={theme.accent}>{line(0, filled, "━", "╋")}</span>
+          <span fg={theme.faint}>{line(filled, width, "─", "┼")}</span>
         </text>
       </box>
       <text fg={theme.muted}>{total}</text>
