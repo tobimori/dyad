@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vp pack",
-    "dev": "vp pack && node --experimental-ffi --env-file-if-exists=.env.local dist/main.mjs",
+    "dev": "vp pack && DYAD_MEDIA_CONTROLS_APP=../../plugins/media-controls/dist/dyad-media-controls.app node --experimental-ffi --env-file-if-exists=.env.local dist/main.mjs",
     "start": "node --experimental-ffi dist/main.mjs",
     "typecheck": "tsc --noEmit",
     "build:linux-x64": "DYAD_EXE_TARGET=linux-x64 vp pack",
@@ -19,6 +19,7 @@
     "@dyad/domain": "workspace:*",
     "@dyad/plugin": "workspace:*",
     "@dyad/plugin-discord-presence": "workspace:*",
+    "@dyad/plugin-media-controls": "workspace:*",
     "@dyad/visualizer": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@effect/platform-node": "catalog:",

@@ -1,0 +1,19 @@
+{
+  "name": "@dyad/plugin-media-controls",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./client": "./src/client.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:app": "sh native/build-app.sh"
+  },
+  "dependencies": {
+    "@dyad/plugin": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:"
+  }
+}

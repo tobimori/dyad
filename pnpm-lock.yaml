@@ -178,6 +178,9 @@ importers:
       '@dyad/plugin-discord-presence':
         specifier: workspace:*
         version: link:../../plugins/discord-presence
+      '@dyad/plugin-media-controls':
+        specifier: workspace:*
+        version: link:../../plugins/media-controls
       '@dyad/visualizer':
         specifier: workspace:*
         version: link:../../packages/visualizer
@@ -569,6 +572,18 @@ importers:
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  plugins/media-controls:
+    dependencies:
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
       effect:
         specifier: 'catalog:'
         version: 4.0.5

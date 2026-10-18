@@ -17,7 +17,7 @@ const now = () => Effect.runSync(Clock.currentTimeMillis);
 const volumeStep = 0.05;
 const seekStepMs = 10_000;
 // Like most players, `b` first goes back to the start of the current source
-const restartAfterMs = 3000;
+export const restartAfterMs = 3000;
 // The most entries that one command can add
 const maxEntries = 10_000;
 

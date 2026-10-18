@@ -39,6 +39,7 @@ import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
 import { Engine, engineLayer } from "./playback/engine.ts";
 import { capabilities } from "./playback/player.ts";
+import { pluginTransport } from "./playback/transport.ts";
 import { DialogProvider } from "./ui/dialog.tsx";
 import { ErrorBoundary } from "./ui/error-boundary.tsx";
 import { ToastProvider } from "./ui/toast.tsx";
@@ -153,7 +154,7 @@ const player = (controller: boolean) =>
     const plugins = yield* startPluginHost(
       new ClientPluginContext({
         serverOrigin: serverUrl,
-        playback: { nowPlaying: session.nowPlaying },
+        playback: { nowPlaying: session.nowPlaying, ...pluginTransport(session, engine) },
       }),
     ).pipe(Effect.provideContext(logServices));
 

@@ -17,9 +17,18 @@ export class NowPlaying extends Data.Class<{
 export class ClientPluginContext extends Data.Class<{
   /** Origin of the Dyad server. Its URLs are private to the workspace. */
   readonly serverOrigin: string;
+  /** The commands act like the keys of the client. A command that does not apply does nothing. */
   readonly playback: {
     /** The current value, then each change. `null` when nothing is loaded. */
     readonly nowPlaying: Stream.Stream<NowPlaying | null>;
+    readonly play: Effect.Effect<void>;
+    readonly pause: Effect.Effect<void>;
+    readonly togglePause: Effect.Effect<void>;
+    readonly next: Effect.Effect<void>;
+    /** Goes back to the start of the source first, like most players */
+    readonly previous: Effect.Effect<void>;
+    readonly seekTo: (positionMs: number) => Effect.Effect<void>;
+    readonly seekBy: (offsetMs: number) => Effect.Effect<void>;
   };
 }> {}
 

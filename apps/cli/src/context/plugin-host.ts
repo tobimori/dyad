@@ -1,4 +1,5 @@
 import { discordPresencePlugin } from "@dyad/plugin-discord-presence/client";
+import { mediaControlsPlugin } from "@dyad/plugin-media-controls/client";
 import type { ClientPlugin, ClientPluginContext } from "@dyad/plugin/client";
 import { Data, Effect, Exit, Scope } from "effect";
 import type { FileSystem, Path } from "effect";
@@ -6,7 +7,10 @@ import type { FileSystem, Path } from "effect";
 import { Settings, loadSettings, updateSettings } from "./settings.ts";
 
 // Each plugin is off until the user turns it on for this device
-export const clientPlugins: ReadonlyArray<ClientPlugin> = [discordPresencePlugin];
+export const clientPlugins: ReadonlyArray<ClientPlugin> = [
+  discordPresencePlugin,
+  mediaControlsPlugin,
+];
 
 export const withEnabled = (settings: Settings, id: string, enabled: boolean) => {
   const others = settings.enabledPlugins.filter((other) => other !== id);
