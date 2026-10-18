@@ -89,3 +89,4 @@ minimumReleaseAgeExclude:
 
 patchedDependencies:
   drizzle-orm@1.0.0-rc.5-5935859: patches/drizzle-orm@1.0.0-rc.5-5935859.patch
+  node-av@6.1.1: patches/node-av@6.1.1.patch

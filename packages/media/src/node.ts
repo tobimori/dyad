@@ -342,6 +342,8 @@ export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
         }),
         (encoder) => Effect.sync(() => encoder.close()),
       );
+      // `patches/node-av@6.1.1.patch` makes the flush encode the last partial frame, which
+      // `node-av` 6.1.1 drops
       const packets = encoder.packets(
         filter.frames(
           decoder.frames(Stream.toAsyncIterable(packetsFrom(name, input, stream, start))),

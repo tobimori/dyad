@@ -84,6 +84,7 @@ export const encodeAudio = (
         }),
         (encoder) => Effect.sync(() => encoder.close()),
       );
+      // Needs `patches/node-av@6.1.1.patch` for the last partial frame, like `encodeFlac`
       const packets = encoder.packets(
         filter.frames(
           decoder.frames(Stream.toAsyncIterable(packetsFrom(name, input, stream, start))),

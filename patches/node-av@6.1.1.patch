@@ -1,0 +1,94 @@
+diff --git a/dist/api/audio-frame-buffer.d.ts b/dist/api/audio-frame-buffer.d.ts
+index 98efb714ad90e63897fce1a2d66dbb2ef9781d77..1f8d46bb8927e56e938984364b0795f4c63b1ae1 100644
+--- a/dist/api/audio-frame-buffer.d.ts
++++ b/dist/api/audio-frame-buffer.d.ts
+@@ -160,7 +160,7 @@ export declare class AudioFrameBuffer implements Disposable {
+      *
+      * @see {@link pullSync} For synchronous version
+      */
+-    pull(): Promise<Frame | null>;
++    pull(partial?: boolean): Promise<Frame | null>;
+     /**
+      * Pull a fixed-size audio frame from the buffer synchronously.
+      * Synchronous version of pull.
+@@ -183,7 +183,7 @@ export declare class AudioFrameBuffer implements Disposable {
+      *
+      * @see {@link pull} For async version
+      */
+-    pullSync(): Frame | null;
++    pullSync(partial?: boolean): Frame | null;
+     /**
+      * Reset the buffer, discarding all buffered samples.
+      *
+diff --git a/dist/api/audio-frame-buffer.js b/dist/api/audio-frame-buffer.js
+index 2f4fbe0fbc8ddca9141af91db5247a9c5815d418..9c460a21304d13f0e38936749813e6e192b4484c 100644
+--- a/dist/api/audio-frame-buffer.js
++++ b/dist/api/audio-frame-buffer.js
+@@ -202,16 +202,18 @@ export class AudioFrameBuffer {
+      *
+      * @see {@link pullSync} For synchronous version
+      */
+-    async pull() {
+-        if (!this.hasFrame()) {
++    async pull(partial = false) {
++        const nbSamples = Math.min(this.fifo.size, this.frameSize);
++        if (nbSamples === 0 || (!partial && nbSamples < this.frameSize)) {
+             return null;
+         }
+         // Update PTS
+         this.frame.pts = this.nextPts;
++        this.frame.nbSamples = nbSamples;
+         // Read samples from FIFO into reusable frame
+-        await this.fifo.read(this.frame.data, this.frameSize);
++        await this.fifo.read(this.frame.data, nbSamples);
+         // Update PTS for next frame
+-        this.nextPts += BigInt(this.frameSize);
++        this.nextPts += BigInt(nbSamples);
+         // Clone frame for user (like Decoder does)
+         const cloned = this.frame.clone();
+         if (!cloned) {
+@@ -241,16 +243,18 @@ export class AudioFrameBuffer {
+      *
+      * @see {@link pull} For async version
+      */
+-    pullSync() {
+-        if (!this.hasFrame()) {
++    pullSync(partial = false) {
++        const nbSamples = Math.min(this.fifo.size, this.frameSize);
++        if (nbSamples === 0 || (!partial && nbSamples < this.frameSize)) {
+             return null;
+         }
+         // Update PTS
+         this.frame.pts = this.nextPts;
++        this.frame.nbSamples = nbSamples;
+         // Read samples from FIFO into reusable frame
+-        this.fifo.readSync(this.frame.data, this.frameSize);
++        this.fifo.readSync(this.frame.data, nbSamples);
+         // Update PTS for next frame
+-        this.nextPts += BigInt(this.frameSize);
++        this.nextPts += BigInt(nbSamples);
+         // Clone frame for user (like Decoder does)
+         const cloned = this.frame.clone();
+         if (!cloned) {
+diff --git a/dist/api/encoder.js b/dist/api/encoder.js
+index f3694e22bb5a7d9f8cc3bc61f7f84f130778abd4..a47da042970dfeb3160094ef95a56f0180636643 100644
+--- a/dist/api/encoder.js
++++ b/dist/api/encoder.js
+@@ -1247,7 +1247,7 @@ export class Encoder {
+             // Pull any remaining partial frame (may be less than frameSize)
+             // For the final frame, we pad or truncate as needed
+             let _bufferedFrame;
+-            while (!this.isClosed && (_bufferedFrame = await this.audioFrameBuffer.pull()) !== null) {
++            while (!this.isClosed && (_bufferedFrame = await this.audioFrameBuffer.pull(true)) !== null) {
+                 const env_5 = { stack: [], error: void 0, hasError: false };
+                 try {
+                     const bufferedFrame = __addDisposableResource(env_5, _bufferedFrame, false);
+@@ -1317,7 +1317,7 @@ export class Encoder {
+             // Pull any remaining partial frame (may be less than frameSize)
+             // For the final frame, we pad or truncate as needed
+             let _bufferedFrame;
+-            while (!this.isClosed && (_bufferedFrame = this.audioFrameBuffer.pullSync()) !== null) {
++            while (!this.isClosed && (_bufferedFrame = this.audioFrameBuffer.pullSync(true)) !== null) {
+                 const env_6 = { stack: [], error: void 0, hasError: false };
+                 try {
+                     const bufferedFrame = __addDisposableResource(env_6, _bufferedFrame, false);
