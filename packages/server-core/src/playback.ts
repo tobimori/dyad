@@ -43,6 +43,7 @@ import { SourceFormat, audioContainer, choosePlayback, contentTypes } from "./pl
 import { cachedProviderSource } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { addProviderSource } from "./sources.ts";
+import { queueTracklistRead } from "./tracklists.ts";
 
 const generateStreamKey = Effect.promise(() =>
   globalThis.crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, [
@@ -246,6 +247,7 @@ const choosePlayableSource = (
     const choice = yield* choosePlayback(playable.format, capabilities);
 
     if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
+    yield* queueTracklistRead(sourceId, userId);
     return { playable, audio, choice };
   });
 

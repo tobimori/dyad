@@ -1,11 +1,88 @@
 import { formatDuration, songLine, sourceLabel, titleOf } from "@dyad/client-runtime";
-import type { QueueEntry } from "@dyad/domain";
+import type { QueueEntry, SourceSegment } from "@dyad/domain";
+import { TextAttributes } from "@opentui/core";
+import { useRef, useState } from "react";
 
 import { ProgressBar } from "../component/bars.tsx";
 import { Cover } from "../component/cover.tsx";
+import { scrollOffset, useRowClick } from "../component/track-list.tsx";
 import type { Artwork } from "../component/use-artwork.ts";
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
+
+/** `Artist – Title` of a track in a DJ set */
+export const segmentLine = (segment: SourceSegment) =>
+  segment.artist === null ? segment.title : `${segment.artist} – ${segment.title}`;
+
+// The time column fits `12:34:56`
+const segmentTimeWidth = 8;
+
+/** A click selects a track; a double click plays from it */
+function Tracklist(props: {
+  readonly segments: ReadonlyArray<SourceSegment>;
+  /** -1 when no track of the set plays */
+  readonly current: number;
+  readonly selected: number;
+  readonly width: number;
+  readonly onSelect: (index: number) => void;
+  readonly onPlay: (index: number) => void;
+}) {
+  const theme = useTheme();
+  const [height, setHeight] = useState(0);
+  const offset = useRef(0);
+  const click = useRowClick(props.onSelect, props.onPlay);
+
+  const rows = Math.max(1, height);
+  offset.current = scrollOffset(offset.current, props.selected, rows, props.segments.length);
+  const visible = props.segments.slice(offset.current, offset.current + rows);
+  const titleWidth = props.width - segmentTimeWidth - 3;
+
+  return (
+    <box flexDirection="column" marginTop={1} flexGrow={1} flexShrink={1} overflow="hidden">
+      <text fg={theme.muted} flexShrink={0}>
+        <strong>Tracklist</strong>
+      </text>
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        onSizeChange={function () {
+          setHeight(this.height);
+        }}
+      >
+        {visible.map((segment, row) => {
+          const index = offset.current + row;
+          const playing = index === props.current;
+          const selected = index === props.selected;
+          return (
+            <box
+              key={index}
+              flexDirection="row"
+              gap={1}
+              height={1}
+              backgroundColor={selected ? theme.selection : "transparent"}
+              onMouseDown={() => click(index)}
+            >
+              <text width={1} fg={theme.accent}>
+                {playing ? "▶" : " "}
+              </text>
+              <text width={segmentTimeWidth} textAlign="right" fg={theme.muted}>
+                {formatDuration(segment.startMs)}
+              </text>
+              <text
+                width={titleWidth}
+                fg={playing ? theme.accent : theme.text}
+                attributes={selected ? TextAttributes.BOLD : TextAttributes.NONE}
+                wrapMode="none"
+              >
+                {fit(segmentLine(segment), titleWidth)}
+              </text>
+            </box>
+          );
+        })}
+      </box>
+    </box>
+  );
+}
 
 const details = (entry: QueueEntry) =>
   [sourceLabel(entry.source), formatDuration(entry.source.durationMs)]
@@ -32,6 +109,8 @@ function UpNext(props: { readonly entries: ReadonlyArray<QueueEntry>; readonly w
 
 export function NowPlayingPanel(props: {
   readonly entry: QueueEntry | undefined;
+  /** The track of the DJ set that plays */
+  readonly segment: SourceSegment | undefined;
   readonly upNext: ReadonlyArray<QueueEntry>;
   readonly artwork: Artwork | null;
   readonly width: number;
@@ -85,6 +164,11 @@ export function NowPlayingPanel(props: {
       <text fg={theme.faint} wrapMode="none">
         {line(details(props.entry))}
       </text>
+      {props.segment !== undefined && (
+        <text fg={theme.accent} wrapMode="none">
+          {line(`▶ ${segmentLine(props.segment)}`)}
+        </text>
+      )}
       <UpNext entries={props.upNext} width={innerWidth} />
     </box>
   );
@@ -95,6 +179,13 @@ const sideBySideMinWidth = 64;
 
 export function NowPlayingView(props: {
   readonly entry: QueueEntry | undefined;
+  /** The tracklist of a DJ set. The view shows it instead of the next entries. */
+  readonly segments: ReadonlyArray<SourceSegment>;
+  /** The index of the track of the set that plays, or -1 */
+  readonly currentSegment: number;
+  readonly selectedSegment: number;
+  readonly onSelectSegment: (index: number) => void;
+  readonly onPlaySegment: (index: number) => void;
   readonly upNext: ReadonlyArray<QueueEntry>;
   readonly artwork: Artwork | null;
   readonly positionMs: number;
@@ -114,6 +205,7 @@ export function NowPlayingView(props: {
   }
 
   const source = props.entry.source;
+  const segment = props.segments[props.currentSegment];
   const sideBySide = props.width >= sideBySideMinWidth;
   // The padding takes two rows and four columns
   const space = { width: props.width - 4, height: props.height - 2 };
@@ -128,7 +220,8 @@ export function NowPlayingView(props: {
     <box
       flexGrow={1}
       flexDirection={sideBySide ? "row" : "column"}
-      alignItems={sideBySide ? "center" : "stretch"}
+      // The tracklist takes the full height
+      alignItems={sideBySide && props.segments.length === 0 ? "center" : "stretch"}
       gap={sideBySide ? 3 : 1}
       paddingX={2}
       paddingY={1}
@@ -157,6 +250,11 @@ export function NowPlayingView(props: {
         <text fg={theme.faint} wrapMode="none" flexShrink={0}>
           {line(details(props.entry))}
         </text>
+        {segment !== undefined && (
+          <text fg={theme.accent} wrapMode="none" flexShrink={0}>
+            {line(`▶ ${segmentLine(segment)}`)}
+          </text>
+        )}
         <box marginTop={1} flexShrink={0}>
           <ProgressBar
             positionMs={props.positionMs}
@@ -164,7 +262,18 @@ export function NowPlayingView(props: {
             onSeek={props.onSeek}
           />
         </box>
-        <UpNext entries={props.upNext} width={textWidth} />
+        {props.segments.length === 0 ? (
+          <UpNext entries={props.upNext} width={textWidth} />
+        ) : (
+          <Tracklist
+            segments={props.segments}
+            current={props.currentSegment}
+            selected={props.selectedSegment}
+            width={textWidth}
+            onSelect={props.onSelectSegment}
+            onPlay={props.onPlaySegment}
+          />
+        )}
       </box>
     </box>
   );

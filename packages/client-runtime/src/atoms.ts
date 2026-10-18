@@ -101,6 +101,13 @@ export const serverAtoms = (
         .pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
     homePage: runtime.atom(Stream.unwrap(ServerConnection.useSync((client) => client.homePage()))),
+    sourceSegments: Atom.family((sourceId: string) =>
+      runtime
+        .atom(
+          Stream.unwrap(ServerConnection.useSync((client) => client.sourceSegments({ sourceId }))),
+        )
+        .pipe(Atom.setIdleTTL(pageIdleTime)),
+    ),
   };
 };
 

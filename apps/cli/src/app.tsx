@@ -1,11 +1,13 @@
 import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
 import type { Downloads, ServerAtoms, SessionClient } from "@dyad/client-runtime";
+import { segmentIndexAt, segmentSkipTarget } from "@dyad/domain";
 import type {
   AlbumCard,
   AlbumRef,
   ArtistRef,
   DownloadQuality,
   PlayContext,
+  SourceSegment,
   SourceSummary,
 } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
@@ -51,8 +53,9 @@ import type { Section } from "./context/routes.ts";
 import { useCoverAccent } from "./context/theme-provider.tsx";
 import { useSearch } from "./context/use-search.ts";
 import type { Engine } from "./playback/engine.ts";
-import { usePlayer } from "./playback/use-player.ts";
-import { NowPlayingPanel, NowPlayingView } from "./routes/now-playing.tsx";
+import { restartAfterMs, usePlayer } from "./playback/use-player.ts";
+import { useSegments } from "./playback/use-segments.ts";
+import { NowPlayingPanel, NowPlayingView, segmentLine } from "./routes/now-playing.tsx";
 import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
 import { PlaylistView, usePlaylist } from "./routes/page/playlist-view.tsx";
 import { sections, startSection } from "./routes/sections.ts";
@@ -114,6 +117,12 @@ export function App(props: {
     onFailure: (message) => toast("error", message),
   });
   const artwork = useArtwork(player.current?.source.artworkUrl ?? null);
+  const segments = useSegments(props.atoms, player.current?.source.id);
+  const currentSegment = segmentIndexAt(segments, player.position());
+  // `null` follows the track that plays
+  const [segmentSelection, setSegmentSelection] = useState<number | null>(null);
+  useEffect(() => setSegmentSelection(null), [player.current?.id]);
+  const selectedSegment = segmentSelection ?? Math.max(0, currentSegment);
   useCoverAccent(artwork?.accent ?? null);
 
   const routes = useRoutes(startSection);
@@ -506,8 +515,69 @@ export function App(props: {
     ];
   };
 
+  const playSegment = (index: number) => {
+    const segment = segments[index];
+    if (segment === undefined) return;
+    setSegmentSelection(index);
+    if (segment.startMs === null) toast("notice", "The tracklist gives no time for this track");
+    else player.seekTo(segment.startMs);
+  };
+
+  // Like `n` and `b` on an album, but inside the source. At the ends they go to the next entry.
+  const skip = (direction: 1 | -1) => {
+    const target = segmentSkipTarget(segments, player.position(), direction, restartAfterMs);
+    if (target !== undefined) player.seekTo(target);
+    else if (direction === 1) player.next();
+    else player.previous();
+  };
+
+  const segmentActions = (segment: SourceSegment) => {
+    const list = [
+      new Action({
+        command: commands.playSegment,
+        label: "Play from this track",
+        run: () => playSegment(segments.indexOf(segment)),
+      }),
+    ];
+    const { artist, artistRef, album, albumRef } = segment;
+    if (artistRef !== null) {
+      list.push(
+        new Action({
+          command: commands.goToArtist,
+          label: `Go to artist: ${artist ?? "Unknown artist"}`,
+          run: () => openArtist(artistRef, artist),
+        }),
+      );
+    }
+    if (albumRef !== null) {
+      list.push(
+        new Action({
+          command: commands.goToAlbum,
+          label: `Go to album: ${album ?? "Unknown album"}`,
+          run: () => openAlbum(albumRef, album),
+        }),
+      );
+    }
+    // Unknown tracks are `ID - ID`
+    if (artistRef === null && segment.title.toUpperCase() !== "ID") {
+      const query = segmentLine(segment).replace(" – ", " ");
+      list.push(
+        new Action({
+          command: commands.searchTrack,
+          label: `Search the track: ${query}`,
+          run: () => searchFor(query),
+        }),
+      );
+    }
+    return list;
+  };
+
+  const shownSegment = view === "nowPlaying" ? segments[selectedSegment] : undefined;
+
+  // In a DJ set, the actions of the selected track come before the actions of the set
   const actionsFor = (target: ReturnType<typeof actionTarget>) => {
-    if (target instanceof ActionTarget) return trackActions(target);
+    const inSet = shownSegment === undefined ? [] : segmentActions(shownSegment);
+    if (target instanceof ActionTarget) return [...inSet, ...trackActions(target)];
     if (target instanceof AlbumRow) return albumActions(target.album);
     return [];
   };
@@ -595,8 +665,8 @@ export function App(props: {
     [commands.visualizer, () => setView(view === "visualizer" ? "browse" : "visualizer")],
     [commands.reload, reload],
     [commands.togglePause, player.togglePause],
-    [commands.next, player.next],
-    [commands.previous, player.previous],
+    [commands.next, () => skip(1)],
+    [commands.previous, () => skip(-1)],
     [commands.seekBack, () => player.seekBy(-player.seekStepMs)],
     [commands.seekForward, () => player.seekBy(player.seekStepMs)],
     [commands.volumeUp, () => player.changeVolume(1)],
@@ -633,10 +703,26 @@ export function App(props: {
     ([command, run]) => [command, () => run(indexOfSelection())] as const,
   );
 
+  const selectSegment = (index: number) =>
+    setSegmentSelection(Math.max(0, Math.min(segments.length - 1, index)));
+  const segmentCommands: ReadonlyArray<readonly [Command, () => void]> =
+    view === "nowPlaying" && segments.length > 0
+      ? [
+          [commands.playSegment, () => playSegment(selectedSegment)],
+          [commands.up, () => selectSegment(selectedSegment - 1)],
+          [commands.down, () => selectSegment(selectedSegment + 1)],
+          [commands.pageUp, () => selectSegment(selectedSegment - pageStep)],
+          [commands.pageDown, () => selectSegment(selectedSegment + pageStep)],
+          [commands.first, () => selectSegment(0)],
+          [commands.last, () => selectSegment(segments.length - 1)],
+        ]
+      : [];
+
   const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
     view === "browse"
       ? [...sectionCommands, ...listCommands]
       : [
+          ...segmentCommands,
           [commands.close, () => setView("browse")],
           [commands.actions, openActions],
         ];
@@ -733,6 +819,11 @@ export function App(props: {
       {view === "nowPlaying" && (
         <NowPlayingView
           entry={player.current}
+          segments={segments}
+          currentSegment={currentSegment}
+          selectedSegment={selectedSegment}
+          onSelectSegment={setSegmentSelection}
+          onPlaySegment={playSegment}
           upNext={upNext}
           artwork={artwork}
           positionMs={player.position()}
@@ -758,6 +849,7 @@ export function App(props: {
           {showPanel && (
             <NowPlayingPanel
               entry={player.current}
+              segment={segments[currentSegment]}
               upNext={upNext}
               artwork={artwork}
               width={panelWidth}

@@ -4,6 +4,7 @@ import type {
   QueueEntry,
   QueueSplice,
   RepeatMode,
+  SourceSegment,
   SourceSummary,
 } from "./index.ts";
 
@@ -55,4 +56,31 @@ export const isSameSong = (left: SourceSummary, right: SourceSummary) => {
   if (!sameText(left.title, right.title) || !sameText(left.artist, right.artist)) return false;
   if (left.durationMs === null || right.durationMs === null) return true;
   return Math.abs(left.durationMs - right.durationMs) <= durationToleranceMs;
+};
+
+/** The index of the segment of a DJ set that plays at `positionMs`, or -1 */
+export const segmentIndexAt = (segments: ReadonlyArray<SourceSegment>, positionMs: number) =>
+  segments.findLastIndex(
+    (segment) =>
+      segment.startMs !== null &&
+      segment.startMs <= positionMs &&
+      (segment.endMs === null || positionMs < segment.endMs),
+  );
+
+/**
+ * Where a skip inside a DJ set seeks to: the next segment, or back to the start of the current
+ * segment and then to the one before. `undefined` when the skip leaves the source.
+ */
+export const segmentSkipTarget = (
+  segments: ReadonlyArray<SourceSegment>,
+  positionMs: number,
+  direction: 1 | -1,
+  restartAfterMs: number,
+) => {
+  const starts = segments.flatMap((segment) => segment.startMs ?? []).toSorted((a, b) => a - b);
+  if (direction === 1) return starts.find((start) => start > positionMs);
+
+  const current = starts.findLast((start) => start <= positionMs);
+  if (current === undefined || positionMs - current > restartAfterMs) return current;
+  return starts.findLast((start) => start < current);
 };

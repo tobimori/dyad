@@ -32,6 +32,22 @@ const SearchResults = Schema.Struct({
   recordings: Schema.Array(SearchRecording),
 });
 
+const toRecording = (recording: SearchRecording) => {
+  const credit = recording["artist-credit"] ?? [];
+  return new MusicBrainzRecording({
+    mbid: recording.id,
+    title: recording.title,
+    artist:
+      credit.length === 0
+        ? null
+        : credit.map((name) => `${name.name}${name.joinphrase ?? ""}`).join(""),
+    artists: credit.map(
+      (name) => new CreditedArtist({ id: name.artist.id, name: name.artist.name }),
+    ),
+    durationMs: recording.length ?? null,
+  });
+};
+
 const searchPage = (query: string, offset: number) =>
   requestJson(
     "musicbrainz",
@@ -74,22 +90,36 @@ export const lookupIsrcs = (isrcs: ReadonlyArray<string>) =>
       [...recordings.values()].flatMap((recording) => {
         if (recording.isrcs?.includes(isrc) !== true) return [];
 
-        const credit = recording["artist-credit"] ?? [];
-        return [
-          new MusicBrainzRecording({
-            mbid: recording.id,
-            title: recording.title,
-            artist:
-              credit.length === 0
-                ? null
-                : credit.map((name) => `${name.name}${name.joinphrase ?? ""}`).join(""),
-            artists: credit.map(
-              (name) => new CreditedArtist({ id: name.artist.id, name: name.artist.name }),
-            ),
-            durationMs: recording.length ?? null,
-          }),
-        ];
+        return [toRecording(recording)];
       });
 
     return new Map(isrcs.map((isrc) => [isrc, recordingsOf(isrc)]));
   });
+
+// Inside a Lucene phrase, only `"` and `\` need an escape
+const phrase = (text: string) => `"${text.replaceAll(/["\\]/g, "\\$&")}"`;
+
+// Words instead of a phrase, because a free-text credit such as `Argy, Omnya` rarely has the
+// separators of the MusicBrainz credit. Lowercase, because `AND` and `OR` are operators.
+const words = (text: string) =>
+  `(${text
+    .toLowerCase()
+    .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()})`;
+
+// The recording search also finds other versions of the song, so the core checks the title
+const textCandidates = 5;
+
+/** The best recordings of the MusicBrainz search for one artist and title */
+export const searchRecording = (artist: string, title: string) =>
+  requestJson(
+    "musicbrainz",
+    HttpClientRequest.get(searchUrl).pipe(
+      HttpClientRequest.setUrlParams({
+        query: `recording:${phrase(title)} AND artist:${words(artist)}`,
+        limit: textCandidates,
+        fmt: "json",
+      }),
+    ),
+    SearchResults,
+  ).pipe(Effect.map((results) => results.recordings.map(toRecording)));

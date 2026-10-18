@@ -23,8 +23,7 @@ export const youtubePlugin = new Plugin({
           resolve: (externalId) =>
             resolveVideo(withVisitor, externalId).pipe(Effect.provide(services)),
           search: (query) => searchMusic(query).pipe(Effect.provide(services)),
-          tracklists: (externalId) =>
-            videoTracklists(withVisitor, externalId).pipe(Effect.provide(services)),
+          tracklists: (externalId) => videoTracklists(externalId).pipe(Effect.provide(services)),
           uploads: true,
           download: { leaseDays: 30 },
         }),

@@ -243,6 +243,25 @@ export class MergeFailed extends Schema.TaggedError<MergeFailed>()("MergeFailed"
   reason: Schema.Literals(["not_admin", "recording_not_found", "same_recording"]),
 }) {}
 
+/** One entry of the tracklist of a DJ set, in the time of its source */
+export class SourceSegment extends Schema.Class<SourceSegment>("SourceSegment")({
+  /** `null` when the tracklist gives no time. Clients cannot seek to the entry. */
+  startMs: Schema.NullOr(Schema.Number),
+  endMs: Schema.NullOr(Schema.Number),
+  /** Of the matched recording, else as the tracklist shows it, for example `ID` */
+  title: Schema.String,
+  artist: Schema.NullOr(Schema.String),
+  album: Schema.NullOr(Schema.String),
+  /** The pages of a source of the matched recording that the user can play */
+  artistRef: Schema.NullOr(ArtistRef),
+  albumRef: Schema.NullOr(AlbumRef),
+}) {}
+
+export class TracklistEditFailed extends Schema.TaggedError<TracklistEditFailed>()(
+  "TracklistEditFailed",
+  { reason: Schema.Literals(["not_admin", "source_not_found"]) },
+) {}
+
 export class LibrarySyncStatus extends Schema.Class<LibrarySyncStatus>("LibrarySyncStatus")({
   provider: Schema.String,
   /**
@@ -793,6 +812,18 @@ const UserRpc = RpcGroup.make(
   Rpc.make("mergeRecordings", {
     payload: { fromId: RecordingId, intoId: RecordingId },
     error: MergeFailed,
+  }),
+  // The tracklist of a DJ set source, again after each change, for example when matching finds
+  // a song. Empty for other sources.
+  Rpc.make("sourceSegments", {
+    payload: { sourceId: Schema.String.check(Schema.isUUID()) },
+    success: Schema.Array(SourceSegment),
+    stream: true,
+  }),
+  // Admin only. Hides the tracklists of the source for all users, or shows them again.
+  Rpc.make("hideTracklist", {
+    payload: { sourceId: Schema.String.check(Schema.isUUID()), hidden: Schema.Boolean },
+    error: TracklistEditFailed,
   }),
 ).middleware(Authentication);
 

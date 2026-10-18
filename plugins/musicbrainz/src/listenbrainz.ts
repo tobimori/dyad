@@ -1,4 +1,5 @@
-import { Array as Arr, Data, Effect, Schema } from "effect";
+import { CreditedArtist, MusicBrainzRecording } from "@dyad/plugin";
+import { Array as Arr, Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import { requestJson } from "./http.ts";
@@ -14,6 +15,8 @@ class AcrMatch extends Schema.Class<AcrMatch>("AcrMatch")({
   index: Schema.Int,
   recording_mbid: Schema.String,
   recording_name: Schema.String,
+  artist_credit_name: Schema.String,
+  artist_mbids: Schema.Array(Schema.String),
 }) {}
 
 // All fields except `original_recording_mbid` are `null` for an unknown MBID
@@ -23,13 +26,6 @@ class RecordingDetails extends Schema.Class<RecordingDetails>("RecordingDetails"
   recording_name: Schema.NullOr(Schema.String),
   length: Schema.NullOr(Schema.Int),
 }) {}
-
-/** The canonical MusicBrainz recording of an exact artist credit and title */
-export class RecordingHit extends Data.Class<{
-  readonly mbid: string;
-  readonly title: string;
-  readonly lengthMs: number | null;
-}> {}
 
 // `acr-lookup` ignores case and answers duplicate items only once, with the last index
 const pairKey = (pair: { readonly artist: string; readonly title: string }) =>
@@ -65,18 +61,26 @@ const lookupBatch = (pairs: ReadonlyArray<{ readonly artist: string; readonly ti
       if (pair === undefined) return [];
 
       const detail = detailsByMbid.get(match.recording_mbid);
-      const hit = new RecordingHit({
+      const hit = new MusicBrainzRecording({
         mbid: detail?.canonical_recording_mbid ?? match.recording_mbid,
         title: detail?.recording_name ?? match.recording_name,
-        lengthMs: detail?.length ?? null,
+        artist: match.artist_credit_name,
+        // The answer has no name for each MBID of a credit with several artists
+        artists:
+          match.artist_mbids.length === 1
+            ? match.artist_mbids.map(
+                (id) => new CreditedArtist({ id, name: match.artist_credit_name }),
+              )
+            : [],
+        durationMs: detail?.length ?? null,
       });
       return [[pairKey(pair), hit] as const];
     });
   });
 
 /**
- * Finds the recording of each artist credit and title with the ListenBrainz labs API. The match is
- * exact except for case. The result has no entry for a key without a match.
+ * Finds the canonical recording of each artist credit and title with the ListenBrainz labs API. The
+ * match is exact except for case. The result has no entry for a key without a match.
  */
 export const lookupRecordings = (
   inputs: ReadonlyArray<{ readonly key: string; readonly artist: string; readonly title: string }>,

@@ -71,6 +71,7 @@ export const commands = {
   addToQueue: command("track.addToQueue", "Add to queue", "Track", ["shift+a"]),
   searchArtist: command("track.searchArtist", "Search the artist", "Track", []),
   searchAlbum: command("track.searchAlbum", "Search the album", "Track", []),
+  searchTrack: command("track.searchTrack", "Search the track", "Track", []),
   goToArtist: command("track.goToArtist", "Go to the artist", "Track", []),
   goToAlbum: command("track.goToAlbum", "Go to the album", "Track", []),
   download: command("track.download", "Download", "Track", []),
@@ -88,6 +89,13 @@ export const commands = {
   selectUp: command("select.up", "Move up", null, ["up", "ctrl+p"], "move"),
   selectDown: command("select.down", "Move down", null, ["down", "ctrl+n"]),
   choose: command("select.choose", "Choose", null, ["return"], "choose"),
+  playSegment: command(
+    "tracklist.play",
+    "Play from this track of the set",
+    null,
+    ["return"],
+    "play",
+  ),
 };
 
 export const helpColumns = [

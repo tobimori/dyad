@@ -106,7 +106,6 @@ const Player = Schema.Struct({
     status: Schema.String,
     reason: Schema.optional(Schema.String),
   }),
-  videoDetails: Schema.optional(Schema.Struct({ shortDescription: Schema.String })),
   streamingData: Schema.optional(Schema.Struct({ adaptiveFormats: Schema.Array(Schema.Unknown) })),
 });
 
@@ -117,8 +116,43 @@ const Chapter = Schema.Struct({
   }),
 });
 
-// Each level is missing for some videos, for example a video without chapters
+const Continuation = Schema.Struct({
+  continuationItemRenderer: Schema.Struct({
+    continuationEndpoint: Schema.Struct({
+      continuationCommand: Schema.Struct({ token: Schema.String }),
+    }),
+  }),
+});
+
+// Each level is missing for some videos, for example a video without chapters or comments
 const Next = Schema.Struct({
+  contents: Schema.optional(
+    Schema.Struct({
+      twoColumnWatchNextResults: Schema.Struct({
+        results: Schema.Struct({
+          results: Schema.Struct({
+            contents: Schema.Array(
+              Schema.Struct({
+                itemSectionRenderer: Schema.optional(
+                  Schema.Struct({
+                    sectionIdentifier: Schema.optional(Schema.String),
+                    contents: Schema.Array(Schema.Unknown),
+                  }),
+                ),
+                videoSecondaryInfoRenderer: Schema.optional(
+                  Schema.Struct({
+                    attributedDescription: Schema.optional(
+                      Schema.Struct({ content: Schema.String }),
+                    ),
+                  }),
+                ),
+              }),
+            ),
+          }),
+        }),
+      }),
+    }),
+  ),
   playerOverlays: Schema.optional(
     Schema.Struct({
       playerOverlayRenderer: Schema.optional(
@@ -155,6 +189,64 @@ const Next = Schema.Struct({
   ),
 });
 
+const CommentItems = Schema.Struct({
+  continuationItems: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        commentThreadRenderer: Schema.optional(
+          Schema.Struct({
+            commentViewModel: Schema.Struct({
+              commentViewModel: Schema.Struct({
+                commentId: Schema.String,
+                pinnedText: Schema.optional(Schema.String),
+              }),
+            }),
+          }),
+        ),
+        continuationItemRenderer: Schema.optional(Continuation.fields.continuationItemRenderer),
+      }),
+    ),
+  ),
+});
+
+// The comment texts are in `frameworkUpdates`; the threads only say which comment is pinned
+const Comments = Schema.Struct({
+  onResponseReceivedEndpoints: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        // The first page
+        reloadContinuationItemsCommand: Schema.optional(CommentItems),
+        appendContinuationItemsAction: Schema.optional(CommentItems),
+      }),
+    ),
+  ),
+  frameworkUpdates: Schema.optional(
+    Schema.Struct({
+      entityBatchUpdate: Schema.Struct({
+        mutations: Schema.Array(
+          Schema.Struct({
+            payload: Schema.optional(
+              Schema.Struct({
+                commentEntityPayload: Schema.optional(
+                  Schema.Struct({
+                    properties: Schema.Struct({
+                      commentId: Schema.String,
+                      content: Schema.Struct({ content: Schema.String }),
+                    }),
+                    author: Schema.Struct({ isCreator: Schema.optional(Schema.Boolean) }),
+                    // For example `198`, `5.7K` or `1.2M`
+                    toolbar: Schema.Struct({ likeCountNotliked: Schema.optional(Schema.String) }),
+                  }),
+                ),
+              }),
+            ),
+          }),
+        ),
+      }),
+    }),
+  ),
+});
+
 const ExternalId = Schema.String.check(Schema.isPattern(/^[\w-]{11}$/));
 
 const toProviderError = (error: HttpStatusError | HttpRequestError) =>
@@ -168,6 +260,7 @@ const innertube = <S extends Schema.Constraint>(
   client: typeof web | (typeof visionos & { readonly visitorData: string }),
   fields: {
     readonly videoId?: string;
+    readonly continuation?: string;
     readonly query?: string;
     readonly params?: string;
     readonly contentCheckOk?: boolean;
@@ -352,19 +445,96 @@ const descriptionChapters = "DESCRIPTION_CHAPTERS";
 // YouTube needs three chapters too; fewer times in a description are rarely a tracklist
 const minimumEntries = 3;
 
-/** The chapters and the timed lines of the description */
-export const videoTracklists = (
-  withVisitor: Effect.Success<typeof visitorCache>,
-  externalId: string,
-) =>
+// Many comments list favorite moments by time. A tracklist also names artists.
+const minimumCommentTracks = 5;
+
+const units = { K: 1e3, M: 1e6 };
+
+const likeCount = (text: string | undefined) => {
+  const [, digits, unit] = text?.match(/^([\d.]+)([KM]?)$/) ?? [];
+  return Number(digits ?? 0) * (unit === "K" || unit === "M" ? units[unit] : 1);
+};
+
+// The order of top comments changes between requests, so the plugin reads some pages
+const commentPages = 3;
+
+// The pinned comment, then comments of the uploader, then the most likes
+const commentTracklist = (next: typeof Next.Type) =>
+  Effect.gen(function* () {
+    const first = next.contents?.twoColumnWatchNextResults.results.results.contents
+      .find((content) => content.itemSectionRenderer?.sectionIdentifier === "comment-item-section")
+      ?.itemSectionRenderer?.contents.flatMap((item) =>
+        Option.toArray(Schema.decodeUnknownOption(Continuation)(item)),
+      )[0]?.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+    if (first === undefined) return [];
+
+    const pages = yield* Stream.paginate(first, (token) =>
+      innertube("next", web, { continuation: token }, Comments).pipe(
+        Effect.mapError(toProviderError),
+        Effect.map((page) => {
+          const items = (page.onResponseReceivedEndpoints ?? []).flatMap(
+            (endpoint) =>
+              (endpoint.reloadContinuationItemsCommand ?? endpoint.appendContinuationItemsAction)
+                ?.continuationItems ?? [],
+          );
+          const following =
+            items.at(-1)?.continuationItemRenderer?.continuationEndpoint.continuationCommand.token;
+          return [[{ page, items }], Option.fromUndefinedOr(following)] as const;
+        }),
+      ),
+    ).pipe(Stream.take(commentPages), Stream.runCollect);
+
+    const pinned = new Set(
+      pages.flatMap(({ items }) =>
+        items.flatMap((item) => {
+          const comment = item.commentThreadRenderer?.commentViewModel.commentViewModel;
+          return comment?.pinnedText === undefined ? [] : [comment.commentId];
+        }),
+      ),
+    );
+
+    const [best] = pages
+      .flatMap(({ page }) => page.frameworkUpdates?.entityBatchUpdate.mutations ?? [])
+      .flatMap(({ payload }) => {
+        const comment = payload?.commentEntityPayload;
+        if (comment === undefined) return [];
+
+        const entries = parseTracklist(comment.properties.content.content);
+        if (entries.filter((entry) => entry.artist !== null).length < minimumCommentTracks) {
+          return [];
+        }
+        const id = comment.properties.commentId;
+        return [
+          {
+            id,
+            entries,
+            pinned: pinned.has(id) ? 1 : 0,
+            creator: comment.author.isCreator === true ? 1 : 0,
+            likes: likeCount(comment.toolbar.likeCountNotliked),
+          },
+        ];
+      })
+      .toSorted((a, b) => b.pinned - a.pinned || b.creator - a.creator || b.likes - a.likes);
+    return best === undefined
+      ? []
+      : [
+          new ProviderTracklist({
+            part: `comment:${best.id}`,
+            entries: best.entries,
+            confidence: 0.6,
+          }),
+        ];
+  });
+
+/**
+ * The chapters, the timed lines of the description and the best tracklist in the comments. All
+ * come from the web client's `/next`, which has no bot check like `/player`.
+ */
+export const videoTracklists = (externalId: string) =>
   Effect.gen(function* () {
     const videoId = yield* decodeVideoId(externalId);
-    const [player, next] = yield* Effect.all(
-      [
-        readPlayer(withVisitor, videoId),
-        innertube("next", web, { videoId }, Next).pipe(Effect.mapError(toProviderError)),
-      ],
-      { concurrency: 2 },
+    const next = yield* innertube("next", web, { videoId }, Next).pipe(
+      Effect.mapError(toProviderError),
     );
 
     const chapters = (
@@ -375,10 +545,16 @@ export const videoTracklists = (
       const entry = tracklistEntry(chapter.title.simpleText, chapter.timeRangeStartMillis);
       return entry === undefined ? [] : [entry];
     });
-    const description = parseTracklist(player.videoDetails?.shortDescription ?? "");
+    const description = parseTracklist(
+      next.contents?.twoColumnWatchNextResults.results.results.contents.find(
+        (content) => content.videoSecondaryInfoRenderer !== undefined,
+      )?.videoSecondaryInfoRenderer?.attributedDescription?.content ?? "",
+    );
 
     return [
-      new ProviderTracklist({ part: "chapters", entries: chapters }),
-      new ProviderTracklist({ part: "description", entries: description }),
-    ].filter((tracklist) => tracklist.entries.length >= minimumEntries);
+      new ProviderTracklist({ part: "chapters", entries: chapters, confidence: 0.9 }),
+      new ProviderTracklist({ part: "description", entries: description, confidence: 0.8 }),
+    ]
+      .filter((tracklist) => tracklist.entries.length >= minimumEntries)
+      .concat(yield* commentTracklist(next));
   });

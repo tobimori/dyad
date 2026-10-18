@@ -139,6 +139,11 @@ export class ProviderTracklist extends Data.Class<{
   /** The core adds it to the origin ref after `#`, for example `chapters` or `comment:<id>` */
   readonly part: string;
   readonly entries: ReadonlyArray<TracklistEntry>;
+  /**
+   * From 0 to 1, for the selection among the candidates of a source: 1 for structured platform
+   * data, 0.9 for chapters, 0.8 for a description, 0.6 for a comment
+   */
+  readonly confidence: number;
 }> {}
 
 /** Secrets of one linked account, by name. For a browser login, the names are the cookie names. */
@@ -311,6 +316,13 @@ export class MusicBrainzLookup extends Data.Class<{
   /** The recordings that have each ISRC now. The result has an entry for each valid ISRC. */
   readonly recordingsByIsrc: (
     isrcs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<MusicBrainzRecording>>, MusicBrainzError>;
+  /**
+   * Candidate recordings of each free-text artist and title, by `key`, best first. The core checks
+   * that a candidate fits, so an item without a good match can have none or wrong ones.
+   */
+  readonly recordingsByText: (
+    items: ReadonlyArray<{ readonly key: string; readonly artist: string; readonly title: string }>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<MusicBrainzRecording>>, MusicBrainzError>;
 }> {}
 

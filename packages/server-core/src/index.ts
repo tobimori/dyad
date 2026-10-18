@@ -32,6 +32,7 @@ import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { listSources } from "./sources.ts";
 import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
+import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
 
 export { catalogLayer } from "./catalog-backfill.ts";
@@ -40,6 +41,7 @@ export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { StreamPort } from "./outputs.ts";
 export { pluginLayer } from "./plugin.ts";
+export { tracklistsLayer } from "./tracklists.ts";
 
 export class ServerIdentity extends Context.Service<ServerIdentity, ServerDescriptor>()(
   "@dyad/server-core/ServerIdentity",
@@ -58,6 +60,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       musicbrainzLookupsLayer,
       outputsLayer,
       syncHubLayer,
+      tracklistsServiceLayer,
     ),
   ),
   Layer.provideMerge(jobsLayer),
@@ -119,6 +122,12 @@ export const serverRoutes = Layer.unwrap(
         decideMerge(pair, "reject").pipe(orDieOnDatabaseError("unmergeRecording")),
       mergeRecordings: (pair) =>
         decideMerge(pair, "merge").pipe(orDieOnDatabaseError("mergeRecordings")),
+      sourceSegments: ({ sourceId }) =>
+        sourceSegments(sourceId).pipe(
+          Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("sourceSegments"))),
+        ),
+      hideTracklist: ({ sourceId, hidden }) =>
+        hideTracklist(sourceId, hidden).pipe(orDieOnDatabaseError("hideTracklist")),
     });
 
     return Layer.mergeAll(

@@ -22,6 +22,7 @@ import {
   librarySyncLayer,
   pluginLayer,
   serverRoutes,
+  tracklistsLayer,
 } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
@@ -88,8 +89,8 @@ export const serverLayer = Layer.unwrap(
       Layer.provide(identity),
     );
     return Layer.mergeAll(
-      // The first library imports and ISRC lookups need what the plugins add
-      Layer.mergeAll(librarySyncLayer, catalogLayer).pipe(
+      // The first library imports, ISRC lookups and tracklist reads need what the plugins add
+      Layer.mergeAll(librarySyncLayer, catalogLayer, tracklistsLayer).pipe(
         Layer.provide(pluginLayer(builtinPlugins, packageJson.version)),
       ),
       HttpRouter.serve(routes).pipe(

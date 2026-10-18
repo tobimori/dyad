@@ -175,8 +175,8 @@ const compareAssertions =
     );
   };
 
-// An import that has no value lets the next origin apply. Only an admin can clear a field.
-const resolveField = <A>(
+/** An import that has no value lets the next origin apply. Only an admin can clear a field. */
+export const resolveField = <A>(
   providers: ReadonlyMap<string, Provider>,
   assertions: ReadonlyArray<Assertion>,
   field: string,
