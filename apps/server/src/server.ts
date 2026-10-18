@@ -6,6 +6,7 @@ import { ReplicaId, ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
 import { appleMusicPlugin } from "@dyad/plugin-apple-music/server";
 import { bandcampPlugin } from "@dyad/plugin-bandcamp/server";
+import { castPlugin } from "@dyad/plugin-cast/server";
 import { deezerPlugin } from "@dyad/plugin-deezer/server";
 import { localFilesPlugin } from "@dyad/plugin-local-files/server";
 import { musicbrainzPlugin } from "@dyad/plugin-musicbrainz/server";
@@ -33,6 +34,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   localFilesPlugin,
   appleMusicPlugin,
   bandcampPlugin,
+  castPlugin,
   deezerPlugin,
   musicbrainzPlugin,
   soundcloudPlugin,

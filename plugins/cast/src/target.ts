@@ -108,8 +108,8 @@ export class UrlTarget extends Data.Class<{
   readonly setVolume: (volume: number) => Effect.Effect<void, TargetError>;
   /** Queues the item after the current one. Fails when `capabilities.queueNext` is false. */
   readonly next: (url: string, metadata: TrackMetadata) => Effect.Effect<void, TargetError>;
-  /** Emits the current state first */
-  readonly state: Stream.Stream<TargetState>;
+  /** Emits the current state first. Fails when the device stops answering. */
+  readonly state: Stream.Stream<TargetState, TargetUnreachable>;
 }> {}
 
 export const idleState = new TargetState({

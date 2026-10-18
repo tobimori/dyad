@@ -220,6 +220,9 @@ importers:
       '@dyad/plugin-bandcamp':
         specifier: workspace:*
         version: link:../../plugins/bandcamp
+      '@dyad/plugin-cast':
+        specifier: workspace:*
+        version: link:../../plugins/cast
       '@dyad/plugin-deezer':
         specifier: workspace:*
         version: link:../../plugins/deezer
@@ -492,6 +495,12 @@ importers:
 
   plugins/cast:
     dependencies:
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.2.1)

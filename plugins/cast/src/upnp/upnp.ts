@@ -1,4 +1,4 @@
-import { Effect, Schedule, Schema, Stream, SubscriptionRef } from "effect";
+import { Clock, Deferred, Effect, Ref, Schedule, Schema, Stream, SubscriptionRef } from "effect";
 import type { HttpClient } from "effect/http";
 
 import { subscribeEvents } from "./gena.ts";
@@ -8,6 +8,7 @@ import {
   CommandFailed,
   idleState,
   TargetState,
+  TargetUnreachable,
   UnsupportedFormat,
   UrlTarget,
   type TargetError,
@@ -28,6 +29,9 @@ const PositionInfo = Schema.Struct({
 });
 
 const Volume = Schema.Struct({ CurrentVolume: Schema.FiniteFromString });
+
+// A device that does not answer the poll for this long is lost
+const unreachableAfterMs = 15_000;
 
 // Spellings that some renderers list instead of the type that the Dyad server sends
 const mimeAliases = new Map([
@@ -57,7 +61,8 @@ const parseTime = (time: string) => {
 
 const errorOf = (transportStatus: string) => (transportStatus === "OK" ? null : transportStatus);
 
-const urlOf = (trackUri: string) => (trackUri === "" ? null : trackUri);
+// Rygel 45.2 sends the track URI with the `&amp;` of the DIDL-Lite metadata
+const urlOf = (trackUri: string) => (trackUri === "" ? null : trackUri.replaceAll("&amp;", "&"));
 
 const statusOf = (transportState: string) => {
   if (transportState === "PLAYING") return "playing";
@@ -163,6 +168,9 @@ export const openUpnp = (device: UpnpDevice) =>
       ),
     );
 
+    const answeredAt = yield* Ref.make(yield* Clock.currentTimeMillis);
+    const unreachable = yield* Deferred.make<never, TargetUnreachable>();
+
     // AVTransport does not send the position as an event
     const poll = Effect.gen(function* () {
       const active = yield* events.active;
@@ -179,13 +187,31 @@ export const openUpnp = (device: UpnpDevice) =>
       if (active && (current.status === "idle" || current.status === "paused")) return;
 
       const position = yield* soap(name, avTransport, "GetPositionInfo", [instance], PositionInfo);
-      yield* update({
-        positionMs: parseTime(position.RelTime) ?? 0,
-        durationMs: parseTime(position.TrackDuration),
-        url: urlOf(position.TrackURI),
-      });
+      const positionMs = parseTime(position.RelTime) ?? 0;
+      const durationMs = parseTime(position.TrackDuration);
+      const url = urlOf(position.TrackURI);
+      // Rygel 45.2 reports position 0 at the end of a track, shortly before it stops
+      const ends =
+        positionMs === 0 &&
+        url === current.url &&
+        durationMs !== null &&
+        current.positionMs > durationMs - 2000;
+      yield* update({ positionMs: ends ? current.positionMs : positionMs, durationMs, url });
     }).pipe(
-      Effect.catch((error: TargetError) => update({ error: error.reason })),
+      Effect.andThen(Clock.currentTimeMillis),
+      Effect.flatMap((now) => Ref.set(answeredAt, now)),
+      Effect.catch((error: TargetError) =>
+        Effect.gen(function* () {
+          yield* update({ error: error.reason });
+          const now = yield* Clock.currentTimeMillis;
+          if (
+            error instanceof TargetUnreachable &&
+            now - (yield* Ref.get(answeredAt)) > unreachableAfterMs
+          ) {
+            yield* Deferred.fail(unreachable, error);
+          }
+        }),
+      ),
       Effect.provideContext(context),
     );
     yield* Effect.forkScoped(Effect.repeat(poll, Schedule.spaced("1 second")));
@@ -223,6 +249,9 @@ export const openUpnp = (device: UpnpDevice) =>
     const load = (url: string, metadata: TrackMetadata, startMs: number) =>
       Effect.gen(function* () {
         const mimeType = yield* protocolMimeType(metadata.mimeType);
+        // Rygel 45.2 plays a new URI at once when it played before, and then rejects `Play`
+        const { status } = yield* SubscriptionRef.get(state);
+        if (status !== "idle") yield* transportCommand("Stop", []);
         yield* transportCommand("SetAVTransportURI", [
           ["CurrentURI", url],
           ["CurrentURIMetaData", didl(url, metadata, mimeType)],
@@ -277,6 +306,6 @@ export const openUpnp = (device: UpnpDevice) =>
       stop: transportCommand("Stop", []),
       setVolume,
       next,
-      state: SubscriptionRef.changes(state),
+      state: SubscriptionRef.changes(state).pipe(Stream.interruptWhen(Deferred.await(unreachable))),
     });
   });

@@ -96,8 +96,11 @@ const eventVariables = (body: string) =>
     return variables;
   });
 
-// A connected UDP socket sends nothing. The system picks the local address of the route to `host`.
-const localAddressTo = (host: string) =>
+/**
+ * The local address of the route to `host`. A connected UDP socket sends nothing; the system
+ * picks the address.
+ */
+export const localAddressTo = (host: string) =>
   Effect.gen(function* () {
     // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
     const socket = yield* NodeDatagramSocket.make({ connect: { address: host, port: 1900 } });
