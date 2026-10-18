@@ -1,0 +1,156 @@
+import { device, source } from "@dyad/db";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
+import { CurrentPrincipal, DeviceId, PlaybackUnavailable, UserId, VideoPlan } from "@dyad/domain";
+import { and, eq } from "drizzle-orm";
+import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
+import { HttpRouter, HttpServerResponse } from "effect/http";
+
+import { fromHex, hex } from "./ids.ts";
+import { StreamKey, unavailableStatus } from "./playback.ts";
+import { cachedProviderSource } from "./provider-cache.ts";
+import { usableProviders } from "./providers.ts";
+
+// The same lifetime as audio stream URLs
+const videoLifetimeMs = 6 * 60 * 60 * 1000;
+
+class VideoGrant extends Data.Class<{
+  readonly sourceId: string;
+  readonly userId: UserId;
+  readonly deviceId: DeviceId;
+  readonly expiresAt: number;
+}> {}
+
+// The `video` prefix keeps a video signature from being valid for an audio grant
+const grantMessage = (grant: VideoGrant) =>
+  new TextEncoder().encode(
+    ["video", grant.sourceId, grant.userId, grant.deviceId, grant.expiresAt].join("\n"),
+  );
+
+// A search result is not in the catalog yet, so it comes from the provider cache
+const findVideo = (sourceId: string, userId: UserId) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const [row] = yield* db
+      .select({ provider: source.provider, externalId: source.externalId })
+      .from(source)
+      .where(eq(source.id, sourceId))
+      .limit(1);
+    const item =
+      row ??
+      Option.getOrUndefined(
+        Option.map(yield* cachedProviderSource(sourceId), (cached) => ({
+          provider: cached.provider,
+          externalId: cached.source.externalId,
+        })),
+      );
+    if (item === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
+
+    const usable = (yield* usableProviders(userId)).get(item.provider);
+    if (usable === undefined) {
+      return yield* new PlaybackUnavailable({ reason: "account_required" });
+    }
+    const video = usable.provider.video;
+    if (video === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
+    return (maxHeight: number) => video(item.externalId, usable.credentials, maxHeight);
+  });
+
+/** A signed video URL for the device. It stops working when the device is removed. */
+export const prepareVideo = (sourceId: string, maxHeight: number) =>
+  Effect.gen(function* () {
+    const principal = yield* CurrentPrincipal;
+    yield* findVideo(sourceId, principal.userId);
+
+    const grant = new VideoGrant({
+      sourceId,
+      userId: principal.userId,
+      deviceId: principal.deviceId,
+      expiresAt: (yield* Clock.currentTimeMillis) + videoLifetimeMs,
+    });
+    const key = yield* StreamKey;
+    const signature = yield* Effect.promise(() =>
+      globalThis.crypto.subtle.sign("HMAC", key, grantMessage(grant)),
+    );
+    const search = new URLSearchParams({
+      user: grant.userId,
+      device: grant.deviceId,
+      expires: String(grant.expiresAt),
+      height: String(maxHeight),
+      signature: hex(new Uint8Array(signature)),
+    });
+    return new VideoPlan({ path: `/video/${sourceId}?${search}` });
+  });
+
+const VideoRequest = Schema.Struct({
+  sourceId: Schema.String.check(Schema.isUUID()),
+  user: UserId,
+  device: DeviceId,
+  expires: Schema.FiniteFromString,
+  signature: Schema.String,
+  // Not in the signature: any height and start of a granted video is allowed
+  height: Schema.FiniteFromString.check(
+    Schema.isInt(),
+    Schema.isBetween({ minimum: 1, maximum: 4320 }),
+  ),
+  start: Schema.optionalKey(
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
+});
+
+/** Passes the provider's bytes through, so that the provider sees only the server */
+export const videoRoute = HttpRouter.add(
+  "GET",
+  "/video/:sourceId",
+  Effect.gen(function* () {
+    const request = yield* HttpRouter.schemaParams(VideoRequest);
+    const grant = new VideoGrant({
+      sourceId: request.sourceId,
+      userId: request.user,
+      deviceId: request.device,
+      expiresAt: request.expires,
+    });
+    const key = yield* StreamKey;
+    const valid = yield* Effect.promise(() =>
+      globalThis.crypto.subtle.verify("HMAC", key, fromHex(request.signature), grantMessage(grant)),
+    );
+    const now = yield* Clock.currentTimeMillis;
+    if (!valid || grant.expiresAt < now) return HttpServerResponse.empty({ status: 403 });
+
+    const db = yield* Database;
+    const devices = yield* db
+      .select({ id: device.id })
+      .from(device)
+      .where(and(eq(device.id, grant.deviceId), eq(device.userId, grant.userId)))
+      .limit(1);
+    if (devices.length === 0) return HttpServerResponse.empty({ status: 403 });
+
+    const resolve = yield* findVideo(request.sourceId, grant.userId);
+    // The provider resolves before the response starts, so that a failure gives an error status
+    const video = yield* resolve(request.height);
+    const startMs = request.start ?? 0;
+    const body = startMs > 0 ? video.bytesFrom(startMs) : video.bytes;
+
+    return HttpServerResponse.stream(
+      body.pipe(
+        // The error text can contain provider URLs, so only its name is logged
+        Stream.tapError((error) =>
+          Effect.logError("Video stream failed").pipe(
+            Effect.annotateLogs({ sourceId: request.sourceId, error: error.name }),
+          ),
+        ),
+      ),
+      { contentType: "video/webm" },
+    );
+  }).pipe(
+    orDieOnDatabaseError("video"),
+    Effect.catchTags({
+      SchemaError: () => Effect.succeed(HttpServerResponse.empty({ status: 400 })),
+      PlaybackUnavailable: (error) =>
+        Effect.succeed(HttpServerResponse.empty({ status: unavailableStatus[error.reason] })),
+      ProviderError: (error) =>
+        Effect.logError("Cannot resolve the video", error.reason).pipe(
+          Effect.as(HttpServerResponse.empty({ status: 502 })),
+        ),
+    }),
+    Effect.orElseSucceed(() => HttpServerResponse.empty({ status: 500 })),
+  ),
+);

@@ -80,6 +80,11 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
     Schema.withConstructorDefault(Effect.succeed(null)),
   ),
+  /** `prepareVideo` gives a moving picture, like a music video. Client replicas do not know it. */
+  video: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
 }) {}
 
 /** `YYYY`, `YYYY-MM` or `YYYY-MM-DD` */
@@ -359,6 +364,14 @@ export class PlaybackPlan extends Schema.Class<PlaybackPlan>("PlaybackPlan")({
    * `null` from older servers.
    */
   source: Schema.NullOr(AudioQuality).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+}) {}
+
+export class VideoPlan extends Schema.Class<VideoPlan>("VideoPlan")({
+  /**
+   * Relative URL of VP9 video without audio in WebM, on the timeline of the source's audio. The
+   * query parameter `start=<ms>` starts it at the keyframe cluster at or before that position.
+   */
+  path: Schema.String,
 }) {}
 
 export class PlaybackUnavailable extends Schema.TaggedError<PlaybackUnavailable>()(
@@ -726,6 +739,16 @@ const UserRpc = RpcGroup.make(
       capabilities: PlaybackCapabilities,
     },
     success: PlaybackPlan,
+    error: PlaybackUnavailable,
+  }),
+  // The tallest video stream that is at most `maxHeight` pixels high, else the smallest.
+  // `not_found` when the provider has no video. The URL answers 502 when the provider fails.
+  Rpc.make("prepareVideo", {
+    payload: {
+      sourceId: Schema.String.check(Schema.isUUID()),
+      maxHeight: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4320 })),
+    },
+    success: VideoPlan,
     error: PlaybackUnavailable,
   }),
   // A `Snapshot` of the user's session, then its changes. A device that can play sends `player`;

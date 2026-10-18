@@ -65,6 +65,7 @@ export const cachedSummary = (item: CachedSource, providerName: string) => {
     explicit: item.source.explicit ?? false,
     providerName,
     recordingId: item.recordingId,
+    video: item.source.video,
   });
 };
 

@@ -1232,6 +1232,7 @@ const sourceSummaries = (userId: UserId, sourceIds: ReadonlyArray<string>) =>
           albumRef: null,
           explicit: item.explicit ?? false,
           providerName: providers.get(row.provider)?.provider.name ?? null,
+          video: item.video,
         }),
       );
     }

@@ -34,6 +34,7 @@ import { listSources } from "./sources.ts";
 import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
 import { listLibrary, listPlaylistEntries, listPlaylists } from "./user-library.ts";
+import { prepareVideo, videoRoute } from "./video.ts";
 
 export { catalogLayer } from "./catalog-backfill.ts";
 export { hlcClockFromDatabase } from "./clock.ts";
@@ -94,6 +95,8 @@ export const serverRoutes = Layer.unwrap(
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>
         preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
+      prepareVideo: ({ sourceId, maxHeight }) =>
+        prepareVideo(sourceId, maxHeight).pipe(orDieOnDatabaseError("prepareVideo")),
       connectDevice: (payload) =>
         Stream.unwrap(connectDevice(payload).pipe(orDieOnDatabaseError("connectDevice"))),
       controlSession: (payload) =>
@@ -138,6 +141,7 @@ export const serverRoutes = Layer.unwrap(
       ),
       HttpRouter.add("GET", "/health", HttpServerResponse.text("ok")),
       streamRoute,
+      videoRoute,
       downloadRoute,
       RpcServer.layerHttp({ group: ServerRpc, path: "/rpc" }).pipe(
         Layer.provide(handlers),

@@ -428,7 +428,7 @@ export const hintPrefetch = (session: string, userId: UserId, sourceIds: Readonl
     yield* cache.hint(session, items.flat());
   });
 
-const unavailableStatus = { not_found: 404, unsupported_format: 406, account_required: 403 };
+export const unavailableStatus = { not_found: 404, unsupported_format: 406, account_required: 403 };
 
 const StreamRequest = Schema.Struct({
   sourceId: Schema.String.check(Schema.isUUID()),

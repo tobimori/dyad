@@ -319,6 +319,7 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
           string | null
         >`coalesce(json_extract(${providerItem.data}, '$.artists[0].id'), json_extract(${providerItem.data}, '$.uploader.id'))`,
         providerAlbumId: sql<string | null>`json_extract(${providerItem.data}, '$.albumId')`,
+        video: sql<number | null>`json_extract(${providerItem.data}, '$.video')`,
       })
       .from(source)
       .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
@@ -360,6 +361,7 @@ export const sourceSummary = (row: {
   readonly providerArtistId: string | null;
   readonly providerAlbumId: string | null;
   readonly providerName: string | null;
+  readonly video: number | null;
 }) => {
   const providerArtist =
     row.providerArtistId === null
@@ -387,6 +389,7 @@ export const sourceSummary = (row: {
     explicit: row.canonical?.explicit ?? false,
     providerName: row.providerName,
     recordingId: row.source.recordingId === null ? null : RecordingId.make(row.source.recordingId),
+    video: row.video === 1,
   });
 };
 
