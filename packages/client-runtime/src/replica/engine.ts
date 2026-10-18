@@ -41,7 +41,14 @@ import {
   missingRecordingsState,
   stateKey,
 } from "./database.ts";
-import { catalogTables, deleteScope, mergeRows, replaceGroup, replaceRow } from "./rows.ts";
+import {
+  catalogTables,
+  deleteScope,
+  mergeRows,
+  replaceGroup,
+  replaceMissingRemoteTracks,
+  replaceRow,
+} from "./rows.ts";
 
 const replicaIdState = stateKey("replicaId", ReplicaId);
 // The user and device of the device token, for the rows of own mutations
@@ -245,6 +252,10 @@ const makeReplica = Effect.gen(function* () {
       const catalog = response.catalog;
       for (const group of catalog.groups) yield* replaceGroup(group);
       if (catalog.groups.length > 0) for (const table of catalogTables) tables.add(table);
+      if (catalog.missing.length > 0) {
+        yield* replaceMissingRemoteTracks(catalog.missing, catalog.missingRemoteTracks);
+        tables.add("library_remote_track");
+      }
       const arrived = new Set<string>(
         catalog.groups.flatMap((group) => group.recordings.map((row) => row.id)),
       );

@@ -177,6 +177,16 @@ export const replaceGroup = (group: CatalogGroup) =>
     yield* insertAll(libraryRemoteTrack, group.remoteTracks);
   }).pipe(Effect.orDie);
 
+/** Replaces the provider library data of recordings that have no group */
+export const replaceMissingRemoteTracks = (
+  recordingIds: ReadonlyArray<string>,
+  rows: ReadonlyArray<typeof libraryRemoteTrack.$inferInsert>,
+) =>
+  Effect.gen(function* () {
+    yield* deleteWhereIn(libraryRemoteTrack, libraryRemoteTrack.recordingId, recordingIds);
+    yield* insertAll(libraryRemoteTrack, rows);
+  }).pipe(Effect.orDie);
+
 /** Tables of the catalog groups */
 export const catalogTables = [
   "recording",

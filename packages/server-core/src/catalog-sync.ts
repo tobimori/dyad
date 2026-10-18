@@ -169,6 +169,16 @@ export const readCatalog = (
       .where(inArray(recording.id, wantedRoots));
 
     const foundIds = new Set(found.map((row) => row.id));
+    const missing = wanted.filter((id) => !foundIds.has(id));
+    const missingRemoteTracks = yield* db
+      .select()
+      .from(libraryRemoteTrack)
+      .where(
+        and(
+          eq(libraryRemoteTrack.userId, userId),
+          inArray(libraryRemoteTrack.recordingId, missing),
+        ),
+      );
     const last = page.at(-1);
     return {
       page: new CatalogPage({
@@ -176,7 +186,10 @@ export const readCatalog = (
           ...page,
           ...extra.map((row) => ({ id: RecordingId.make(row.id), revision: row.revision })),
         ]),
-        missing: wanted.filter((id) => !foundIds.has(id)),
+        missing,
+        missingRemoteTracks: yield* Schema.decodeUnknownEffect(Schema.Array(LibraryRemoteTrackRow))(
+          missingRemoteTracks,
+        ).pipe(Effect.orDie),
         cursor:
           last === undefined
             ? cursor

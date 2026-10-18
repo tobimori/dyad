@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import {
   DeviceId,
@@ -185,6 +185,10 @@ export class CatalogPage extends Schema.Class<CatalogPage>("CatalogPage")({
   groups: Schema.Array(CatalogGroup),
   /** Requested recordings that have no row. The client keeps each as its own root. */
   missing: Schema.Array(RecordingId),
+  /** The provider library data of `missing`, for example a song that only the user's library has */
+  missingRemoteTracks: Schema.Array(LibraryRemoteTrackRow).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
   cursor: Schema.NullOr(CatalogCursor),
 }) {}
 
