@@ -189,8 +189,8 @@ const scoreCandidate = (
   return new Score({ ...parts, total });
 };
 
-// Same ISRC, else same title and artist with durations within 2 s where both are known. A new
-// release can give the same recording a new ISRC.
+// Same ISRC, else same title and artist with durations within 3 % where both are known. Uploads
+// add seconds of silence or noise, and a new release can give the recording a new ISRC.
 const sameRecording = (a: Candidate, b: Candidate) => {
   if (a.isrc !== null && a.isrc === b.isrc) return true;
 
@@ -199,7 +199,8 @@ const sameRecording = (a: Candidate, b: Candidate) => {
 
   const durationA = a.summary.durationMs;
   const durationB = b.summary.durationMs;
-  return durationA === null || durationB === null || Math.abs(durationA - durationB) <= 2000;
+  if (durationA === null || durationB === null) return true;
+  return Math.abs(durationA - durationB) <= Math.max(2000, 0.03 * Math.max(durationA, durationB));
 };
 
 /**
