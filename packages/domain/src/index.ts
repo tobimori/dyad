@@ -395,10 +395,7 @@ export class DownloadUnavailable extends Schema.TaggedError<DownloadUnavailable>
   },
 ) {}
 
-/**
- * The client opens `url` in a browser where the user signs in on the provider's own page. When
- * the browser has all `cookies` of `domain`, the client gives their values to `linkAccount`.
- */
+/** Clients import only the declared cookies of `domain` and send them to `linkAccount` */
 export class BrowserLogin extends Schema.Class<BrowserLogin>("BrowserLogin")({
   /**
    * HTTPS only, because the client gives it to a browser as a command argument, where another
@@ -411,6 +408,8 @@ export class BrowserLogin extends Schema.Class<BrowserLogin>("BrowserLogin")({
   ),
   domain: Schema.String,
   cookies: Schema.NonEmptyArray(Schema.String),
+  /** Defaults to all declared cookies; the provider can check additional rules */
+  requiredCookies: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
 export class AccountProviderSummary extends Schema.Class<AccountProviderSummary>(

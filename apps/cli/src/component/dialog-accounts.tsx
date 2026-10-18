@@ -2,10 +2,14 @@ import type { ServerConnection } from "@dyad/client-runtime";
 import { AccountLinkFailed } from "@dyad/domain";
 import type { AccountProviderSummary, ProviderAccountSummary } from "@dyad/domain";
 import { NodeServices } from "@effect/platform-node";
+import type { InputRenderable } from "@opentui/core";
 import { Effect, Fiber, Schema } from "effect";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { BrowserLoginError, browserLogin } from "../commands/browser-login.ts";
+import { availableCookieBrowsers, readBrowserCookies } from "../commands/browser-cookies.ts";
+import type { CookieBrowser, CookieProfile } from "../commands/browser-cookies.ts";
+import { CookieImportError, readCookieFile } from "../commands/cookie-import.ts";
+import { commands, useCommands } from "../context/keymap.ts";
 import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
 import { SelectList, SelectOption } from "../ui/select-list.tsx";
@@ -14,7 +18,7 @@ import { useToast } from "../ui/toast.tsx";
 const accountsWidth = 56;
 
 const failureText = (error: { readonly _tag: string }) =>
-  Schema.is(AccountLinkFailed)(error) || error instanceof BrowserLoginError
+  Schema.is(AccountLinkFailed)(error) || error instanceof CookieImportError
     ? error.reason
     : "The server did not answer. Try again.";
 
@@ -89,8 +93,6 @@ export function AccountsDialog(props: {
   );
 }
 
-type AccountAction = "browser" | "unlink";
-
 function AccountDialog(props: {
   readonly provider: AccountProviderSummary;
   readonly account: ProviderAccountSummary | undefined;
@@ -103,13 +105,31 @@ function AccountDialog(props: {
   const dialog = useDialog();
   const toast = useToast();
   const [error, setError] = useState<string | null>(null);
+  const [browsers, setBrowsers] = useState<ReadonlyArray<CookieBrowser>>([]);
   const linked = props.account !== undefined;
 
-  const action = (value: AccountAction, title: string) =>
-    new SelectOption({ value, title, detail: "" });
+  useEffect(() => {
+    const fiber = props.run(
+      availableCookieBrowsers.pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.match({
+          onSuccess: setBrowsers,
+          onFailure: () => setError("Cannot find browser profiles"),
+        }),
+      ),
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(fiber));
+    };
+  }, []);
+
   const options = [
-    action("browser", linked ? "Sign in again" : "Sign in"),
-    ...(linked ? [action("unlink", "Unlink")] : []),
+    new SelectOption({ value: "file", title: "Import cookie file", detail: "" }),
+    ...browsers.map(
+      (browser) =>
+        new SelectOption({ value: browser.name, title: `Import from ${browser.name}`, detail: "" }),
+    ),
+    ...(linked ? [new SelectOption({ value: "unlink", title: "Unlink", detail: "" })] : []),
   ];
 
   const onLinked = (account: ProviderAccountSummary) => {
@@ -118,7 +138,7 @@ function AccountDialog(props: {
     dialog.pop();
   };
 
-  const choose = (value: AccountAction) => {
+  const choose = (value: string) => {
     if (value === "unlink") {
       props.run(
         props.connection.unlinkAccount({ provider: props.provider.provider }).pipe(
@@ -135,7 +155,48 @@ function AccountDialog(props: {
       return;
     }
 
-    dialog.replace(<BrowserLoginDialog {...props} onLinked={onLinked} />);
+    if (value === "file") {
+      dialog.replace(
+        <CookieFileDialog
+          onSubmit={(file) =>
+            dialog.replace(
+              <CookieLoginDialog
+                {...props}
+                read={readCookieFile(props.provider.login, file)}
+                onLinked={onLinked}
+              />,
+            )
+          }
+        />,
+      );
+      return;
+    }
+    const browser = browsers.find((browser) => browser.name === value);
+    if (browser === undefined) return;
+    const importProfile = (profile: CookieProfile) =>
+      dialog.replace(
+        <CookieLoginDialog
+          {...props}
+          read={readBrowserCookies(browser, profile, props.provider.login)}
+          onLinked={onLinked}
+        />,
+      );
+    if (browser.profiles.length === 1) {
+      importProfile(browser.profiles[0]!);
+      return;
+    }
+    dialog.replace(
+      <Dialog title={`${browser.name}: choose the signed-in profile`} width={accountsWidth}>
+        <SelectList
+          options={browser.profiles.map(
+            (profile) => new SelectOption({ value: profile, title: profile.name, detail: "" }),
+          )}
+          width={accountsWidth - 4}
+          rows={8}
+          onChoose={importProfile}
+        />
+      </Dialog>,
+    );
   };
 
   return (
@@ -144,26 +205,72 @@ function AccountDialog(props: {
         {props.account === undefined ? "Not linked" : `Linked as ${props.account.displayName}`}
       </text>
       <box marginTop={1}>
-        <SelectList options={options} width={accountsWidth - 4} rows={4} onChoose={choose} />
+        <SelectList options={options} width={accountsWidth - 4} rows={8} onChoose={choose} />
       </box>
+      <text fg={theme.muted}>
+        Sign in in a private window, export cookies.txt, then close the window.
+      </text>
+      <text fg={theme.muted}>
+        {`Normal browser cookies expire sooner than a private-window export. Re-import when Dyad says "Sign in to ${props.provider.name} again".`}
+      </text>
       {error !== null && <text fg={theme.error}>{error}</text>}
     </Dialog>
   );
 }
 
-function BrowserLoginDialog(props: {
+function CookieFileDialog(props: { readonly onSubmit: (file: string) => void }) {
+  const theme = useTheme();
+  const input = useRef<InputRenderable | null>(null);
+  const [file, setFile] = useState("");
+  useCommands(
+    [
+      [
+        commands.submitInput,
+        () => {
+          if (file.trim() !== "") props.onSubmit(file.trim());
+        },
+      ],
+    ],
+    { target: input, targetMode: "focus" },
+  );
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+  return (
+    <Dialog title="Import cookie file" width={accountsWidth}>
+      <text fg={theme.muted}>
+        Sign in in a private window, export cookies.txt, then close the window.
+      </text>
+      <input
+        ref={input}
+        value={file}
+        placeholder="Path to cookies.txt"
+        onInput={setFile}
+        backgroundColor={theme.panel}
+        focusedBackgroundColor={theme.panel}
+        textColor={theme.text}
+        focusedTextColor={theme.text}
+        placeholderColor={theme.faint}
+        cursorColor={theme.accent}
+      />
+      <text fg={theme.faint}>⏎ import · esc cancel</text>
+    </Dialog>
+  );
+}
+
+function CookieLoginDialog(props: {
   readonly provider: AccountProviderSummary;
   readonly connection: typeof ServerConnection.Service;
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
   readonly onLinked: (account: ProviderAccountSummary) => void;
+  readonly read: ReturnType<typeof readBrowserCookies>;
 }) {
   const theme = useTheme();
   const [error, setError] = useState<string | null>(null);
 
-  // Closing the dialog stops the sign-in and closes the browser
   useEffect(() => {
     const fiber = props.run(
-      browserLogin(props.provider.login).pipe(
+      props.read.pipe(
         Effect.provide(NodeServices.layer),
         Effect.flatMap((credentials) =>
           props.connection.linkAccount({ provider: props.provider.provider, credentials }),
@@ -182,8 +289,7 @@ function BrowserLoginDialog(props: {
   return (
     <Dialog title={props.provider.name} width={accountsWidth}>
       <text fg={error === null ? theme.text : theme.error}>
-        {error ??
-          `Sign in to ${props.provider.name} in the browser window. Dyad links the account when you are signed in.`}
+        {error ?? "Importing cookies. Allow the browser key in Keychain if asked."}
       </text>
     </Dialog>
   );

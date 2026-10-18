@@ -48,12 +48,17 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
       return yield* new AccountLinkFailed({ reason: "Unknown provider" });
     }
 
-    // Only the cookies that the provider declares are stored, not other keys from the client
-    const DeclaredCookies = Schema.Record(Schema.Literals(account.login.cookies), Schema.String);
-    const stored = yield* Schema.decodeEffect(DeclaredCookies)(values).pipe(
+    const RequiredCookies = Schema.Record(
+      Schema.Literals(account.login.requiredCookies ?? account.login.cookies),
+      Schema.String.check(Schema.isMinLength(1)),
+    );
+    yield* Schema.decodeEffect(RequiredCookies)(values).pipe(
       Effect.mapError(
-        () => new AccountLinkFailed({ reason: "The sign-in did not give all cookies" }),
+        () => new AccountLinkFailed({ reason: "The import did not give all required cookies" }),
       ),
+    );
+    const stored = Object.fromEntries(
+      Object.entries(values).filter(([name]) => account.login.cookies.includes(name)),
     );
     const displayName = yield* account.link(toCredentials(stored));
 

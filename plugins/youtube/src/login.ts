@@ -31,6 +31,7 @@ export const browserLogin = new BrowserLogin({
   url: `https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue=${encodeURIComponent(`${origin}/signin?action_handle_signin=true&app=desktop&next=%2F`)}`,
   domain: "youtube.com",
   cookies: [...sessionCookies],
+  requiredCookies: ["LOGIN_INFO"],
 });
 
 const Text = Schema.Struct({
@@ -62,6 +63,14 @@ const AccountMenu = Schema.Struct({
 /** The name of the signed-in account, with one request of the web client */
 export const readAccountName = (credentials: Credentials) =>
   Effect.gen(function* () {
+    if (
+      !["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"].some((name) => {
+        const cookie = credentials.get(name);
+        return cookie !== undefined && Redacted.value(cookie) !== "";
+      })
+    ) {
+      return yield* new AccountLinkFailed({ reason: "The import needs a YouTube APISID cookie" });
+    }
     const crypto = yield* Crypto.Crypto;
     const value = (name: string) => Redacted.value(credentials.get(name) ?? Redacted.make(""));
     const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
@@ -70,16 +79,22 @@ export const readAccountName = (credentials: Credentials) =>
       crypto
         .digest("SHA-1", new TextEncoder().encode(`${seconds} ${value(cookie)} ${origin}`))
         .pipe(Effect.map((digest) => `${scheme} ${seconds}_${Hex.encode(digest)}`));
-    const authorization = yield* Effect.all([
-      hash("SAPISIDHASH", "SAPISID"),
-      hash("SAPISID1PHASH", "__Secure-1PAPISID"),
-      hash("SAPISID3PHASH", "__Secure-3PAPISID"),
-    ]).pipe(Effect.orDie);
+    const authorization = yield* Effect.all(
+      (
+        [
+          ["SAPISIDHASH", "SAPISID"],
+          ["SAPISID1PHASH", "__Secure-1PAPISID"],
+          ["SAPISID3PHASH", "__Secure-3PAPISID"],
+        ] as const
+      ).flatMap(([scheme, cookie]) => (value(cookie) === "" ? [] : [hash(scheme, cookie)])),
+    ).pipe(Effect.orDie);
 
     const request = HttpClientRequest.post(`${origin}/youtubei/v1/account/account_menu`).pipe(
       HttpClientRequest.setUrlParam("prettyPrint", "false"),
       HttpClientRequest.setHeaders({
-        Cookie: sessionCookies.map((name) => `${name}=${value(name)}`).join("; "),
+        Cookie: sessionCookies
+          .flatMap((name) => (value(name) === "" ? [] : [`${name}=${value(name)}`]))
+          .join("; "),
         Authorization: authorization.join(" "),
         Origin: origin,
         "X-Origin": origin,

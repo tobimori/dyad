@@ -25,7 +25,7 @@ import {
 import { Argument, Command, Prompt } from "effect/cli";
 
 import { cliReplicaLayer, replicaFile } from "../context/replica.ts";
-import { BrowserLoginError } from "./browser-login.ts";
+import { CookieImportError } from "./cookie-import.ts";
 import { deleteDeviceToken, loadDeviceToken, saveDeviceToken } from "./devices.ts";
 
 /** Only the origin, because device tokens are per origin and the client sets its own paths */
@@ -80,7 +80,7 @@ export const reportFailures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     if (Schema.is(AuthenticationFailed)(error)) return fail(failureMessages[error.reason]);
     if (Schema.is(AccountLinkFailed)(error))
       return fail(`Cannot link the account: ${error.reason}`);
-    if (error instanceof BrowserLoginError) return fail(error.reason);
+    if (error instanceof CookieImportError) return fail(error.reason);
     if (error instanceof NotSignedIn) return fail(notSignedIn);
     if (Schema.is(Unauthorized)(error)) {
       return fail("The server does not accept this device. Sign in again.");

@@ -1,9 +1,10 @@
 import { ServerConnection } from "@dyad/client-runtime";
-import { Console, Effect } from "effect";
-import { Argument, Command } from "effect/cli";
+import { Console, Effect, Option } from "effect";
+import { Argument, Command, Flag, Prompt } from "effect/cli";
 
 import { deviceConnection, fail, reportFailures } from "./auth.ts";
-import { browserLogin } from "./browser-login.ts";
+import { availableCookieBrowsers, readBrowserCookies } from "./browser-cookies.ts";
+import { readCookieFile } from "./cookie-import.ts";
 
 const accountsCommand = Command.make("accounts", {}, () =>
   Effect.gen(function* () {
@@ -21,8 +22,14 @@ const accountsCommand = Command.make("accounts", {}, () =>
 
 const linkCommand = Command.make(
   "link",
-  { provider: Argument.String("provider") },
-  ({ provider }) =>
+  {
+    provider: Argument.String("provider"),
+    cookies: Flag.String("cookies").pipe(
+      Flag.withDescription("Import a Netscape cookies.txt file"),
+      Flag.optional,
+    ),
+  },
+  ({ provider, cookies }) =>
     Effect.gen(function* () {
       const connection = yield* ServerConnection;
       const providers = yield* connection.listAccountProviders();
@@ -33,12 +40,44 @@ const linkCommand = Command.make(
         );
       }
 
-      yield* Console.log(`Sign in to ${accountProvider.name} in the browser window`);
-      const credentials = yield* browserLogin(accountProvider.login);
+      const credentials = yield* Effect.gen(function* () {
+        if (Option.isSome(cookies))
+          return yield* readCookieFile(accountProvider.login, cookies.value);
+        const browsers = yield* availableCookieBrowsers;
+        const index = yield* Prompt.Select({
+          message: "Import cookies",
+          choices: [
+            { title: "Import cookie file", value: -1 },
+            ...browsers.map((browser, value) => ({ title: `Import from ${browser.name}`, value })),
+          ],
+        });
+        const browser = browsers[index];
+        if (browser === undefined) {
+          yield* Console.log(
+            "Sign in in a private window, export cookies.txt, then close the window.",
+          );
+          const file = yield* Prompt.String({ message: "Cookie file" });
+          return yield* readCookieFile(accountProvider.login, file);
+        }
+        yield* Console.log(
+          `Normal browser cookies expire sooner than a private-window export. Re-import when Dyad says "Sign in to ${accountProvider.name} again".`,
+        );
+        const profile =
+          browser.profiles.length === 1
+            ? browser.profiles[0]!
+            : yield* Prompt.Select({
+                message: "Choose the signed-in profile",
+                choices: browser.profiles.map((profile) => ({
+                  title: profile.name,
+                  value: profile,
+                })),
+              });
+        return yield* readBrowserCookies(browser, profile, accountProvider.login);
+      });
       const account = yield* connection.linkAccount({ provider, credentials });
       yield* Console.log(`Linked ${account.displayName}`);
     }).pipe(Effect.provide(deviceConnection), reportFailures),
-).pipe(Command.withDescription("Sign in to a provider and link the account"));
+).pipe(Command.withDescription("Import browser cookies and link a provider account"));
 
 const unlinkCommand = Command.make(
   "unlink",
