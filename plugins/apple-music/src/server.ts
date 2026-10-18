@@ -26,6 +26,7 @@ import {
 import type { AppleSession } from "./api.ts";
 import { readSegments, segmentBytes } from "./hls.ts";
 import { probeLibrary, readLibrarySongs, readPlaylists, readPlaylistTracks } from "./library.ts";
+import { readCharts } from "./home.ts";
 import { readAlbum, readArtist } from "./pages.ts";
 import { acquireAppleKeys } from "./widevine.ts";
 
@@ -175,18 +176,16 @@ export const appleMusicPlugin = new Plugin({
         }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
 
       // Pages come from the catalog of the user's storefront, like search results
-      const catalogPage =
-        <A>(
-          read: (
-            session: AppleSession,
-            id: string,
-          ) => Effect.Effect<A, AppleError | HttpStatusError, HttpClient.HttpClient>,
-        ) =>
-        (id: string, credentials: Credentials) =>
-          Effect.gen(function* () {
-            const token = yield* mediaUserToken(credentials);
-            return yield* withSession(token, (session) => read(session, id));
-          }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
+      const catalogPage = <A>(
+        credentials: Credentials,
+        read: (
+          session: AppleSession,
+        ) => Effect.Effect<A, AppleError | HttpStatusError, HttpClient.HttpClient>,
+      ) =>
+        Effect.gen(function* () {
+          const token = yield* mediaUserToken(credentials);
+          return yield* withSession(token, read);
+        }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
 
       // Apple throttles fast library reads. Search and playback do not wait for this queue.
       const libraryPace = yield* makePacer(1000);
@@ -228,8 +227,10 @@ export const appleMusicPlugin = new Plugin({
           resolve,
           keys,
           search,
-          artist: catalogPage(readArtist),
-          album: catalogPage(readAlbum),
+          artist: (id, credentials) =>
+            catalogPage(credentials, (session) => readArtist(session, id)),
+          album: (id, credentials) => catalogPage(credentials, (session) => readAlbum(session, id)),
+          home: (credentials) => catalogPage(credentials, readCharts),
           account: { login, link },
           library,
           metadataPriority: 30,

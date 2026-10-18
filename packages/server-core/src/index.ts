@@ -18,6 +18,7 @@ import {
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
 import { listRecentPlays, recordPlays } from "./history.ts";
+import { homePage } from "./home.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
@@ -85,6 +86,7 @@ export const serverRoutes = Layer.unwrap(
         search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
       artistPage: ({ ref }) => artistPage(ref),
       albumPage: ({ ref }) => albumPage(ref),
+      homePage: () => homePage,
       listLibraryArtists: () => listLibraryArtists.pipe(orDieOnDatabaseError("listLibraryArtists")),
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>

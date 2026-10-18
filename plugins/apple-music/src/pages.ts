@@ -17,7 +17,7 @@ const Related = Schema.optional(
   Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) }),
 );
 
-const AppleAlbum = Schema.Struct({
+export const AppleAlbum = Schema.Struct({
   id: Schema.String,
   attributes: Schema.Struct({
     name: Schema.String,
@@ -88,7 +88,7 @@ const primaryTypeOf = (album: typeof AppleAlbum.Type) => {
   return "album";
 };
 
-const toRelease = (album: typeof AppleAlbum.Type, artistId: string | null, live: boolean) =>
+export const toRelease = (album: typeof AppleAlbum.Type, artistId: string | null, live: boolean) =>
   new ProviderRelease({
     externalId: album.id,
     title: album.attributes.name.replace(typeSuffix, ""),
@@ -105,7 +105,7 @@ const toRelease = (album: typeof AppleAlbum.Type, artistId: string | null, live:
     artworkUrl: artwork(album.attributes.artwork),
   });
 
-const toTrack = (song: AppleTrack) =>
+export const toTrack = (song: AppleTrack) =>
   new ProviderTrack({
     disc: song.attributes.discNumber ?? null,
     number: song.attributes.trackNumber ?? null,
@@ -121,7 +121,7 @@ const toCard = (artist: typeof AppleArtist.Type) =>
     artworkUrl: artwork(artist.attributes.artwork),
   });
 
-const includes = { ...songIncludes, "include[albums]": "artists" };
+export const includes = { ...songIncludes, "include[albums]": "artists" };
 
 // A view has 10 items and a `next` link. One more request gives up to 100 items.
 const allAlbums = (session: AppleSession, view: typeof AlbumView.Type) =>

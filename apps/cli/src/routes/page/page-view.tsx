@@ -37,7 +37,7 @@ export function usePage(atoms: ServerAtoms, route: SectionRoute | PageRoute) {
   return { result: useAtomValue(atom), refresh: useAtomRefresh(atom) };
 }
 
-const statusText = (state: PageState, providerName: string | null) => {
+export const statusText = (state: PageState, providerName: string | null) => {
   const provider = providerName ?? "the provider";
   if (state.status === "local") return "Local library";
   const saved = state.fetchedAt !== null;

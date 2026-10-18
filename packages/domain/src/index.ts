@@ -173,6 +173,25 @@ export class AlbumPage extends Schema.Class<AlbumPage>("AlbumPage")({
 /** No page has this ref, for example a library ref after a tag edit changed the keys */
 export class PageNotFound extends Schema.TaggedError<PageNotFound>()("PageNotFound", {}) {}
 
+export class HomeShelf extends Schema.Class<HomeShelf>("HomeShelf")({
+  /** Safe to show, for example `Recent albums` or a chart name of a provider */
+  title: Schema.String,
+  tracks: Schema.Array(PageTrack),
+  albums: Schema.Array(AlbumCard),
+}) {}
+
+/** The shelves from the plays on the server, or from one provider */
+export class HomeGroup extends Schema.Class<HomeGroup>("HomeGroup")({
+  /** `null` for the shelves from the plays on the server */
+  providerName: Schema.NullOr(Schema.String),
+  shelves: Schema.Array(HomeShelf),
+  state: PageState,
+}) {}
+
+export class HomePage extends Schema.Class<HomePage>("HomePage")({
+  groups: Schema.Array(HomeGroup),
+}) {}
+
 /**
  * Why the user cannot play a library entry. `library_only`: the song is only in the user's
  * provider library, for example an upload. `not_in_catalog`: the provider's catalog for the
@@ -652,6 +671,8 @@ const UserRpc = RpcGroup.make(
     error: PageNotFound,
     stream: true,
   }),
+  // Streams the page again each time that a provider group changes, like `artistPage`
+  Rpc.make("homePage", { success: HomePage, stream: true }),
   // The album artists and the albums of the files on the server, sorted by name
   Rpc.make("listLibraryArtists", { success: Schema.Array(ArtistCard) }),
   Rpc.make("listLibraryAlbums", { success: Schema.Array(AlbumCard) }),

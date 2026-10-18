@@ -113,6 +113,7 @@ export const serverAtoms = (
         .atom(Stream.unwrap(ServerConnection.useSync((client) => client.albumPage({ ref }))))
         .pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
+    homePage: runtime.atom(Stream.unwrap(ServerConnection.useSync((client) => client.homePage()))),
   };
 };
 

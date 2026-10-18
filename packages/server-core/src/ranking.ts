@@ -111,7 +111,10 @@ const sum = (values: ReadonlyArray<number>) => values.reduce((total, value) => t
 // Maps any sum of plays to -1..1. One recent listen gives 0.5, three give 0.75.
 const saturate = (value: number) => value / (1 + Math.abs(value));
 
-const playValue = (play: Play, now: number) => {
+export const playValue = (
+  play: Pick<Play, "startedAt" | "playedMs" | "completed">,
+  now: number,
+) => {
   const recency = 0.5 ** ((now - play.startedAt) / halfLifeMs);
   const listened = play.completed || play.playedMs >= listenMs;
   return listened ? recency : skipValue * recency;

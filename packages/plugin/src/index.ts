@@ -87,6 +87,14 @@ export class ProviderArtistCard extends Schema.Class<ProviderArtistCard>("Provid
   artworkUrl: Schema.NullOr(Schema.String),
 }) {}
 
+/** One list of the home page, for example a chart */
+export class ProviderShelf extends Schema.Class<ProviderShelf>("ProviderShelf")({
+  /** The heading, for example `Top songs` */
+  title: Schema.String,
+  tracks: Schema.Array(ProviderTrack),
+  releases: Schema.Array(ProviderRelease),
+}) {}
+
 /** A provider gives empty lists for what it does not have */
 export class ProviderArtist extends Schema.Class<ProviderArtist>("ProviderArtist")({
   artist: ProviderArtistCard,
@@ -243,6 +251,13 @@ export class Provider extends Data.Class<{
     externalId: string,
     credentials: Credentials,
   ) => Effect.Effect<ProviderAlbum, ProviderError>;
+  /**
+   * Shelves for the home page, cached like `artist`. All users share the cache, so the shelves must
+   * not depend on the user, apart from the storefront.
+   */
+  readonly home?: (
+    credentials: Credentials,
+  ) => Effect.Effect<ReadonlyArray<ProviderShelf>, ProviderError>;
   /** Users must link an account before they can search or play the provider */
   readonly account?: {
     readonly login: BrowserLogin;

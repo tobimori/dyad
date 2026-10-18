@@ -25,7 +25,7 @@ export class TrackRow extends Data.Class<{
   readonly track: PageTrack;
   /** `return` plays these from this track */
   readonly section: ReadonlyArray<SourceSummary>;
-  readonly context: "album" | "artist";
+  readonly context: "album" | "artist" | "home";
 }> {}
 
 export class AlbumRow extends Data.Class<{
@@ -73,7 +73,7 @@ export const albumRows = (albums: ReadonlyArray<AlbumCard>) =>
 export const trackRows = (
   keyPrefix: string,
   tracks: ReadonlyArray<PageTrack>,
-  context: "album" | "artist",
+  context: "album" | "artist" | "home",
 ) => {
   const section = tracks.flatMap((track) => (track.playable ? [track.source] : []));
   return tracks.map(

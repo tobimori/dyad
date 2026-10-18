@@ -29,15 +29,15 @@ export const providerItem = sqliteTable(
   ],
 );
 
-// Artist and album pages of the plugins, swept like `provider_item`. The server writes the tracks
-// of a page into `provider_item` first, so that they expire after the page.
+// Artist, album and home pages of the plugins, swept like `provider_item`. The server writes the
+// tracks of a page into `provider_item` first, so that they expire after the page.
 export const providerPage = sqliteTable(
   "provider_page",
   {
     provider: text("provider").notNull(),
-    kind: text("kind", { enum: ["artist", "album"] }).notNull(),
+    kind: text("kind", { enum: ["artist", "album", "home"] }).notNull(),
     externalId: text("external_id").notNull(),
-    // The plugin's `ProviderArtist` or `ProviderAlbum`
+    // The plugin's `ProviderArtist`, `ProviderAlbum` or home shelves
     data: text("data", { mode: "json" }).notNull(),
     fetchedAt: integer("fetched_at").notNull(),
   },

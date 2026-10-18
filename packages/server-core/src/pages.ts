@@ -230,8 +230,8 @@ const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
       }),
   );
 
-// The card counts the saved tracks, because the provider's album is not known without a fetch
-const libraryAlbumCards = (sources: ReadonlyArray<LibrarySource>) =>
+/** The card counts the given tracks, because the provider's album is not known without a fetch */
+export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "summary">>) =>
   [...groupBy(sources, (item) => item.summary.albumRef)].map(([ref, group]) => {
     const artistRef = mostCommon(group.map((item) => item.summary.artistRef ?? undefined));
     return new AlbumCard({
@@ -368,7 +368,7 @@ const pageLifetimeMs = 24 * 60 * 60 * 1000;
 // Apple pages need a request for each view with more than 10 releases
 const fetchTimeout = "20 seconds";
 
-const providerTracks = (
+export const providerTracks = (
   provider: string,
   providerName: string,
   tracks: ReadonlyArray<ProviderTrack>,
@@ -387,7 +387,7 @@ const providerTracks = (
     ),
   );
 
-const releaseCard = (provider: string, release: ProviderRelease) =>
+export const releaseCard = (provider: string, release: ProviderRelease) =>
   new AlbumCard({
     ref: providerAlbumRef(provider, release.externalId),
     title: release.title,
@@ -410,9 +410,9 @@ class PageInput<A> extends Data.Class<{
   readonly state: PageState;
 }> {}
 
-// The cached page at once, then the fetched page when the cache is older than a day
-const providerPageStream = <A, E, Page, R>(
-  kind: "artist" | "album",
+/** The cached page at once, then the fetched page when the cache is older than a day */
+export const providerPageStream = <A, E, Page, R>(
+  kind: "artist" | "album" | "home",
   parts: { readonly provider: string; readonly externalId: string },
   schema: Schema.Codec<A, E>,
   options: {
