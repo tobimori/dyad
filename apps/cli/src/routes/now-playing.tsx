@@ -4,7 +4,6 @@ import { TextAttributes } from "@opentui/core";
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 
-import { ProgressBar } from "../component/bars.tsx";
 import { scrollOffset, useRowClick } from "../component/track-list.tsx";
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
@@ -176,6 +175,8 @@ export function NowPlayingPanel(props: {
 
 // Below this width, the cover goes above the text
 const sideBySideMinWidth = 64;
+// The text alone over the backdrop reads best in a narrow column
+const detailsMaxWidth = 64;
 
 export function NowPlayingView(props: {
   readonly entry: QueueEntry | undefined;
@@ -187,15 +188,14 @@ export function NowPlayingView(props: {
   readonly onSelectSegment: (index: number) => void;
   readonly onPlaySegment: (index: number) => void;
   readonly upNext: ReadonlyArray<QueueEntry>;
+  /** `details` shows the text without the cover, in a column over the backdrop */
+  readonly overlay: "full" | "details";
   /** The cover shows a video, which gets a large 16:9 box above the text */
   readonly video: boolean;
   /** The cover of the source that plays, in a box of `width` by `height` cells */
   readonly cover: (width: number, height: number) => ReactNode;
-  readonly positionMs: number;
-  readonly durationMs: number | null;
   readonly width: number;
   readonly height: number;
-  readonly onSeek: (ms: number) => void;
 }) {
   const theme = useTheme();
 
@@ -209,25 +209,29 @@ export function NowPlayingView(props: {
 
   const source = props.entry.source;
   const segment = props.segments[props.currentSegment];
-  const sideBySide = !props.video && props.width >= sideBySideMinWidth;
+  const textOnly = props.overlay === "details";
+  const centered = textOnly && props.segments.length === 0;
+  const video = !textOnly && props.video;
+  const sideBySide = !textOnly && !video && props.width >= sideBySideMinWidth;
   // The padding takes two rows and four columns
   const space = { width: props.width - 4, height: props.height - 2 };
   // Terminal cells are about twice as high as wide
   const squareHeight = sideBySide
     ? Math.min(space.height, Math.floor((space.width * 0.5) / 2))
-    : Math.max(0, Math.min(Math.floor(space.width / 2), space.height - 9));
-  // The gap, the four lines of text, the progress bar and the line above it stay visible
+    : Math.max(0, Math.min(Math.floor(space.width / 2), space.height - 7));
+  // The gap and the four lines of text stay visible
   const videoRows = Math.max(
     0,
     Math.min(
-      space.height - 7 - (segment === undefined ? 0 : 1),
+      space.height - 5 - (segment === undefined ? 0 : 1),
       Math.round((space.width * 9) / 32),
     ),
   );
-  const cover = props.video
+  const cover = video
     ? { width: Math.min(space.width, Math.floor((videoRows * 32) / 9)), height: videoRows }
-    : { width: squareHeight * 2, height: squareHeight };
-  const textWidth = sideBySide ? space.width - cover.width - 3 : space.width;
+    : { width: squareHeight * 2, height: textOnly ? 0 : squareHeight };
+  const fullWidth = sideBySide ? space.width - cover.width - 3 : space.width;
+  const textWidth = textOnly ? Math.min(space.width, detailsMaxWidth) : fullWidth;
   const line = (text: string) => fit(text, textWidth);
 
   return (
@@ -235,7 +239,8 @@ export function NowPlayingView(props: {
       flexGrow={1}
       flexDirection={sideBySide ? "row" : "column"}
       // The tracklist takes the full height
-      alignItems={sideBySide && props.segments.length === 0 ? "center" : "stretch"}
+      alignItems={textOnly || (sideBySide && props.segments.length === 0) ? "center" : "stretch"}
+      justifyContent={centered ? "center" : "flex-start"}
       gap={sideBySide ? 3 : 1}
       paddingX={2}
       paddingY={1}
@@ -248,8 +253,10 @@ export function NowPlayingView(props: {
       )}
       <box
         flexDirection="column"
-        flexGrow={1}
+        flexGrow={centered ? 0 : 1}
         flexShrink={1}
+        // Without the cover the column takes the width of its text, so that it is centered
+        maxWidth={textWidth}
         maxHeight={space.height}
         overflow="hidden"
       >
@@ -270,13 +277,6 @@ export function NowPlayingView(props: {
             {line(`▶ ${segmentLine(segment)}`)}
           </text>
         )}
-        <box marginTop={1} flexShrink={0}>
-          <ProgressBar
-            positionMs={props.positionMs}
-            durationMs={props.durationMs}
-            onSeek={props.onSeek}
-          />
-        </box>
         {props.segments.length === 0 ? (
           <UpNext entries={props.upNext} width={textWidth} />
         ) : (

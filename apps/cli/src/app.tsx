@@ -73,9 +73,8 @@ import { sections, startSection } from "./routes/sections.ts";
 import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
 import { useToast } from "./ui/toast.tsx";
-import { VideoView, useCoverVideo } from "./video/video-view.tsx";
-import { Backdrop, useBackdropStyle } from "./visualizer/backdrop.tsx";
-import { VisualizerView } from "./visualizer/visualizer-view.tsx";
+import { useCoverVideo } from "./video/video-view.tsx";
+import { Backdrop, useBackdrop } from "./visualizer/backdrop.tsx";
 
 const sidebarMinWidth = 100;
 const panelMinWidth = 120;
@@ -163,7 +162,8 @@ export function App(props: {
 
   const main = useRef<BoxRenderable | null>(null);
   const [downloadQuality, setDownloadQuality] = useState(props.downloadQuality);
-  const [view, setView] = useState<"browse" | "nowPlaying" | "visualizer" | "video">("browse");
+  const [view, setView] = useState<"browse" | "nowPlaying">("browse");
+  const backdrop = useBackdrop(player.current?.source);
 
   // `sections` never changes, so each render calls the same hooks in the same order
   const views = new Map(
@@ -445,8 +445,14 @@ export function App(props: {
     });
 
   const watchVideo = (source: SourceSummary) => {
-    if (player.current?.source.id !== source.id) activate(indexOfSelection());
-    setView("video");
+    const current = player.current?.source.id === source.id;
+    if (current && !source.video) {
+      toast("notice", "This track has no video");
+      return;
+    }
+    if (!current) activate(indexOfSelection());
+    backdrop.watchVideo();
+    setView("nowPlaying");
   };
 
   const trackActions = (target: ActionTarget) => {
@@ -803,7 +809,13 @@ export function App(props: {
     [commands.nextSection, () => moveSection(1)],
     [commands.previousSection, () => moveSection(-1)],
     [commands.nowPlaying, () => setView(view === "browse" ? "nowPlaying" : "browse")],
-    [commands.visualizer, () => setView(view === "visualizer" ? "browse" : "visualizer")],
+    [
+      commands.visualizer,
+      () => {
+        backdrop.showOnly(view === "browse" || backdrop.overlay !== "none");
+        setView("nowPlaying");
+      },
+    ],
     [commands.reload, reload],
     [commands.togglePause, player.togglePause],
     [commands.next, () => player.skip(1, segments)],
@@ -823,7 +835,7 @@ export function App(props: {
         const target = actionTarget();
         const current = player.current?.source;
         if (target instanceof ActionTarget) watchVideo(target.source);
-        else if (current !== undefined) setView("video");
+        else if (current !== undefined) watchVideo(current);
         else toast("notice", "Nothing is playing");
       },
     ],
@@ -903,7 +915,6 @@ export function App(props: {
         ]
       : [];
 
-  const backdrop = useBackdropStyle();
   const viewCommands: ReadonlyArray<readonly [Command, () => void]> =
     view === "browse"
       ? [...sectionCommands, ...entryCommands, ...listCommands]
@@ -911,7 +922,7 @@ export function App(props: {
           ...segmentCommands,
           [commands.close, () => setView("browse")],
           [commands.actions, openActions],
-          ...(view === "nowPlaying" ? backdrop.commands : []),
+          ...backdrop.commands,
         ];
 
   // The footer shows the hints in this order
@@ -920,7 +931,8 @@ export function App(props: {
   const showSidebar = screen.width >= sidebarMinWidth;
   const showPanel = screen.width >= panelMinWidth && screen.height >= 24;
   const panelWidth = Math.min(50, Math.floor(screen.width * 0.32));
-  const bodyHeight = screen.height - 4;
+  const showHeader = view === "browse" || backdrop.overlay !== "none";
+  const bodyHeight = screen.height - (showHeader ? 4 : 3);
 
   const current = player.currentIndex;
   const upNext =
@@ -976,6 +988,8 @@ export function App(props: {
 
   const cover = useCoverVideo({
     source: player.current?.source,
+    // The backdrop shows the video, so the cover does not
+    video: view === "browse" || backdrop.style !== "video",
     artwork,
     playing: player.state === "playing",
     positionMs: player.position,
@@ -992,7 +1006,7 @@ export function App(props: {
       height="100%"
       backgroundColor={theme.background}
     >
-      {view !== "visualizer" && view !== "video" && (
+      {showHeader && (
         <Header
           sections={showSidebar || view === "nowPlaying" ? [] : sections}
           active={section.id}
@@ -1000,55 +1014,38 @@ export function App(props: {
           status={status}
         />
       )}
-      {view === "visualizer" && (
-        <VisualizerView
-          source={player.current?.source}
-          artwork={artwork}
-          playing={player.state === "playing"}
-          tap={player.tap}
-          positionMs={player.position}
-          durationMs={player.durationMs()}
-          width={screen.width}
-          height={screen.height}
-        />
-      )}
-      {view === "video" && (
-        <VideoView
-          source={player.current?.source}
-          playing={player.state === "playing"}
-          positionMs={player.position}
-          durationMs={player.durationMs()}
-          connection={client}
-          serverUrl={props.serverUrl}
-          width={screen.width}
-          height={screen.height}
-        />
-      )}
       {view === "nowPlaying" && (
         <Backdrop
           style={backdrop.style}
+          overlay={backdrop.overlay}
+          preset={backdrop.preset}
           source={player.current?.source}
           artwork={artwork}
           playing={player.state === "playing"}
           tap={player.tap}
           positionMs={player.position}
+          connection={client}
+          serverUrl={props.serverUrl}
+          delayMs={backdrop.delayMs}
+          onPresetEnd={backdrop.nextPreset}
+          onVideoFailure={backdrop.videoFailed}
         >
-          <NowPlayingView
-            entry={player.current}
-            segments={segments}
-            currentSegment={currentSegment}
-            selectedSegment={selectedSegment}
-            onSelectSegment={setSegmentSelection}
-            onPlaySegment={playSegment}
-            upNext={upNext}
-            video={cover.video}
-            cover={cover.render}
-            positionMs={player.position()}
-            durationMs={player.durationMs()}
-            width={screen.width}
-            height={bodyHeight}
-            onSeek={player.seekTo}
-          />
+          {backdrop.overlay !== "none" && (
+            <NowPlayingView
+              entry={player.current}
+              segments={segments}
+              currentSegment={currentSegment}
+              selectedSegment={selectedSegment}
+              onSelectSegment={setSegmentSelection}
+              onPlaySegment={playSegment}
+              upNext={upNext}
+              overlay={backdrop.overlay}
+              video={cover.video}
+              cover={cover.render}
+              width={screen.width}
+              height={bodyHeight}
+            />
+          )}
         </Backdrop>
       )}
       {view === "browse" && (
@@ -1077,29 +1074,27 @@ export function App(props: {
           )}
         </box>
       )}
-      {view !== "visualizer" && view !== "video" && (
-        <Footer
-          entry={player.current}
-          state={player.state}
-          positionMs={player.position()}
-          durationMs={player.durationMs()}
-          segments={segments}
-          currentSegment={currentSegment}
-          volume={player.volume}
-          muted={player.muted}
-          quality={player.quality()}
-          shuffle={player.shuffle}
-          repeat={player.repeat}
-          message={
-            player.error ?? player.offline ?? (player.lost ? "The output does not answer" : null)
-          }
-          artwork={artwork}
-          showCover={view === "browse" && !showPanel}
-          onOpen={openNowPlaying}
-          onSeek={player.seekTo}
-          onVolume={player.setVolume}
-        />
-      )}
+      <Footer
+        entry={player.current}
+        state={player.state}
+        positionMs={player.position()}
+        durationMs={player.durationMs()}
+        segments={segments}
+        currentSegment={currentSegment}
+        volume={player.volume}
+        muted={player.muted}
+        quality={player.quality()}
+        shuffle={player.shuffle}
+        repeat={player.repeat}
+        message={
+          player.error ?? player.offline ?? (player.lost ? "The output does not answer" : null)
+        }
+        artwork={artwork}
+        showCover={view === "browse" ? !showPanel : backdrop.overlay !== "full"}
+        onOpen={openNowPlaying}
+        onSeek={player.seekTo}
+        onVolume={player.setVolume}
+      />
     </box>
   );
 }

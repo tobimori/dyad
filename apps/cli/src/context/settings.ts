@@ -4,8 +4,14 @@ import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import envPaths from "env-paths";
 import { useEffect, useState } from "react";
 
-/** The effect behind the now playing view; the names are the keys of `backdrops` */
-export const Backdrop = Schema.Literals(["artwork", "aura", "pulse", "embers", "horizon", "off"]);
+/** An effect behind the now playing view; the names are the keys of `backdrops` */
+export const BackdropEffect = Schema.Literals(["artwork", "aura", "pulse", "embers", "horizon"]);
+
+/** What fills the now playing view: an effect, the visualizer presets, the video or nothing */
+export const Backdrop = Schema.Literals([...BackdropEffect.literals, "visualizer", "video", "off"]);
+
+/** What the now playing view draws over the backdrop */
+export const Overlay = Schema.Literals(["full", "details", "none"]);
 
 /** Not synced, because a setting such as a plugin can concern only this device */
 export class Settings extends Schema.Class<Settings>("Settings")({
@@ -26,6 +32,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   /** `false` shows the cover instead of the muted video of the source. Missing means on. */
   coverVideo: Schema.optionalKey(Schema.Boolean),
   backdrop: Schema.optionalKey(Backdrop),
+  overlay: Schema.optionalKey(Overlay),
 }) {}
 
 export const defaultSettings = new Settings({ enabledPlugins: [], disabledPlugins: [] });

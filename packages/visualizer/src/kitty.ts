@@ -67,6 +67,7 @@ export class KittyImage {
   private rgb = new Uint8Array(0);
   private output = new Uint8Array(0);
   private header = new Uint8Array(0);
+  private headerText = "";
   private frame = 0;
 
   /**
@@ -90,24 +91,27 @@ export class KittyImage {
   }
 
   /**
-   * The escape that transmits `rgba` as compressed RGB in chunks and creates the placement.
-   * The result is a view of an internal buffer that the next call overwrites.
+   * The escape that transmits `rgba` compressed in chunks and creates the placement. Without
+   * `alpha` it sends only RGB. The result is a view of an internal buffer that the next call
+   * overwrites.
    */
-  encode(rgba: Uint8Array, width: number, height: number) {
+  encode(rgba: Uint8Array, width: number, height: number, alpha = false) {
     const pixels = width * height;
-    if (this.rgb.length !== pixels * 3) {
-      this.rgb = new Uint8Array(pixels * 3);
-      this.header = ascii.encode(
-        `\x1b_Ga=T,${this.placement},q=2,C=1,i=${this.id},f=24,s=${width},v=${height},c=${this.columns},r=${this.rows},o=z,`,
-      );
+    const header = `\x1b_Ga=T,${this.placement},q=2,C=1,i=${this.id},f=${alpha ? 32 : 24},s=${width},v=${height},c=${this.columns},r=${this.rows},o=z,`;
+    if (header !== this.headerText) {
+      this.headerText = header;
+      this.header = ascii.encode(header);
     }
+    if (this.rgb.length !== pixels * 3) this.rgb = new Uint8Array(pixels * 3);
     const rgb = this.rgb;
-    for (let p = 0; p < pixels; p++) {
-      rgb[p * 3] = rgba[p * 4] ?? 0;
-      rgb[p * 3 + 1] = rgba[p * 4 + 1] ?? 0;
-      rgb[p * 3 + 2] = rgba[p * 4 + 2] ?? 0;
+    if (!alpha) {
+      for (let p = 0; p < pixels; p++) {
+        rgb[p * 3] = rgba[p * 4] ?? 0;
+        rgb[p * 3 + 1] = rgba[p * 4 + 1] ?? 0;
+        rgb[p * 3 + 2] = rgba[p * 4 + 2] ?? 0;
+      }
     }
-    const data = deflateSync(rgb, { level: 1 });
+    const data = deflateSync(alpha ? rgba.subarray(0, pixels * 4) : rgb, { level: 1 });
 
     const chunks = Math.max(1, Math.ceil(data.length / chunkBytes));
     const size = this.header.length + chunks * (nextChunk.length + 4 + 4096 + terminator.length);

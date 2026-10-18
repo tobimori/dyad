@@ -1,9 +1,8 @@
-import { formatDuration, titleOf, videoFillHeight, videoMaxHeight } from "@dyad/client-runtime";
+import { videoFillHeight } from "@dyad/client-runtime";
 import type { ServerConnection } from "@dyad/client-runtime";
 import type { SourceSummary } from "@dyad/domain";
 import { CellGrid, encodeHalfBlocks, encodeOctants, graphicsSupport } from "@dyad/visualizer";
 import { KittyImage } from "@dyad/visualizer/kitty";
-import { NodeServices } from "@effect/platform-node";
 import { FrameBufferRenderable, RGBA } from "@opentui/core";
 import type { BoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/react";
@@ -12,19 +11,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { Cover } from "../component/cover.tsx";
 import type { Artwork } from "../component/use-artwork.ts";
-import { commands, keyLabel, useCommands } from "../context/keymap.ts";
-import type { Command } from "../context/keymap.ts";
-import { Settings, defaultSettings, updateSettings, useSettings } from "../context/settings.ts";
-import { useTheme } from "../theme/theme.ts";
-import { fit } from "../ui/format.ts";
+import { useSettings } from "../context/settings.ts";
 import { VideoStream } from "./video-stream.ts";
 
 const mode = graphicsSupport(process.env);
-// Not the visualizer's ID, so that both images can exist while one view replaces the other
+// Two IDs, so that the image of a cover and of a backdrop can exist while one replaces the other
 const imageId = 0x5d1a7f;
+const underImageId = 0x5d1a7e;
 // Ghostty 1.3.1 takes compressed escape data at only about 30 MB/s
 const zlibMaxWidth = 480;
-const delayStepMs = 20;
 // A position change by more than this beyond the played time is a seek
 const seekThresholdMs = 1000;
 const probeTimeoutMs = 500;
@@ -32,7 +27,8 @@ const probeTimeoutMs = 500;
 // Without `t=t`, for example over SSH, frames go as compressed escape data
 let fileFrames: boolean | undefined;
 
-const copyCells = (grid: CellGrid, target: FrameBufferRenderable) => {
+/** Draws the cells of `grid` into `target` */
+export const copyCells = (grid: CellGrid, target: FrameBufferRenderable) => {
   target.frameBuffer.withBuffers((cells) => {
     const count = Math.min(cells.char.length, grid.chars.length);
     for (let cell = 0; cell < count; cell++) {
@@ -85,7 +81,7 @@ export function useKittyFiles() {
 }
 
 /** The video of a source, timed by its audio, in the largest box of its aspect in the cells */
-function VideoPicture(props: {
+export function VideoPicture(props: {
   readonly sourceId: string;
   readonly playing: boolean;
   readonly positionMs: () => number;
@@ -98,6 +94,8 @@ function VideoPicture(props: {
   /** The `maxHeight` of `prepareVideo` for a picture of `pixelHeight` */
   readonly maxHeight: (pixelHeight: number) => number;
   readonly visible: boolean;
+  /** With Kitty graphics, the video shows under the text at this z-index, not through placeholders */
+  readonly z?: number;
   readonly onFrame?: () => void;
   readonly onFailure: (reason: string) => void;
 }) {
@@ -182,11 +180,24 @@ function VideoPicture(props: {
     if (box === null || (mode === "kitty" && files === undefined)) return;
 
     setWaiting(true);
-    const surface = new FrameBufferRenderable(renderer, { width: boxColumns, height: boxRows });
-    box.add(surface);
+    const z = mode === "kitty" ? (props.z ?? null) : null;
+    const surface =
+      z === null
+        ? new FrameBufferRenderable(renderer, { width: boxColumns, height: boxRows })
+        : null;
+    if (surface !== null) box.add(surface);
     const grid = new CellGrid(boxColumns, boxRows);
-    const kitty = mode === "kitty" ? new KittyImage(imageId, boxColumns, boxRows) : null;
-    if (kitty !== null) {
+    const kitty =
+      mode === "kitty"
+        ? new KittyImage(z === null ? imageId : underImageId, boxColumns, boxRows, z)
+        : null;
+    // Yoga centers the placeholder surface; an image under the text goes to the same cells
+    const moveTo = () => {
+      const row = box.y + Math.floor((latest.current.rows - boxRows) / 2);
+      const column = box.x + Math.floor((latest.current.columns - boxColumns) / 2);
+      return `\x1b7\x1b[${row + 1};${column + 1}H`;
+    };
+    if (kitty !== null && surface !== null) {
       const { r, g, b } = kitty.foreground;
       const black = RGBA.fromInts(0, 0, 0, 255);
       for (const [row, text] of kitty.placeholderRows.entries()) {
@@ -217,13 +228,15 @@ function VideoPicture(props: {
       if (due !== undefined) {
         const rgba = new Uint8Array(due.rgba);
         // TTY writes are synchronous on Linux and macOS, so the file and the buffer are free after
+        if (z !== null) process.stdout.write(moveTo());
         if (kitty !== null && files === true) {
           process.stdout.write(kitty.encodeFile(rgba, due.width, due.height));
         }
         if (kitty !== null && files === false) {
           process.stdout.write(kitty.encode(rgba, due.width, due.height));
         }
-        if (kitty === null) {
+        if (z !== null) process.stdout.write("\x1b8");
+        if (kitty === null && surface !== null) {
           (mode === "octants" ? encodeOctants : encodeHalfBlocks)(
             rgba,
             due.width,
@@ -252,8 +265,10 @@ function VideoPicture(props: {
         process.stdout.write(kitty.delete());
         kitty.removeFiles();
       }
-      box.remove(surface);
-      surface.destroy();
+      if (surface !== null) {
+        box.remove(surface);
+        surface.destroy();
+      }
     };
     // A new surface for each source, so that no frame of the last video stays
   }, [boxColumns, boxRows, files, props.sourceId]);
@@ -270,90 +285,7 @@ function VideoPicture(props: {
   );
 }
 
-/** Full-screen video of the source that plays, timed by its audio */
-export function VideoView(props: {
-  readonly source: SourceSummary | undefined;
-  readonly playing: boolean;
-  readonly positionMs: () => number;
-  readonly durationMs: number | null;
-  readonly connection: typeof ServerConnection.Service | null;
-  readonly serverUrl: string;
-  readonly width: number;
-  readonly height: number;
-}) {
-  const theme = useTheme();
-  const [settings, setSettings] = useSettings();
-  const delayMs = settings?.videoDelayMs ?? 0;
-  const [failure, setFailure] = useState<string | null>(null);
-
-  const changeDelay = (stepMs: number) => {
-    const next = Math.max(-2000, Math.min(2000, delayMs + stepMs));
-    setSettings(new Settings({ ...(settings ?? defaultSettings), videoDelayMs: next }));
-    Effect.runFork(
-      updateSettings((current) => new Settings({ ...current, videoDelayMs: next })).pipe(
-        Effect.ignore,
-        Effect.provide(NodeServices.layer),
-      ),
-    );
-  };
-
-  useCommands([
-    [commands.videoEarlier, () => changeDelay(-delayStepMs)],
-    [commands.videoLater, () => changeDelay(delayStepMs)],
-  ]);
-
-  // Rows from the client replica do not know `video`, so the server decides
-  const source = props.source;
-  useEffect(() => setFailure(null), [source?.id]);
-
-  const time = `${formatDuration(props.positionMs())} / ${formatDuration(props.durationMs)}`;
-  const key = (command: Command) => keyLabel(command.keys[0] ?? "");
-  const sync = delayMs === 0 ? "" : `video ${delayMs > 0 ? "+" : ""}${delayMs} ms   `;
-  const status =
-    failure ??
-    `${sync}${key(commands.videoEarlier)} ${key(commands.videoLater)} sync   ${key(commands.close)} close`;
-  const title =
-    source === undefined
-      ? "Nothing is playing"
-      : `${titleOf(source)}${source.artist === null ? "" : `  ${source.artist}`}`;
-  const titleWidth = Math.max(0, props.width - time.length - status.length - 8);
-
-  return (
-    <box flexDirection="column" width="100%" height="100%" backgroundColor="#000000">
-      <box flexGrow={1} alignItems="center" justifyContent="center">
-        {source !== undefined && props.connection !== null && settings !== null && (
-          <VideoPicture
-            sourceId={source.id}
-            playing={props.playing}
-            positionMs={props.positionMs}
-            delayMs={delayMs}
-            connection={props.connection}
-            serverUrl={props.serverUrl}
-            columns={props.width}
-            rows={props.height - 1}
-            maxHeight={videoMaxHeight}
-            visible
-            onFailure={setFailure}
-          />
-        )}
-      </box>
-      <box flexDirection="row" height={1} paddingX={1} gap={2} backgroundColor={theme.panel}>
-        <text flexGrow={1} wrapMode="none">
-          <span fg={theme.accent}>{props.playing ? "▶ " : "⏸ "}</span>
-          <span fg={theme.text}>{fit(title, titleWidth)}</span>
-        </text>
-        <text fg={failure === null ? theme.faint : theme.accent} wrapMode="none" flexShrink={0}>
-          {status}
-        </text>
-        <text fg={theme.muted} wrapMode="none" flexShrink={0}>
-          {time}
-        </text>
-      </box>
-    </box>
-  );
-}
-
-// Loads its own settings on each mount, so that a delay that the full view changed applies
+// Loads its own settings on each mount, so that a delay that the backdrop keys changed applies
 function CoverVideo(props: {
   readonly source: SourceSummary;
   readonly artwork: Artwork | null;
@@ -401,6 +333,8 @@ function CoverVideo(props: {
  */
 export const useCoverVideo = (props: {
   readonly source: SourceSummary | undefined;
+  /** `false` shows the cover also for a source with video */
+  readonly video: boolean;
   readonly artwork: Artwork | null;
   readonly playing: boolean;
   readonly positionMs: () => number;
@@ -412,6 +346,7 @@ export const useCoverVideo = (props: {
   const [failed, setFailed] = useState<string | null>(null);
   const source = props.source;
   const video =
+    props.video &&
     mode === "kitty" &&
     source?.video === true &&
     props.connection !== null &&
