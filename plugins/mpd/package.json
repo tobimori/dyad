@@ -1,0 +1,22 @@
+{
+  "name": "@dyad/plugin-mpd",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dyad/domain": "workspace:*",
+    "@dyad/plugin": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:"
+  }
+}

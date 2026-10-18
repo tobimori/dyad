@@ -542,6 +542,25 @@ importers:
         specifier: 'catalog:'
         version: 4.0.5
 
+  plugins/mpd:
+    dependencies:
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../../packages/plugin
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+
   plugins/musicbrainz:
     dependencies:
       '@dyad/plugin':
