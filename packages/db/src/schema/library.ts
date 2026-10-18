@@ -15,11 +15,12 @@ export const libraryItem = sqliteTable(
     // UUIDv5 of `library_item:<user_id>:<entity_type>:<entity_id>:<origin>`
     id: text("id").primaryKey(),
     userId: text("user_id").notNull(),
-    entityType: text("entity_type", { enum: ["recording"] }).notNull(),
+    entityType: text("entity_type", { enum: ["recording", "release", "artist"] }).notNull(),
     // The bound recording of what the user saved, not the canonical recording. Views resolve
     // `coalesce(merged_into_id, entity_id)`, so that merges and splits follow what the user saved.
+    // A release is the provider's release (`<provider>:release:<id>`), an artist the catalog artist.
     entityId: text("entity_id").notNull(),
-    // `account:<provider>` for an import from the user's linked account
+    // `user` for a save in Dyad, `account:<provider>` for an import from the user's linked account
     origin: text("origin").notNull(),
     // When this replica first saw the item. Apple Music does not give the time that the user saved it.
     addedAt: integer("added_at").notNull(),
@@ -110,5 +111,26 @@ export const sourcePreference = sqliteTable(
   (table) => [
     index("source_preference_change_idx").on(table.userId, table.changeSeq),
     index("source_preference_seq_idx").on(table.changeSeq),
+  ],
+);
+
+/** The user loves an entity. LWW per row: each write sets all fields. */
+export const rating = sqliteTable(
+  "rating",
+  {
+    // UUIDv5 of `rating:<user_id>:<entity_type>:<entity_id>`
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    entityType: text("entity_type", { enum: ["recording", "release", "artist"] }).notNull(),
+    // As in `library_item`
+    entityId: text("entity_id").notNull(),
+    favorite: integer("favorite", { mode: "boolean" }).notNull(),
+    hlc: text("hlc").notNull(),
+    changeSeq,
+  },
+  (table) => [
+    index("rating_user_idx").on(table.userId, table.favorite),
+    index("rating_change_idx").on(table.userId, table.changeSeq),
+    index("rating_seq_idx").on(table.changeSeq),
   ],
 );

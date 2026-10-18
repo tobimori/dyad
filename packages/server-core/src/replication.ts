@@ -5,6 +5,7 @@ import {
   playEvent,
   playlist,
   playlistEntry,
+  rating,
   recording,
   source,
   sourcePreference,
@@ -45,6 +46,7 @@ const peerTables = {
   play_event: peerTable("play_event", playEvent),
   playlist: peerTable("playlist", playlist),
   playlist_entry: peerTable("playlist_entry", playlistEntry),
+  rating: peerTable("rating", rating),
   source: peerTable("source", source),
   source_preference: peerTable("source_preference", sourcePreference),
   source_variant: peerTable("source_variant", sourceVariant),
@@ -135,6 +137,7 @@ const isSyncRow = (row: PeerRow): row is SyncRow =>
   row.table === "play_event" ||
   row.table === "playlist" ||
   row.table === "playlist_entry" ||
+  row.table === "rating" ||
   row.table === "source_preference";
 
 const IsrcEvidence = Schema.Struct({ isrc: Schema.String });

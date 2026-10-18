@@ -36,3 +36,26 @@ export const uuidV5 = (name: string) =>
 
 /** The ID of the user's `source_preference` row of the `global` scope */
 export const sourcePreferenceId = (userId: string) => uuidV5(`source_preference:${userId}:global`);
+
+/** The ID of one library membership: one row per user, entity and origin */
+export const libraryItemId = (item: {
+  readonly userId: string;
+  readonly entityType: string;
+  readonly entityId: string;
+  readonly origin: string;
+}) => uuidV5(`library_item:${item.userId}:${item.entityType}:${item.entityId}:${item.origin}`);
+
+/** The ID of the user's rating of an entity */
+export const ratingId = (rating: {
+  readonly userId: string;
+  readonly entityType: string;
+  readonly entityId: string;
+}) => uuidV5(`rating:${rating.userId}:${rating.entityType}:${rating.entityId}`);
+
+/** The release of a provider album: the entity of a saved album until release groups exist */
+export const providerReleaseId = (provider: string, externalId: string) =>
+  uuidV5(`${provider}:release:${externalId}`);
+
+/** Equal to the server's `artistIdOf` for a provider scheme */
+export const providerArtistId = (provider: string, externalId: string) =>
+  uuidV5(`${provider}:artist:${externalId}`);

@@ -2,6 +2,7 @@ import {
   libraryItem,
   playlist,
   playlistEntry,
+  rating,
   recording,
   sourcePreference,
   syncQueue,
@@ -51,6 +52,7 @@ import {
   missingRecordingsState,
   stateKey,
 } from "./database.ts";
+import { libraryEdits } from "./library.ts";
 import { playlistEdits } from "./playlists.ts";
 import { setProviderOrder } from "./source-preference.ts";
 import {
@@ -116,6 +118,7 @@ const makeReplica = Effect.gen(function* () {
     db.select({ hlc: max(playlistEntry.hlc) }).from(playlistEntry),
     db.select({ hlc: max(libraryItem.hlc) }).from(libraryItem),
     db.select({ hlc: max(sourcePreference.hlc) }).from(sourcePreference),
+    db.select({ hlc: max(rating.hlc) }).from(rating),
   ]).pipe(Effect.orDie);
   const latest =
     stored
@@ -222,7 +225,7 @@ const makeReplica = Effect.gen(function* () {
     const referenced = db
       .select({ id: libraryItem.entityId })
       .from(libraryItem)
-      .where(eq(libraryItem.deleted, false))
+      .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")))
       .union(
         db
           .select({ id: playlistEntry.recordingId })
@@ -501,6 +504,8 @@ const makeReplica = Effect.gen(function* () {
     playlists: playlistEdits(mutate, owner),
     /** Sets the provider order that chooses the source of a recording, best first */
     setProviderOrder: setProviderOrder(mutate, owner),
+    /** Library and favorite edits. They apply at once, also offline. */
+    library: libraryEdits(mutate, owner),
     /** The mutations that the server has not acknowledged */
     pending: db
       .select({ count: count() })

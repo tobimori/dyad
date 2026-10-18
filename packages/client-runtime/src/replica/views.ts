@@ -169,7 +169,7 @@ export const localLibrary = Effect.gen(function* () {
   const items = yield* db
     .select({ entityId: libraryItem.entityId, addedAt: libraryItem.addedAt })
     .from(libraryItem)
-    .where(eq(libraryItem.deleted, false));
+    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
 
   const { view, notSynced } = yield* loadView(items.map((item) => item.entityId));
   return view

@@ -16,7 +16,7 @@ import {
   libraryView,
 } from "@dyad/domain";
 import type { PlaylistLink, PlaylistLinkState, UserId } from "@dyad/domain";
-import { HlcClock, patchRow } from "@dyad/sync";
+import { HlcClock, libraryItemId, patchRow } from "@dyad/sync";
 import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
 import { generateKeyBetween } from "fractional-indexing";
@@ -30,13 +30,14 @@ import { readRow, writeRow } from "./sync.ts";
 /**
  * The server's own writes of library items and playlists go through this module, so that each
  * changed row gets an HLC and a `change_seq`. With `complete`, the other items of `origin` are
- * removed.
+ * removed. A removed item in `removedInDyad` stays removed: the removal in Dyad wins.
  */
 export const setMembership = (
   userId: string,
   origin: string,
   recordingIds: ReadonlySet<string>,
   complete: boolean,
+  removedInDyad: ReadonlySet<string> = new Set(),
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -49,7 +50,10 @@ export const setMembership = (
       .where(and(eq(libraryItem.userId, userId), eq(libraryItem.origin, origin)));
     const live = new Set(rows.filter((row) => !row.deleted).map((row) => row.entityId));
 
-    const added = [...recordingIds].filter((id) => !live.has(id));
+    const removedRows = new Set(rows.filter((row) => row.deleted).map((row) => row.entityId));
+    const added = [...recordingIds].filter(
+      (id) => !live.has(id) && !(removedRows.has(id) && removedInDyad.has(id)),
+    );
     const removed = complete
       ? rows.filter((row) => !row.deleted && !recordingIds.has(row.entityId))
       : [];
@@ -60,7 +64,7 @@ export const setMembership = (
       added,
       (entityId) =>
         Effect.gen(function* () {
-          const id = yield* uuidV5(`library_item:${userId}:recording:${entityId}:${origin}`);
+          const id = yield* libraryItemId({ userId, entityType: "recording", entityId, origin });
           const change = { addedAt: now, hlc: yield* clock.next, deleted: false, changeSeq };
 
           yield* db

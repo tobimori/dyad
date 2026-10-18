@@ -3,6 +3,7 @@ import {
   playEvent,
   playlist,
   playlistEntry,
+  rating,
   replica,
   replicaIdentity,
   source,
@@ -12,12 +13,16 @@ import {
 import { Database, ReplicaDatabase, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   CurrentPrincipal,
+  LibraryItemRow,
+  LibraryItemSet,
   PlaylistCreate,
   PlaylistEntryAdd,
   PlaylistEntryPatch,
   PlaylistEntryRow,
   PlaylistPatch,
   PlaylistRow,
+  RatingRow,
+  RatingSet,
   ReplicaId,
   SourcePreferenceRow,
   SourcePreferenceSet,
@@ -43,7 +48,15 @@ import type {
   SyncTable,
   UserId,
 } from "@dyad/domain";
-import { HlcClock, applyChange, changeTarget, sourcePreferenceId, wallTimeOf } from "@dyad/sync";
+import {
+  HlcClock,
+  applyChange,
+  changeTarget,
+  libraryItemId,
+  ratingId,
+  sourcePreferenceId,
+  wallTimeOf,
+} from "@dyad/sync";
 import { and, asc, eq, gt, gte, lt, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
@@ -143,11 +156,23 @@ const syncSources = {
     changeSeq: sourcePreference.changeSeq,
     id: sourcePreference.id,
   }),
+  rating: new SyncSource({
+    table: "rating",
+    rows: rating,
+    scopeColumn: rating.userId,
+    changeSeq: rating.changeSeq,
+    id: rating.id,
+  }),
 } satisfies Record<SyncTable, SyncSource>;
 
 const sourcesOf = (scope: SyncScope) =>
   scope.startsWith("user:")
-    ? [syncSources.library_item, syncSources.play_event, syncSources.source_preference]
+    ? [
+        syncSources.library_item,
+        syncSources.play_event,
+        syncSources.rating,
+        syncSources.source_preference,
+      ]
     : [syncSources.playlist, syncSources.playlist_entry];
 
 // Rows of one scope sort by `(change_seq, table, id)`. `rowKey` is `<table>:<id>`.
@@ -353,6 +378,8 @@ const mutationResult = (
 const hlcOf = (change: SyncChange) =>
   Match.value(change).pipe(
     Match.discriminatorsExhaustive("kind")({
+      "library_item.set": (set) => set.row.hlc,
+      "rating.set": (set) => set.row.hlc,
       "play_event.append": () => null,
       "playlist.create": (create) => create.row.hlc,
       "playlist_entry.add": (add) => add.row.hlc,
@@ -365,6 +392,9 @@ const hlcOf = (change: SyncChange) =>
 const withHlc = (change: SyncChange, hlc: HybridLogicalClock) =>
   Match.value(change).pipe(
     Match.discriminatorsExhaustive("kind")({
+      "library_item.set": (set) =>
+        new LibraryItemSet({ ...set, row: new LibraryItemRow({ ...set.row, hlc }) }),
+      "rating.set": (set) => new RatingSet({ ...set, row: new RatingRow({ ...set.row, hlc }) }),
       "play_event.append": (append) => append,
       "playlist.create": (create) =>
         new PlaylistCreate({ ...create, row: new PlaylistRow({ ...create.row, hlc }) }),
@@ -377,7 +407,7 @@ const withHlc = (change: SyncChange, hlc: HybridLogicalClock) =>
     }),
   );
 
-// Users edit only their own playlists
+// Users edit only their own playlists and library
 const checkChange = (
   change: SyncChange,
   current: SyncRow | undefined,
@@ -391,6 +421,19 @@ const checkChange = (
 
   return Match.value(change).pipe(
     Match.discriminatorsExhaustive("kind")({
+      // An imported row has one writer, the import. The user can only remove it.
+      "library_item.set": ({ row }) =>
+        Effect.map(libraryItemId(row), (id) =>
+          row.userId === principal.userId &&
+          row.id === id &&
+          (row.origin === "user" || (row.deleted && current !== undefined))
+            ? null
+            : ("forbidden" as const),
+        ),
+      "rating.set": ({ row }) =>
+        Effect.map(ratingId(row), (id) =>
+          row.userId === principal.userId && row.id === id ? null : ("forbidden" as const),
+        ),
       "play_event.append": (append) =>
         Effect.succeed(
           append.row.userId === principal.userId && append.row.deviceId === principal.deviceId
@@ -462,15 +505,20 @@ const admitMutation = (
     };
   });
 
-// A search result enters the catalog when a playlist refers to it, like when it plays
+// A search result enters the catalog when a playlist or the library refers to it, like when it
+// plays
 const addEntrySources = (mutations: ReadonlyArray<SyncMutation>) =>
   Effect.forEach(
     mutations.flatMap((mutation) =>
-      mutation.changes.flatMap((change) =>
-        change.kind === "playlist_entry.add" && change.sourceId !== null
-          ? [{ sourceId: change.sourceId, recordingId: change.row.recordingId }]
-          : [],
-      ),
+      mutation.changes.flatMap((change) => {
+        if (change.kind === "playlist_entry.add" && change.sourceId !== null) {
+          return [{ sourceId: change.sourceId, recordingId: change.row.recordingId }];
+        }
+        if (change.kind === "library_item.set" && change.sourceId !== null) {
+          return [{ sourceId: change.sourceId, recordingId: change.row.entityId }];
+        }
+        return [];
+      }),
     ),
     ({ sourceId, recordingId }) =>
       Effect.gen(function* () {
@@ -485,9 +533,7 @@ const addEntrySources = (mutations: ReadonlyArray<SyncMutation>) =>
         if (Option.isSome(cached) && cached.value.recordingId === recordingId) {
           yield* addProviderSource(cached.value);
         }
-      }).pipe(
-        Effect.catchCause((cause) => Effect.logWarning("Cannot add the source of an entry", cause)),
-      ),
+      }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot add a saved source", cause))),
     { discard: true },
   );
 

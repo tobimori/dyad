@@ -143,10 +143,14 @@ const writeRemotePlaylist = (
       });
   });
 
-const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =>
+/** `songsReadAt`: the time of a read of the library songs, `null` for a read of a playlist */
+const writeSongs = (
+  account: LinkedAccount,
+  songs: ReadonlyArray<LibrarySong>,
+  songsReadAt: number | null,
+) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const seenAt = yield* Clock.currentTimeMillis;
     const provider = account.provider;
     const known = new Map(
       (yield* db
@@ -187,7 +191,6 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
           rawArtist: song.artist,
           rawAlbum: song.album,
           rawDurationMs: song.durationMs,
-          seenAt,
         };
         // Clients get the remote tracks with the group of the recording
         const old = known.get(recordingId);
@@ -204,16 +207,17 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
           changed.push(recordingId);
         }
 
+        const seen = songsReadAt === null ? {} : { seenAt: songsReadAt };
         yield* db
           .insert(libraryRemoteTrack)
-          .values(row)
+          .values({ ...row, seenAt: songsReadAt ?? 0 })
           .onConflictDoUpdate({
             target: [
               libraryRemoteTrack.userId,
               libraryRemoteTrack.provider,
               libraryRemoteTrack.recordingId,
             ],
-            set: row,
+            set: { ...row, ...seen },
           });
         return recordingId;
       }),
@@ -225,6 +229,34 @@ const writeSongs = (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) =
     yield* touchGroups(changed);
 
     return recordingIds;
+  });
+
+// `lastFullReadAt` is the `seen_at` of the songs of the last read
+const songsOfLastRead = (account: LinkedAccount) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const [state] = yield* db
+      .select({ lastFullReadAt: librarySyncState.lastFullReadAt })
+      .from(librarySyncState)
+      .where(
+        and(
+          eq(librarySyncState.userId, account.userId),
+          eq(librarySyncState.provider, account.provider),
+        ),
+      );
+    if (state?.lastFullReadAt == null) return new Set<string>();
+
+    const rows = yield* db
+      .select({ recordingId: libraryRemoteTrack.recordingId })
+      .from(libraryRemoteTrack)
+      .where(
+        and(
+          eq(libraryRemoteTrack.userId, account.userId),
+          eq(libraryRemoteTrack.provider, account.provider),
+          eq(libraryRemoteTrack.seenAt, state.lastFullReadAt),
+        ),
+      );
+    return new Set(rows.map((row) => row.recordingId));
   });
 
 const incompleteReasonOf = (
@@ -254,12 +286,15 @@ const importSongs = (account: LinkedAccount, library: ProviderLibrary, before: L
     const membership = yield* writeIfLinked(
       account,
       Effect.gen(function* () {
-        const recordingIds = yield* writeSongs(account, snapshot.items);
+        // A removed item that the last read had: the user removed it in Dyad, not on the provider
+        const lastRead = yield* songsOfLastRead(account);
+        const recordingIds = yield* writeSongs(account, snapshot.items, now);
         const changes = yield* setMembership(
           account.userId,
           accountOrigin(account.provider),
           new Set(recordingIds),
           complete,
+          lastRead,
         );
 
         yield* writeState(account, { lastFullReadAt: now, incompleteReason });
@@ -321,7 +356,7 @@ const pullPlaylist = (
           .select({ snapshot: libraryRemotePlaylist.snapshot })
           .from(libraryRemotePlaylist)
           .where(remotePlaylistOf(account, remoteId));
-        const recordingIds = yield* writeSongs(account, songs.items);
+        const recordingIds = yield* writeSongs(account, songs.items, null);
         const changed = yield* mergeRemoteEntries(
           playlistId,
           current?.snapshot ?? null,

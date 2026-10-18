@@ -10,7 +10,7 @@ import {
 } from "./primitives.ts";
 
 /** A client and a server sync only when they have the same version */
-export const syncProtocolVersion = 5;
+export const syncProtocolVersion = 6;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -29,13 +29,26 @@ export const SyncScope = Schema.String.check(
 ).pipe(Schema.brand("SyncScope"));
 export type SyncScope = typeof SyncScope.Type;
 
+/** What a user can add to the library: a song, an album (provider release) or an artist */
+export const LibraryEntityType = Schema.Literals(["recording", "release", "artist"]);
+export type LibraryEntityType = typeof LibraryEntityType.Type;
+
+/** `user` for a save in Dyad, `account:<provider>` for an import from a linked account */
+export const LibraryOrigin = Schema.String.check(
+  Schema.isPattern(/^(user|account:.+)$/),
+  Schema.isMaxLength(200),
+);
+
+/** One library membership. Each write sets all fields. */
 export class LibraryItemRow extends Schema.Class<LibraryItemRow>("LibraryItemRow")({
   table: Schema.Literal("library_item"),
+  /** UUIDv5 of `library_item:<user_id>:<entity_type>:<entity_id>:<origin>` */
   id: Uuid,
   userId: UserId,
-  entityType: Schema.Literal("recording"),
-  entityId: RecordingId,
-  origin: Schema.String,
+  entityType: LibraryEntityType,
+  /** The bound recording, the provider release or the catalog artist that the user saved */
+  entityId: Uuid,
+  origin: LibraryOrigin,
   addedAt: Schema.Int,
   hlc: HybridLogicalClock,
   deleted: Schema.Boolean,
@@ -127,6 +140,19 @@ export class SourcePreferenceRow extends Schema.Class<SourcePreferenceRow>("Sour
   hlc: HybridLogicalClock,
 }) {}
 
+/** The user loves the entity. One row per user and entity; each write sets all fields. */
+export class RatingRow extends Schema.Class<RatingRow>("RatingRow")({
+  table: Schema.Literal("rating"),
+  /** UUIDv5 of `rating:<user_id>:<entity_type>:<entity_id>` */
+  id: Uuid,
+  userId: UserId,
+  entityType: LibraryEntityType,
+  /** As in `LibraryItemRow` */
+  entityId: Uuid,
+  favorite: Schema.Boolean,
+  hlc: HybridLogicalClock,
+}) {}
+
 /** One row of a synced table, without the server's `change_seq` */
 export const SyncRow = Schema.Union([
   LibraryItemRow,
@@ -134,6 +160,7 @@ export const SyncRow = Schema.Union([
   PlaylistEntryRow,
   PlayEventRow,
   SourcePreferenceRow,
+  RatingRow,
 ]);
 export type SyncRow = typeof SyncRow.Type;
 
@@ -143,6 +170,7 @@ export const SyncTable = Schema.Literals([
   "playlist_entry",
   "play_event",
   "source_preference",
+  "rating",
 ]);
 export type SyncTable = typeof SyncTable.Type;
 
@@ -404,7 +432,30 @@ export class SourcePreferenceSet extends Schema.Class<SourcePreferenceSet>("Sour
   row: SourcePreferenceRow,
 }) {}
 
+/**
+ * Writes one library row of the user: a save with origin `user`, or a removal of a row of any
+ * origin. A removal of an imported row asks the server to remove it on the provider too.
+ */
+export class LibraryItemSet extends Schema.Class<LibraryItemSet>("LibraryItemSet")({
+  kind: Schema.Literal("library_item.set"),
+  schemaVersion: Schema.Literal(1),
+  row: LibraryItemRow,
+  /** The source of a saved song. The server adds a search result to the catalog. */
+  sourceId: Schema.NullOr(Uuid),
+  /** The provider ref of a saved album or artist, so that the server can add it to the catalog */
+  ref: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
+}) {}
+
+/** Replaces the user's rating of an entity */
+export class RatingSet extends Schema.Class<RatingSet>("RatingSet")({
+  kind: Schema.Literal("rating.set"),
+  schemaVersion: Schema.Literal(1),
+  row: RatingRow,
+}) {}
+
 export const SyncChange = Schema.Union([
+  LibraryItemSet,
+  RatingSet,
   PlayEventAppend,
   PlaylistCreate,
   PlaylistPatch,

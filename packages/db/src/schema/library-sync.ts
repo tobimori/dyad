@@ -38,6 +38,7 @@ export const libraryRemoteTrack = sqliteTable(
     rawArtist: text("raw_artist"),
     rawAlbum: text("raw_album"),
     rawDurationMs: integer("raw_duration_ms"),
+    // The time of the last read of the library songs that had it. 0: only playlist reads had it.
     seenAt: integer("seen_at").notNull(),
   },
   (table) => [primaryKey({ columns: [table.userId, table.provider, table.recordingId] })],

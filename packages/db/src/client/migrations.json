@@ -111,5 +111,17 @@
       "\nCREATE INDEX `artist_merged_into_idx` ON `artist` (`merged_into_id`);",
       "\nCREATE INDEX `artist_credit_name_artist_idx` ON `artist_credit_name` (`artist_id`);"
     ]
+  },
+  {
+    "name": "20261018211830_add_rating",
+    "folderMillis": 1792358310000,
+    "hash": "27931ed70e52456036311dcb422e7ea57d2665d698610271b33584a890799bf8",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `rating` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`favorite` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE INDEX `rating_user_idx` ON `rating` (`user_id`,`favorite`);",
+      "\nCREATE INDEX `rating_change_idx` ON `rating` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `rating_seq_idx` ON `rating` (`change_seq`);"
+    ]
   }
 ]

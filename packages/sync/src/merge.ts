@@ -70,9 +70,13 @@ export const mergeRow = (current: SyncRow | undefined, incoming: SyncRow) =>
             current.table === "play_event" && row.scrobbled && !current.scrobbled
               ? Option.some<SyncRow>(new PlayEventRow({ ...current, scrobbled: true }))
               : Option.none<SyncRow>(),
-          // Only the import writes library items, and it writes all fields
+          // Each write of a library item or a rating sets all fields
           library_item: (row) =>
             current.table === "library_item" && row.hlc > current.hlc
+              ? Option.some<SyncRow>(row)
+              : Option.none<SyncRow>(),
+          rating: (row) =>
+            current.table === "rating" && row.hlc > current.hlc
               ? Option.some<SyncRow>(row)
               : Option.none<SyncRow>(),
           playlist: (row) =>
@@ -140,6 +144,8 @@ export const patchRow = (
 export const changeTarget = (change: SyncChange) =>
   Match.value(change).pipe(
     Match.discriminatorsExhaustive("kind")({
+      "library_item.set": (set) => ({ table: set.row.table, id: set.row.id }),
+      "rating.set": (set) => ({ table: set.row.table, id: set.row.id }),
       "play_event.append": (append) => ({ table: append.row.table, id: append.row.id }),
       "playlist.create": (create) => ({ table: create.row.table, id: create.row.id }),
       "playlist_entry.add": (add) => ({ table: add.row.table, id: add.row.id }),
@@ -153,6 +159,8 @@ export const changeTarget = (change: SyncChange) =>
 export const applyChange = (current: SyncRow | undefined, change: SyncChange) =>
   Match.value(change).pipe(
     Match.discriminatorsExhaustive("kind")({
+      "library_item.set": (set) => mergeRow(current, set.row),
+      "rating.set": (set) => mergeRow(current, set.row),
       "play_event.append": (append) => mergeRow(current, append.row),
       "playlist.create": (create) => mergeRow(current, create.row),
       "playlist_entry.add": (add) => mergeRow(current, add.row),

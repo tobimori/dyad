@@ -14,6 +14,7 @@ export {
   playEvent,
   playlist,
   playlistEntry,
+  rating,
   recording,
   source,
   sourceKey,

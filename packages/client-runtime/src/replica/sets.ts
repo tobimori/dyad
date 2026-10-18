@@ -1,7 +1,7 @@
 import { libraryItem, playEvent, recording, source, sourceSegment } from "@dyad/db/client";
 import { HeardInSet, RecordingId } from "@dyad/domain";
 import type { SourceSummary } from "@dyad/domain";
-import { asc, eq, inArray, max, or } from "drizzle-orm";
+import { and, asc, eq, inArray, max, or } from "drizzle-orm";
 import { Data, Effect } from "effect";
 
 import { ClientDatabase } from "./database.ts";
@@ -36,7 +36,7 @@ export const localSets = Effect.gen(function* () {
   const saved = yield* db
     .select({ recordingId: libraryItem.entityId })
     .from(libraryItem)
-    .where(eq(libraryItem.deleted, false));
+    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
   const bound = yield* db
     .select({ id: source.id, recordingId: source.recordingId })
     .from(source)

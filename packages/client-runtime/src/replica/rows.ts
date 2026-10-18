@@ -6,6 +6,7 @@ import {
   playEvent,
   playlist,
   playlistEntry,
+  rating,
   recording,
   source,
   sourceKey,
@@ -63,6 +64,12 @@ const syncedTables = {
     rows: sourcePreference,
     id: sourcePreference.id,
     scopeColumn: sourcePreference.userId,
+  }),
+  rating: new SyncedTable({
+    name: "rating",
+    rows: rating,
+    id: rating.id,
+    scopeColumn: rating.userId,
   }),
 } satisfies Record<SyncTable, SyncedTable>;
 
@@ -165,7 +172,12 @@ export const deleteScope = (scope: SyncScope) =>
     const [kind, id] = scope.split(":");
     const tables =
       kind === "user"
-        ? [syncedTables.library_item, syncedTables.play_event, syncedTables.source_preference]
+        ? [
+            syncedTables.library_item,
+            syncedTables.play_event,
+            syncedTables.rating,
+            syncedTables.source_preference,
+          ]
         : [syncedTables.playlist, syncedTables.playlist_entry];
     for (const table of tables) {
       yield* db.delete(table.rows).where(eq(table.scopeColumn, id ?? ""));
