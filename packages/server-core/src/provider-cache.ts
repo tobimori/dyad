@@ -1,5 +1,6 @@
-import { playbackSession, providerItem, source } from "@dyad/db";
+import { playbackSession, providerItem, providerPage, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
+import { SourceSummary } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
 import { and, eq, lt, notInArray, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
@@ -7,6 +8,7 @@ import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
 import { sourceId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
+import { providerAlbumRef, providerArtistRef } from "./refs.ts";
 
 // Results of played sources do not expire, because `source` has no artwork and no ISRC. The TTL
 // only limits the size of the cache.
@@ -24,19 +26,41 @@ export class CachedSource extends Data.Class<{
   readonly source: ProviderSource;
 }> {}
 
+/** The artist ref follows the same rule as `playableSources` */
+export const cachedSummary = (item: CachedSource, providerName: string) => {
+  const artist = item.source.artists[0] ?? item.source.uploader;
+  const albumId = item.source.albumId;
+
+  return new SourceSummary({
+    id: item.sourceId,
+    provider: item.provider,
+    title: item.source.title,
+    artist: item.source.artist,
+    album: item.source.album,
+    durationMs: item.source.durationMs,
+    codec: item.source.codec,
+    artworkUrl: item.source.artworkUrl,
+    artistRef: artist === null ? null : providerArtistRef(item.provider, artist.id),
+    albumRef: albumId === null ? null : providerAlbumRef(item.provider, albumId),
+    explicit: item.source.explicit ?? false,
+    providerName,
+  });
+};
+
+export const toCachedSource = (provider: string, source: ProviderSource) =>
+  Effect.gen(function* () {
+    const id = yield* sourceId(provider, source.externalId);
+    const isrc = source.isrc === null ? null : normalizeIsrc(source.isrc);
+    return new CachedSource({ sourceId: id, provider, isrc, source });
+  });
+
 /** Replaces the cached results of `provider` with the same external IDs */
 export const cacheProviderSources = (provider: string, sources: ReadonlyArray<ProviderSource>) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const fetchedAt = yield* Clock.currentTimeMillis;
 
-    const cached = yield* Effect.forEach(sources, (source) =>
-      Effect.gen(function* () {
-        const id = yield* sourceId(provider, source.externalId);
-        const isrc = source.isrc === null ? null : normalizeIsrc(source.isrc);
-        return new CachedSource({ sourceId: id, provider, isrc, source });
-      }),
-    );
+    const cached = yield* Effect.forEach(sources, (source) => toCachedSource(provider, source));
     const rows = yield* Effect.forEach(cached, (item) =>
       Effect.gen(function* () {
         const data = yield* Schema.encodeEffect(ProviderSource)(item.source).pipe(Effect.orDie);
@@ -83,7 +107,7 @@ export const cachedProviderSource = (id: string) =>
     );
   });
 
-/** Deletes expired search results when the server starts and then every 6 hours */
+/** Deletes expired search results and pages when the server starts and then every 6 hours */
 export const providerCacheSweepLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const db = yield* Database;
@@ -92,6 +116,7 @@ export const providerCacheSweepLayer = Layer.effectDiscard(
     yield* jobs.register(sweepJob, Schema.Struct({}), () =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
+        yield* db.delete(providerPage).where(lt(providerPage.fetchedAt, now - cacheLifetimeMs));
         yield* db.delete(providerItem).where(
           and(
             lt(providerItem.fetchedAt, now - cacheLifetimeMs),

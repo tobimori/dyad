@@ -1,3 +1,4 @@
+import { PartialDate, ReleaseType, SecondaryType } from "@dyad/domain";
 import type { AccountLinkFailed, AudioFormat, BrowserLogin } from "@dyad/domain";
 import { Data, Effect, Schema } from "effect";
 import type { FileSystem, Path, Redacted, Scope, Stream } from "effect";
@@ -47,6 +48,55 @@ export class ProviderSource extends Schema.Class<ProviderSource>("ProviderSource
    * when the uploader typed no other artist.
    */
   uploader: Schema.NullOr(CreditedArtist).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** The `externalId` of the provider's release, for `Provider.album` */
+  albumId: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+}) {}
+
+/** One release on a provider page. The core caches pages on its replica, so they are schemas. */
+export class ProviderRelease extends Schema.Class<ProviderRelease>("ProviderRelease")({
+  externalId: Schema.String,
+  title: Schema.String,
+  artist: Schema.NullOr(Schema.String),
+  /** The `externalId` for `Provider.artist` */
+  artistId: Schema.NullOr(Schema.String),
+  releaseDate: Schema.NullOr(PartialDate),
+  /** `null` when the provider does not classify it, which is not the same as an album */
+  primaryType: Schema.NullOr(ReleaseType),
+  secondaryTypes: Schema.Array(SecondaryType),
+  explicit: Schema.Boolean,
+  trackCount: Schema.NullOr(Schema.Int),
+  artworkUrl: Schema.NullOr(Schema.String),
+}) {}
+
+export class ProviderTrack extends Schema.Class<ProviderTrack>("ProviderTrack")({
+  disc: Schema.NullOr(Schema.Int),
+  number: Schema.NullOr(Schema.Int),
+  source: ProviderSource,
+  /** `false` when the provider does not stream it, for example outside the storefront */
+  streamable: Schema.Boolean,
+}) {}
+
+export class ProviderAlbum extends Schema.Class<ProviderAlbum>("ProviderAlbum")({
+  release: ProviderRelease,
+  tracks: Schema.Array(ProviderTrack),
+}) {}
+
+export class ProviderArtistCard extends Schema.Class<ProviderArtistCard>("ProviderArtistCard")({
+  externalId: Schema.String,
+  name: Schema.String,
+  artworkUrl: Schema.NullOr(Schema.String),
+}) {}
+
+/** A provider gives empty lists for what it does not have */
+export class ProviderArtist extends Schema.Class<ProviderArtist>("ProviderArtist")({
+  artist: ProviderArtistCard,
+  topTracks: Schema.Array(ProviderTrack),
+  /** For example the latest uploads */
+  tracks: Schema.Array(ProviderTrack),
+  /** The artist's own releases. The core puts them into sections by type. */
+  releases: Schema.Array(ProviderRelease),
+  appearsOn: Schema.Array(ProviderRelease),
+  similar: Schema.Array(ProviderArtistCard),
 }) {}
 
 /** The core logs `reason`, so it must not contain tokens, signed URLs or keys */
@@ -164,6 +214,19 @@ export class Provider extends Data.Class<{
     query: string,
     credentials: Credentials,
   ) => Effect.Effect<ReadonlyArray<ProviderSource>, ProviderError>;
+  /**
+   * The page of `ProviderSource.artists[0]` or of its `uploader`. The core caches pages on its
+   * replica for a day and stops waiting after 20 seconds.
+   */
+  readonly artist?: (
+    externalId: string,
+    credentials: Credentials,
+  ) => Effect.Effect<ProviderArtist, ProviderError>;
+  /** The page of `ProviderSource.albumId`, cached like `artist` */
+  readonly album?: (
+    externalId: string,
+    credentials: Credentials,
+  ) => Effect.Effect<ProviderAlbum, ProviderError>;
   /** Users must link an account before they can search or play the provider */
   readonly account?: {
     readonly login: BrowserLogin;

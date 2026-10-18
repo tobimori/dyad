@@ -8,7 +8,7 @@ import { readSegments, segmentBytes } from "./hls.ts";
 export const provider = "soundcloud";
 
 const webUrl = "https://soundcloud.com";
-const api = "https://api-v2.soundcloud.com";
+export const api = "https://api-v2.soundcloud.com";
 
 class Transcoding extends Schema.Class<Transcoding>("Transcoding")({
   // Answers with the signed playlist URL
@@ -18,7 +18,7 @@ class Transcoding extends Schema.Class<Transcoding>("Transcoding")({
   format: Schema.Struct({ protocol: Schema.String }),
 }) {}
 
-class Track extends Schema.Class<Track>("Track")({
+export class Track extends Schema.Class<Track>("Track")({
   id: Schema.Int,
   title: Schema.String,
   duration: Schema.Int,
@@ -76,7 +76,7 @@ export const clientIdCache = makeScrapedToken(scrapeClientId, {
   rejectedStatuses: [401, 403],
 });
 
-const requestApi = <S extends Schema.Constraint>(
+export const requestApi = <S extends Schema.Constraint>(
   withClientId: Effect.Success<typeof clientIdCache>,
   request: HttpClientRequest.HttpClientRequest,
   schema: S,
@@ -96,7 +96,7 @@ const requestApi = <S extends Schema.Constraint>(
 
 // SoundCloud (October 2026) gives MP3 only for Go+ snippets. A full stream without an account is
 // HLS of fragmented MP4 AAC. `cbc-encrypted-hls` and `ctr-encrypted-hls` need DRM and are skipped.
-const fullStream = (track: Track) => {
+export const fullStream = (track: Track) => {
   if (track.policy === "SNIP" || track.policy === "BLOCK") return undefined;
 
   const transcodings = track.media.transcodings.filter(
@@ -109,6 +109,28 @@ const fullStream = (track: Track) => {
   );
 };
 
+export const trackSource = (track: Track) =>
+  new ProviderSource({
+    externalId: String(track.id),
+    title: track.title,
+    artist: track.publisher_metadata?.artist ?? track.user.username,
+    album: null,
+    durationMs: track.duration,
+    isrc: track.publisher_metadata?.isrc ?? null,
+    container: "mov",
+    codec: "aac",
+    lossless: false,
+    encrypted: false,
+    // The API gives the 100 pixel `-large` variant; `-t500x500` is the same image larger
+    artworkUrl: track.artwork_url?.replace("-large.", "-t500x500.") ?? null,
+    artists: [],
+    explicit: track.publisher_metadata?.explicit ?? null,
+    bitrate: fullStream(track)?.preset === "aac_160k" ? 160_000 : 96_000,
+    uploader: new CreditedArtist({ id: String(track.user.id), name: track.user.username }),
+    // Sets do not show in the data of their tracks
+    albumId: null,
+  });
+
 /** Tracks that play in full without an account, in SoundCloud's order of relevance */
 export const searchTracks = (withClientId: Effect.Success<typeof clientIdCache>, query: string) =>
   Effect.gen(function* () {
@@ -117,29 +139,7 @@ export const searchTracks = (withClientId: Effect.Success<typeof clientIdCache>,
     );
     const response = yield* requestApi(withClientId, request, SearchResults);
 
-    return response.collection
-      .filter((track) => fullStream(track) !== undefined)
-      .map(
-        (track) =>
-          new ProviderSource({
-            externalId: String(track.id),
-            title: track.title,
-            artist: track.publisher_metadata?.artist ?? track.user.username,
-            album: null,
-            durationMs: track.duration,
-            isrc: track.publisher_metadata?.isrc ?? null,
-            container: "mov",
-            codec: "aac",
-            lossless: false,
-            encrypted: false,
-            // The API gives the 100 pixel `-large` variant; `-t500x500` is the same image larger
-            artworkUrl: track.artwork_url?.replace("-large.", "-t500x500.") ?? null,
-            artists: [],
-            explicit: track.publisher_metadata?.explicit ?? null,
-            bitrate: fullStream(track)?.preset === "aac_160k" ? 160_000 : 96_000,
-            uploader: new CreditedArtist({ id: String(track.user.id), name: track.user.username }),
-          }),
-      );
+    return response.collection.filter((track) => fullStream(track) !== undefined).map(trackSource);
   });
 
 /** Streams the HLS AAC transcoding of a track as one fragmented MP4 file */

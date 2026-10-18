@@ -26,6 +26,7 @@ import {
 import type { AppleSession } from "./api.ts";
 import { readSegments, segmentBytes } from "./hls.ts";
 import { probeLibrary, readLibrarySongs, readPlaylists, readPlaylistTracks } from "./library.ts";
+import { readAlbum, readArtist } from "./pages.ts";
 import { acquireAppleKeys } from "./widevine.ts";
 
 // The web player sets this cookie after the subscriber signs in
@@ -173,6 +174,20 @@ export const appleMusicPlugin = new Plugin({
           );
         }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
 
+      // Pages come from the catalog of the user's storefront, like search results
+      const catalogPage =
+        <A>(
+          read: (
+            session: AppleSession,
+            id: string,
+          ) => Effect.Effect<A, AppleError | HttpStatusError, HttpClient.HttpClient>,
+        ) =>
+        (id: string, credentials: Credentials) =>
+          Effect.gen(function* () {
+            const token = yield* mediaUserToken(credentials);
+            return yield* withSession(token, (session) => read(session, id));
+          }).pipe(Effect.mapError(toProviderError), Effect.provide(services));
+
       // Apple throttles fast library reads. Search and playback do not wait for this queue.
       const libraryPace = yield* makePacer(1000);
 
@@ -213,6 +228,8 @@ export const appleMusicPlugin = new Plugin({
           resolve,
           keys,
           search,
+          artist: catalogPage(readArtist),
+          album: catalogPage(readAlbum),
           account: { login, link },
           library,
           metadataPriority: 30,

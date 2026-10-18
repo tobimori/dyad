@@ -24,7 +24,7 @@ export const albums = new Section({
     const empty = AsyncResult.match(result, {
       onInitial: () => "Loading the albums",
       onFailure: () => "Cannot load the albums. Press r to try again.",
-      onSuccess: () => "No albums. The library has no files with album tags.",
+      onSuccess: () => "No albums in your library yet.",
     });
 
     return new SectionView({

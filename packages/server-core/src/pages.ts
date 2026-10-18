@@ -1,10 +1,13 @@
-import { localFile } from "@dyad/db";
+import { libraryItem, localFile, providerItem, providerPage, source } from "@dyad/db";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AlbumCard,
   AlbumPage,
   AlbumSection,
   ArtistCard,
   ArtistPage,
+  ArtistRef,
+  ArtistSection,
   CurrentPrincipal,
   PageNotFound,
   PageState,
@@ -14,13 +17,30 @@ import {
   SourceSummary,
   TrackSection,
 } from "@dyad/domain";
-import type { AlbumRef, ArtistRef } from "@dyad/domain";
+import type { AlbumRef, UserId } from "@dyad/domain";
+import { ProviderAlbum, ProviderArtist, ProviderSource } from "@dyad/plugin";
+import type {
+  Credentials,
+  Provider,
+  ProviderError,
+  ProviderRelease,
+  ProviderTrack,
+} from "@dyad/plugin";
 import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { Data, Effect, Option, Schema } from "effect";
+import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
 import { albumArtistOf } from "./library.ts";
-import { libraryAlbumKeys, libraryArtistKey, libraryArtistRef } from "./refs.ts";
+import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
+import { Providers, usableProviders } from "./providers.ts";
+import {
+  libraryAlbumKeys,
+  libraryArtistKey,
+  libraryArtistRef,
+  providerAlbumRef,
+  providerArtistRef,
+  providerRefParts,
+} from "./refs.ts";
 import { Tags, playableSources, position, sourceSummary } from "./sources.ts";
 
 // Library pages come from the tags of the files on this replica. Binding will replace them with
@@ -52,16 +72,16 @@ const libraryFiles = (match: SQL | undefined) =>
     );
   });
 
-// Files without a key are left out
-const groupFiles = <K>(files: ReadonlyArray<LibraryFile>, key: (file: LibraryFile) => K | null) => {
-  const groups = new Map<K, Array<LibraryFile>>();
-  for (const file of files) {
-    const fileKey = key(file);
-    if (fileKey === null) continue;
+// Items without a key are left out
+const groupBy = <T, K>(items: ReadonlyArray<T>, key: (item: T) => K | null) => {
+  const groups = new Map<K, Array<T>>();
+  for (const item of items) {
+    const itemKey = key(item);
+    if (itemKey === null) continue;
 
-    const group = groups.get(fileKey) ?? [];
-    group.push(file);
-    groups.set(fileKey, group);
+    const group = groups.get(itemKey) ?? [];
+    group.push(item);
+    groups.set(itemKey, group);
   }
   return groups;
 };
@@ -116,9 +136,7 @@ const albumCard = (ref: AlbumRef, files: ReadonlyArray<LibraryFile>) => {
 };
 
 const albumCards = (files: ReadonlyArray<LibraryFile>) =>
-  [...groupFiles(files, (file) => file.summary.albumRef)].map(([ref, group]) =>
-    albumCard(ref, group),
-  );
+  [...groupBy(files, (file) => file.summary.albumRef)].map(([ref, group]) => albumCard(ref, group));
 
 const sectionKind = (album: AlbumCard) => {
   if (album.secondaryTypes.includes("compilation")) return "compilations";
@@ -158,38 +176,116 @@ const pageTracks = (files: ReadonlyArray<LibraryFile>) =>
         (a.source.title ?? "").localeCompare(b.source.title ?? ""),
     );
 
-/** The album artists of the files on this replica, by name */
-export const listLibraryArtists = Effect.gen(function* () {
-  const files = yield* libraryFiles(isNotNull(localFile.albumArtistKey));
+class LibrarySource extends Data.Class<{
+  readonly summary: SourceSummary;
+  readonly source: ProviderSource;
+}> {}
 
-  return [...groupFiles(files, (file) => file.albumArtistKey)]
-    .map(
-      ([key, group]) =>
-        new ArtistCard({
-          ref: libraryArtistRef(key),
-          name: mostCommon(group.map((file) => albumArtistOf(file.tags))) ?? key,
-          artworkUrl: null,
-        }),
-    )
-    .toSorted((a, b) => a.name.localeCompare(b.name));
+// The provider sources that the user saved in a provider library. Each source of a saved item binds
+// to the item's recording, so other sources of a merged recording are not part of it.
+const librarySources = (userId: UserId) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const providers = yield* usableProviders(userId);
+
+    const rows = yield* db
+      .select({
+        sourceId: providerItem.sourceId,
+        provider: providerItem.provider,
+        data: providerItem.data,
+      })
+      .from(libraryItem)
+      .innerJoin(source, eq(source.recordingId, libraryItem.entityId))
+      .innerJoin(providerItem, eq(providerItem.sourceId, source.id))
+      .where(
+        and(
+          eq(libraryItem.userId, userId),
+          eq(libraryItem.deleted, false),
+          inArray(providerItem.provider, [...providers.keys()]),
+        ),
+      )
+      .groupBy(source.id);
+
+    return yield* Effect.forEach(rows, (row) =>
+      Effect.gen(function* () {
+        const decoded = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(
+          Effect.orDie,
+        );
+        const item = yield* toCachedSource(row.provider, decoded);
+        const name = providers.get(row.provider)?.provider.name ?? row.provider;
+        return new LibrarySource({ summary: cachedSummary(item, name), source: decoded });
+      }),
+    );
+  });
+
+const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
+  [...groupBy(sources, (item) => item.summary.artistRef)].map(
+    ([ref, group]) =>
+      new ArtistCard({
+        ref,
+        name:
+          mostCommon(group.map((item) => (item.source.artists[0] ?? item.source.uploader)?.name)) ??
+          "",
+        artworkUrl: null,
+      }),
+  );
+
+// The card counts the saved tracks, because the provider's album is not known without a fetch
+const libraryAlbumCards = (sources: ReadonlyArray<LibrarySource>) =>
+  [...groupBy(sources, (item) => item.summary.albumRef)].map(([ref, group]) => {
+    const artistRef = mostCommon(group.map((item) => item.summary.artistRef ?? undefined));
+    return new AlbumCard({
+      ref,
+      // A release without an album name is a single, for example on Bandcamp
+      title:
+        mostCommon(group.map((item) => item.summary.album ?? undefined)) ??
+        mostCommon(group.map((item) => item.summary.title ?? undefined)) ??
+        "",
+      artist: mostCommon(group.map((item) => item.summary.artist ?? undefined)),
+      artistRef: artistRef === null ? null : ArtistRef.make(artistRef),
+      releaseDate: null,
+      primaryType: null,
+      secondaryTypes: [],
+      explicit: group.some((item) => item.summary.explicit),
+      trackCount: group.length,
+      artworkUrl:
+        group.find((item) => item.summary.artworkUrl !== null)?.summary.artworkUrl ?? null,
+    });
+  });
+
+/** The album artists of the files on this replica and the artists of the provider library */
+export const listLibraryArtists = Effect.gen(function* () {
+  const principal = yield* CurrentPrincipal;
+  const files = yield* libraryFiles(isNotNull(localFile.albumArtistKey));
+  const saved = yield* librarySources(principal.userId);
+
+  const local = [...groupBy(files, (file) => file.albumArtistKey)].map(
+    ([key, group]) =>
+      new ArtistCard({
+        ref: libraryArtistRef(key),
+        name: mostCommon(group.map((file) => albumArtistOf(file.tags))) ?? key,
+        artworkUrl: null,
+      }),
+  );
+  return [...local, ...libraryArtistCards(saved)].toSorted((a, b) => a.name.localeCompare(b.name));
 });
 
-/** The albums of the files on this replica, by artist and title */
+/** The albums of the files on this replica and of the provider library, by artist and title */
 export const listLibraryAlbums = Effect.gen(function* () {
+  const principal = yield* CurrentPrincipal;
   const files = yield* libraryFiles(
     and(isNotNull(localFile.albumArtistKey), isNotNull(localFile.albumKey)),
   );
+  const saved = yield* librarySources(principal.userId);
 
-  return albumCards(files).toSorted(
+  return [...albumCards(files), ...libraryAlbumCards(saved)].toSorted(
     (a, b) => (a.artist ?? "").localeCompare(b.artist ?? "") || a.title.localeCompare(b.title),
   );
 });
 
-/**
- * The albums of the album artist, the albums where the artist has tracks, and the artist's tracks
- * without an album
- */
-export const artistPage = (ref: ArtistRef) =>
+// The albums of the album artist, the albums where the artist has tracks, and the artist's tracks
+// without an album
+const localArtistPage = (ref: ArtistRef) =>
   Effect.gen(function* () {
     const key = libraryArtistKey(ref);
     if (Option.isNone(key)) return yield* new PageNotFound();
@@ -244,8 +340,8 @@ export const artistPage = (ref: ArtistRef) =>
     });
   });
 
-/** The tracks of the album in disc and track order */
-export const albumPage = (ref: AlbumRef) =>
+// The tracks of the album in disc and track order
+const localAlbumPage = (ref: AlbumRef) =>
   Effect.gen(function* () {
     const keys = libraryAlbumKeys(ref);
     if (Option.isNone(keys)) return yield* new PageNotFound();
@@ -264,4 +360,280 @@ export const albumPage = (ref: AlbumRef) =>
       tracks: pageTracks(files),
       state: localState,
     });
+  });
+
+// Like search results, a track of a page enters the shared catalog only when it is played
+const pageLifetimeMs = 24 * 60 * 60 * 1000;
+
+// Apple pages need a request for each view with more than 10 releases
+const fetchTimeout = "20 seconds";
+
+const providerTracks = (
+  provider: string,
+  providerName: string,
+  tracks: ReadonlyArray<ProviderTrack>,
+) =>
+  Effect.forEach(tracks, (track) =>
+    toCachedSource(provider, track.source).pipe(
+      Effect.map(
+        (item) =>
+          new PageTrack({
+            source: cachedSummary(item, providerName),
+            disc: track.disc,
+            number: track.number,
+            playable: track.streamable,
+          }),
+      ),
+    ),
+  );
+
+const releaseCard = (provider: string, release: ProviderRelease) =>
+  new AlbumCard({
+    ref: providerAlbumRef(provider, release.externalId),
+    title: release.title,
+    artist: release.artist,
+    artistRef: release.artistId === null ? null : providerArtistRef(provider, release.artistId),
+    releaseDate: release.releaseDate,
+    primaryType: release.primaryType,
+    secondaryTypes: release.secondaryTypes,
+    explicit: release.explicit,
+    trackCount: release.trackCount,
+    artworkUrl: release.artworkUrl,
+  });
+
+class PageInput<A> extends Data.Class<{
+  readonly provider: string;
+  readonly providerName: string;
+  // `null` before the first fetch
+  readonly data: A | null;
+  readonly library: ReadonlyArray<LibrarySource>;
+  readonly state: PageState;
+}> {}
+
+// The cached page at once, then the fetched page when the cache is older than a day
+const providerPageStream = <A, E, Page, R>(
+  kind: "artist" | "album",
+  parts: { readonly provider: string; readonly externalId: string },
+  schema: Schema.Codec<A, E>,
+  options: {
+    readonly fetch: (
+      plugin: Provider,
+    ) =>
+      | ((externalId: string, credentials: Credentials) => Effect.Effect<A, ProviderError>)
+      | undefined;
+    readonly tracks: (data: A) => ReadonlyArray<ProviderTrack>;
+    readonly build: (page: PageInput<A>) => Effect.Effect<Page, never, R>;
+  },
+) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const db = yield* Database;
+      const principal = yield* CurrentPrincipal;
+      const plugins = yield* Providers;
+      const { provider, externalId } = parts;
+      const plugin = plugins.get(provider);
+      const providerName = plugin?.name ?? provider;
+      const library = yield* librarySources(principal.userId);
+
+      const emit = (data: A | null, state: PageState) =>
+        options.build(new PageInput({ provider, providerName, data, library, state }));
+      const failed = (reason: string) =>
+        Stream.fromEffect(emit(null, new PageState({ status: "failed", fetchedAt: null, reason })));
+
+      if (plugin === undefined) return failed("No plugin gives this page");
+      // Cached pages too, because the tracks of a page play only with the user's credentials
+      const usable = (yield* usableProviders(principal.userId)).get(provider);
+      if (usable === undefined) {
+        return failed(`Link your ${providerName} account to see this page`);
+      }
+      const fetch = options.fetch(plugin);
+      if (fetch === undefined) return failed(`${providerName} has no ${kind} pages`);
+
+      const [row] = yield* db
+        .select({ data: providerPage.data, fetchedAt: providerPage.fetchedAt })
+        .from(providerPage)
+        .where(
+          and(
+            eq(providerPage.provider, provider),
+            eq(providerPage.kind, kind),
+            eq(providerPage.externalId, externalId),
+          ),
+        );
+      // A row that an older plugin version wrote can fail to decode. Then the page is fetched again.
+      const cached =
+        row === undefined ? Option.none() : Schema.decodeUnknownOption(schema)(row.data);
+      const cachedData = Option.getOrNull(cached);
+      const cachedAt = Option.isSome(cached) && row !== undefined ? row.fetchedAt : null;
+
+      const now = yield* Clock.currentTimeMillis;
+      if (cachedAt !== null && now - cachedAt < pageLifetimeMs) {
+        return Stream.fromEffect(
+          emit(cachedData, new PageState({ status: "fresh", fetchedAt: cachedAt, reason: null })),
+        );
+      }
+
+      const unreachable = emit(
+        cachedData,
+        new PageState({
+          status: "failed",
+          fetchedAt: cachedAt,
+          reason: `Cannot reach ${providerName}`,
+        }),
+      );
+      const refresh = Effect.gen(function* () {
+        // Before the tracks, so that every track of the page is at least as new as the page
+        const fetchedAt = yield* Clock.currentTimeMillis;
+        const data = yield* fetch(externalId, usable.credentials).pipe(
+          Effect.timeout(fetchTimeout),
+        );
+        yield* cacheProviderSources(
+          provider,
+          options.tracks(data).map((track) => track.source),
+        );
+        const values = {
+          provider,
+          kind,
+          externalId,
+          data: yield* Schema.encodeEffect(schema)(data).pipe(Effect.orDie),
+          fetchedAt,
+        };
+        yield* db
+          .insert(providerPage)
+          .values(values)
+          .onConflictDoUpdate({
+            target: [providerPage.provider, providerPage.kind, providerPage.externalId],
+            set: values,
+          });
+        return yield* emit(data, new PageState({ status: "fresh", fetchedAt, reason: null }));
+      }).pipe(
+        Effect.catchTags({
+          ProviderError: (error) =>
+            Effect.logWarning("Provider page failed", error.reason).pipe(
+              Effect.andThen(unreachable),
+            ),
+          TimeoutError: () =>
+            Effect.logWarning("Provider page timed out").pipe(Effect.andThen(unreachable)),
+        }),
+        Effect.catchDefect((defect) =>
+          Effect.logError("Provider page crashed", defect).pipe(Effect.andThen(unreachable)),
+        ),
+        Effect.annotateLogs("provider", provider),
+        orDieOnDatabaseError(`${kind}Page`),
+      );
+
+      return Stream.concat(
+        Stream.fromEffect(
+          emit(
+            cachedData,
+            new PageState({ status: "fetching", fetchedAt: cachedAt, reason: null }),
+          ),
+        ),
+        Stream.fromEffect(refresh),
+      );
+    }).pipe(orDieOnDatabaseError(`${kind}Page`)),
+  );
+
+/** A library ref gives one emission */
+export const artistPage = (ref: ArtistRef) =>
+  Option.match(providerRefParts(ref), {
+    onNone: () => Stream.fromEffect(localArtistPage(ref).pipe(orDieOnDatabaseError("artistPage"))),
+    onSome: (parts) =>
+      providerPageStream("artist", parts, ProviderArtist, {
+        fetch: (plugin) => plugin.artist,
+        tracks: (data) => [...data.topTracks, ...data.tracks],
+        build: (page) =>
+          Effect.gen(function* () {
+            const data = page.data;
+            const saved = page.library.filter((item) => item.summary.artistRef === ref);
+            const inLibrary = libraryAlbumCards(saved).toSorted(newestFirst);
+            const topTracks = yield* providerTracks(
+              page.provider,
+              page.providerName,
+              data?.topTracks ?? [],
+            );
+            const tracks = yield* providerTracks(
+              page.provider,
+              page.providerName,
+              data?.tracks ?? [],
+            );
+            const releases = (data?.releases ?? []).map((release) =>
+              releaseCard(page.provider, release),
+            );
+            const appearsOn = (data?.appearsOn ?? [])
+              .map((release) => releaseCard(page.provider, release))
+              .toSorted(newestFirst);
+            const similar = (data?.similar ?? []).map(
+              (artist) =>
+                new ArtistCard({
+                  ref: providerArtistRef(page.provider, artist.externalId),
+                  name: artist.name,
+                  artworkUrl: artist.artworkUrl,
+                }),
+            );
+
+            return new ArtistPage({
+              ref,
+              providerName: page.providerName,
+              name: data?.artist.name ?? libraryArtistCards(saved)[0]?.name ?? null,
+              artworkUrl: data?.artist.artworkUrl ?? null,
+              sections: [
+                ...(topTracks.length === 0
+                  ? []
+                  : [new TrackSection({ kind: "top_tracks", tracks: topTracks })]),
+                ...(inLibrary.length === 0
+                  ? []
+                  : [new AlbumSection({ kind: "in_library", albums: inLibrary })]),
+                ...releaseSections(releases),
+                ...(appearsOn.length === 0
+                  ? []
+                  : [new AlbumSection({ kind: "appears_on", albums: appearsOn })]),
+                ...(tracks.length === 0 ? [] : [new TrackSection({ kind: "tracks", tracks })]),
+                ...(similar.length === 0
+                  ? []
+                  : [new ArtistSection({ kind: "similar_artists", artists: similar })]),
+              ],
+              state: page.state,
+            });
+          }),
+      }),
+  });
+
+/** Before the first fetch, a provider album page shows the tracks that the user saved */
+export const albumPage = (ref: AlbumRef) =>
+  Option.match(providerRefParts(ref), {
+    onNone: () => Stream.fromEffect(localAlbumPage(ref).pipe(orDieOnDatabaseError("albumPage"))),
+    onSome: (parts) =>
+      providerPageStream("album", parts, ProviderAlbum, {
+        fetch: (plugin) => plugin.album,
+        tracks: (data) => data.tracks,
+        build: (page) =>
+          Effect.gen(function* () {
+            const saved = page.library.filter((item) => item.summary.albumRef === ref);
+            if (page.data === null) {
+              return new AlbumPage({
+                ref,
+                providerName: page.providerName,
+                album: libraryAlbumCards(saved)[0] ?? null,
+                tracks: saved.map(
+                  (item) =>
+                    new PageTrack({
+                      source: item.summary,
+                      disc: null,
+                      number: null,
+                      playable: true,
+                    }),
+                ),
+                state: page.state,
+              });
+            }
+
+            return new AlbumPage({
+              ref,
+              providerName: page.providerName,
+              album: releaseCard(page.provider, page.data.release),
+              tracks: yield* providerTracks(page.provider, page.providerName, page.data.tracks),
+              state: page.state,
+            });
+          }),
+      }),
   });

@@ -15,7 +15,7 @@ import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { usableProviders } from "./providers.ts";
-import { libraryAlbumRef, libraryArtistRef } from "./refs.ts";
+import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
 import { touchGroups } from "./sync-counter.ts";
 
 // Projection columns before replication assigns revisions
@@ -211,6 +211,11 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
         artworkUrl: sql<
           string | null
         >`coalesce(${canonical.artworkUrl}, json_extract(${providerItem.data}, '$.artworkUrl'))`,
+        // The same rule as `cachedSummary`
+        providerArtistId: sql<
+          string | null
+        >`coalesce(json_extract(${providerItem.data}, '$.artists[0].id'), json_extract(${providerItem.data}, '$.uploader.id'))`,
+        providerAlbumId: sql<string | null>`json_extract(${providerItem.data}, '$.albumId')`,
       })
       .from(source)
       .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
@@ -249,9 +254,20 @@ export const sourceSummary = (row: {
   readonly albumArtistKey: string | null;
   readonly artistKey: string | null;
   readonly albumKey: string | null;
+  readonly providerArtistId: string | null;
+  readonly providerAlbumId: string | null;
   readonly providerName: string | null;
-}) =>
-  new SourceSummary({
+}) => {
+  const providerArtist =
+    row.providerArtistId === null
+      ? null
+      : providerArtistRef(row.source.provider, row.providerArtistId);
+  const providerAlbum =
+    row.providerAlbumId === null
+      ? null
+      : providerAlbumRef(row.source.provider, row.providerAlbumId);
+
+  return new SourceSummary({
     id: row.source.id,
     provider: row.source.provider,
     title: row.canonical?.title ?? row.source.rawTitle,
@@ -260,14 +276,15 @@ export const sourceSummary = (row: {
     durationMs: row.source.rawDurationMs,
     codec: row.variant.codec,
     artworkUrl: row.artworkUrl,
-    artistRef: row.artistKey === null ? null : libraryArtistRef(row.artistKey),
+    artistRef: row.artistKey === null ? providerArtist : libraryArtistRef(row.artistKey),
     albumRef:
       row.albumArtistKey === null || row.albumKey === null
-        ? null
+        ? providerAlbum
         : libraryAlbumRef(row.albumArtistKey, row.albumKey),
     explicit: row.canonical?.explicit ?? false,
     providerName: row.providerName,
   });
+};
 
 /** The disc or track number. Tags such as `3/12` give the position and the total. */
 export const position = (tags: typeof Tags.Type, key: "disc" | "track") =>

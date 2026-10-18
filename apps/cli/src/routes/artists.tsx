@@ -24,7 +24,7 @@ export const artists = new Section({
     const empty = AsyncResult.match(result, {
       onInitial: () => "Loading the artists",
       onFailure: () => "Cannot load the artists. Press r to try again.",
-      onSuccess: () => "No artists. The library has no files with artist tags.",
+      onSuccess: () => "No artists in your library yet.",
     });
 
     return new SectionView({

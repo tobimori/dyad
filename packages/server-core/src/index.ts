@@ -83,10 +83,8 @@ export const serverRoutes = Layer.unwrap(
       search: ({ query }) =>
         // Only database errors remain
         search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
-      artistPage: ({ ref }) =>
-        Stream.fromEffect(artistPage(ref).pipe(orDieOnDatabaseError("artistPage"))),
-      albumPage: ({ ref }) =>
-        Stream.fromEffect(albumPage(ref).pipe(orDieOnDatabaseError("albumPage"))),
+      artistPage: ({ ref }) => artistPage(ref),
+      albumPage: ({ ref }) => albumPage(ref),
       listLibraryArtists: () => listLibraryArtists.pipe(orDieOnDatabaseError("listLibraryArtists")),
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>

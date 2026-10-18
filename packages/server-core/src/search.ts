@@ -1,15 +1,15 @@
 import { playEvent, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, SearchResults, SourceSummary } from "@dyad/domain";
+import { CurrentPrincipal, SearchResults } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import { PopularityHit } from "@dyad/plugin";
 import type { Credentials, Provider, ProviderError } from "@dyad/plugin";
 import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
 import type { Column } from "drizzle-orm";
-import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
+import { Clock, Data, Effect, Option, Stream } from "effect";
 
 import { normalizeIsrc } from "./normalize.ts";
-import { cacheProviderSources } from "./provider-cache.ts";
+import { cacheProviderSources, cachedSummary } from "./provider-cache.ts";
 import { Popularities, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { playableSources, sourceSummary, tagIdentifiers } from "./sources.ts";
@@ -82,20 +82,7 @@ const searchProvider = (
     const candidates = cached.map(
       (item, position) =>
         new Candidate({
-          summary: new SourceSummary({
-            id: item.sourceId,
-            provider: id,
-            title: item.source.title,
-            artist: item.source.artist,
-            album: item.source.album,
-            durationMs: item.source.durationMs,
-            codec: item.source.codec,
-            artworkUrl: item.source.artworkUrl,
-            artistRef: null,
-            albumRef: null,
-            explicit: item.source.explicit ?? false,
-            providerName: name,
-          }),
+          summary: cachedSummary(item, name),
           isrc: item.isrc,
           position,
           local: false,

@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
 import { detailsCache, provider, resolveTrack, searchTracks } from "./api.ts";
+import { readBand, readRelease } from "./pages.ts";
 
 /**
  * Searches the public Bandcamp catalog and plays the public 128 kbps MP3 streams. Bandcamp needs
@@ -21,6 +22,8 @@ export const bandcampPlugin = new Plugin({
           name: "Bandcamp",
           resolve: (externalId) => resolveTrack(externalId).pipe(Effect.provide(services)),
           search: (query) => searchTracks(details, query).pipe(Effect.provide(services)),
+          artist: (bandId) => readBand(bandId).pipe(Effect.provide(services)),
+          album: (albumId) => readRelease(albumId).pipe(Effect.provide(services)),
           metadataPriority: 20,
           uploads: true,
           download: { leaseDays: 30 },

@@ -40,9 +40,13 @@ export function usePage(atoms: ServerAtoms, route: SectionRoute | PageRoute) {
 const statusText = (state: PageState, providerName: string | null) => {
   const provider = providerName ?? "the provider";
   if (state.status === "local") return "Local library";
-  if (state.status === "fetching") return `Fetching from ${provider}…`;
+  const saved = state.fetchedAt !== null;
+  if (state.status === "fetching") {
+    return saved ? `${provider} · updating…` : `Fetching from ${provider}…`;
+  }
   if (state.status === "fresh") return provider;
-  return state.reason ?? `Cannot reach ${provider}`;
+  const reason = state.reason ?? `Cannot reach ${provider}`;
+  return saved ? `${reason} · showing saved data` : reason;
 };
 
 // Until the page loads, the header shows the name from the row that opened it

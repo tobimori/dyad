@@ -4,7 +4,15 @@ import type { makePacer } from "@dyad/plugin/http";
 import { Effect, Option, Schema } from "effect";
 import { HttpClientRequest } from "effect/http";
 
-import { amp, appleError, AppleTrack, authorize, catalogSource, requestJson } from "./api.ts";
+import {
+  amp,
+  appleError,
+  AppleTrack,
+  authorize,
+  catalogSource,
+  requestJson,
+  songIncludes,
+} from "./api.ts";
 import type { AppleSession } from "./api.ts";
 
 // Apple throttles fast reads, and a 429 stops the sync. All library reads of the plugin must share
@@ -109,7 +117,7 @@ const libraryRequest = (session: AppleSession, path: string) =>
 export const readLibrarySongs = (pace: Pace, session: AppleSession) =>
   Effect.gen(function* () {
     const request = libraryRequest(session, "/v1/me/library/songs").pipe(
-      HttpClientRequest.setUrlParam("include", "catalog"),
+      HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
     );
     const snapshot = yield* readPages(pace, request, LibrarySongItem, "library songs");
 
@@ -142,7 +150,7 @@ export const readPlaylistTracks = (pace: Pace, session: AppleSession, playlistId
   Effect.gen(function* () {
     const path = `/v1/me/library/playlists/${encodeURIComponent(playlistId)}/tracks`;
     const request = libraryRequest(session, path).pipe(
-      HttpClientRequest.setUrlParam("include", "catalog"),
+      HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
     );
     const snapshot = yield* readPages(pace, request, LibrarySongItem, "playlist tracks");
 

@@ -17,6 +17,23 @@ export const libraryAlbumRef = (albumArtistKey: string, albumKey: string) =>
     `${libraryPrefix}${encodeURIComponent(albumArtistKey)}/${encodeURIComponent(albumKey)}`,
   );
 
+/** `<provider>:<external ID>`. Provider IDs cannot be `library`, so the namespaces do not overlap. */
+export const providerArtistRef = (provider: string, externalId: string) =>
+  ArtistRef.make(`${provider}:${externalId}`);
+
+export const providerAlbumRef = (provider: string, externalId: string) =>
+  AlbumRef.make(`${provider}:${externalId}`);
+
+/** The provider and the external ID of a provider ref. `None` for a library ref. */
+export const providerRefParts = (ref: string) => {
+  const separator = ref.indexOf(":");
+  const provider = ref.slice(0, separator);
+  const externalId = ref.slice(separator + 1);
+  return separator < 1 || externalId === "" || ref.startsWith(libraryPrefix)
+    ? Option.none()
+    : Option.some({ provider, externalId });
+};
+
 /** The artist key of a library artist ref. `None` for another namespace or a malformed ref. */
 export const libraryArtistKey = (ref: string) =>
   ref.startsWith(libraryPrefix) && !ref.includes("/")

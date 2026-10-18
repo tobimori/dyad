@@ -1,4 +1,4 @@
-import { ProviderSource } from "@dyad/plugin";
+import { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import {
   getJson,
   getText,
@@ -36,6 +36,8 @@ export class AppleThrottled extends Data.TaggedError("AppleThrottled")<{
 /** Song of the Apple Music catalog */
 export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
   id: Schema.String,
+  // `music-videos` in the tracks of an album
+  type: Schema.optional(Schema.String),
   attributes: Schema.Struct({
     name: Schema.String,
     artistName: Schema.String,
@@ -48,8 +50,30 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
     artwork: Schema.optional(Schema.Struct({ url: Schema.String })),
     // Apple leaves it out for songs without a rating
     contentRating: Schema.optional(Schema.String),
+    // `/<storefront>/album/<slug>/<album ID>?i=<song ID>`
+    url: Schema.optional(Schema.String),
+    discNumber: Schema.optional(Schema.Int),
+    trackNumber: Schema.optional(Schema.Int),
   }),
+  // With `include[songs]=artists`
+  relationships: Schema.optional(
+    Schema.Struct({
+      artists: Schema.optional(
+        Schema.Struct({
+          data: Schema.Array(
+            Schema.Struct({
+              id: Schema.String,
+              attributes: Schema.optional(Schema.Struct({ name: Schema.String })),
+            }),
+          ),
+        }),
+      ),
+    }),
+  ),
 }) {}
+
+/** Request parameters that give each song its artists with names */
+export const songIncludes = { "include[songs]": "artists" };
 
 // Apple leaves out `songs` when nothing matches (October 2026)
 const SearchResults = Schema.Struct({
@@ -238,6 +262,9 @@ export const sessionCache = Effect.gen(function* () {
     );
 });
 
+const albumIdOf = (url: string | undefined) =>
+  (url === undefined ? null : URL.parse(url)?.pathname.split("/").at(-1)) || null;
+
 export const catalogSource = (song: AppleTrack) =>
   new ProviderSource({
     externalId: song.id,
@@ -251,11 +278,15 @@ export const catalogSource = (song: AppleTrack) =>
     lossless: false,
     encrypted: true,
     artworkUrl: song.attributes.artwork?.url.replace("{w}", "600").replace("{h}", "600") ?? null,
-    // Songs have artist IDs only in relationships, which these requests do not include
-    artists: [],
+    artists: (song.relationships?.artists?.data ?? []).flatMap((artist) =>
+      artist.attributes === undefined
+        ? []
+        : [new CreditedArtist({ id: artist.id, name: artist.attributes.name })],
+    ),
     explicit: song.attributes.contentRating === "explicit",
     bitrate: 256_000,
     uploader: null,
+    albumId: albumIdOf(song.attributes.url),
   });
 
 /** The catalog needs only the web client token, not a subscriber */
@@ -266,7 +297,7 @@ export const searchCatalog = (
 ) =>
   Effect.gen(function* () {
     const request = HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/search`).pipe(
-      HttpClientRequest.setUrlParams({ term, types: "songs", limit: 25 }),
+      HttpClientRequest.setUrlParams({ term, types: "songs", limit: 25, ...songIncludes }),
       withBearer(bearer),
     );
     const response = yield* requestJson(request, SearchResults, "search");

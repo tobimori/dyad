@@ -8,7 +8,7 @@ export const provider = "bandcamp";
 
 // Public endpoints of the Bandcamp web search and the Bandcamp mobile app, without an account
 const searchUrl = "https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic";
-const detailsUrl = "https://bandcamp.com/api/mobile/25/tralbum_details";
+export const detailsUrl = "https://bandcamp.com/api/mobile/25/tralbum_details";
 
 class SearchTrack extends Schema.Class<SearchTrack>("SearchTrack")({
   id: Schema.Int,
@@ -50,7 +50,7 @@ const Details = Schema.Union([
 // The mobile app sends the band ID with each track ID
 const ExternalId = Schema.TemplateLiteralParser([Schema.Int, "-", Schema.Int]);
 
-const toProviderError = (error: HttpStatusError | HttpRequestError) =>
+export const toProviderError = (error: HttpStatusError | HttpRequestError) =>
   new ProviderError({
     reason:
       error instanceof HttpStatusError ? `Bandcamp answered status ${error.status}` : error.reason,
@@ -154,6 +154,10 @@ export const searchTracks = (
           explicit: null,
           bitrate: 128_000,
           uploader: accounts.get(track.band_id) ?? null,
+          albumId:
+            track.album_id === undefined || track.album_id === null
+              ? `t-${track.band_id}-${track.id}`
+              : `a-${track.band_id}-${track.album_id}`,
         }),
     );
   });
