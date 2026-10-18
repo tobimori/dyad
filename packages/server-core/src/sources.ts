@@ -74,6 +74,7 @@ const assertParsedTitle = (
     readonly externalId: string;
     readonly title: string;
     readonly artist: string | null;
+    readonly durationMs: number | null;
     readonly uploader: CreditedArtist | null;
   },
 ) =>
@@ -89,6 +90,7 @@ const assertParsedTitle = (
           // An uploader without an artist field gives its own name as the artist
           artists: item.artist === null || item.artist === item.uploader?.name ? [] : [item.artist],
           artistCount: (key) => counts.get(key) ?? (missing.add(key), 0),
+          durationMs: item.durationMs,
         });
         if (missing.size === 0) return result;
 
@@ -103,8 +105,7 @@ const assertParsedTitle = (
       `${item.provider}:${item.externalId}`,
       {
         title: versionedTitle(parsed),
-        artist_credit:
-          parsed.artists.length === 0 ? null : parsedCredit(parsed.artists, parsed.featured),
+        artist_credit: parsed.artists.length === 0 ? null : parsedCredit(parsed.artists),
         versions: parsed.versions,
         mashup_parts: parsed.parts,
         uploader_role: item.uploader === null ? null : parsed.uploaderRole,

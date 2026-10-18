@@ -9,13 +9,14 @@ export const normalizeIsrc = (isrc: string) => {
   return isrcPattern.test(normalized) ? normalized : null;
 };
 
-// Providers credit guests in the title or in the artist, for example `Song (feat. Guest)` or
-// `Song feat. Guest - Remix`
-const bracketedFeaturing = /[([]\s*(?:feat|ft|featuring)\b[^)\]]*[)\]]/g;
-const trailingFeaturing = /\s(?:feat|ft|featuring)\b.*?(?=\s-\s|[([]|$)/g;
+// Providers credit guests in the title or in the artist, for example `Song (feat. Guest)`,
+// `Song (with Guest)` or `Song feat. Guest - Remix`
+const bracketedFeaturing = /[([]\s*(?:(?:feat|ft|featuring|with)\b|w\/)[^)\]]*[)\]]/g;
+const trailingFeaturing = /\s(?:(?:feat|ft|featuring)\b|w\/).*?(?=\s-\s|[([]|$)/g;
 
 // The first of several credited artists, for example `Daft Punk` of `Daft Punk & Pharrell Williams`
-const artistSeparator = /\s*(?:,|&|\bx\b|\bwith\b|\bfeat\b|\bft\b|\bfeaturing\b)\s*/;
+const artistSeparator =
+  /\s*(?:,|&|\+|×|\bx\b|\bvs\b\.?|\bb2b\b|\bwith\b|\bw\/|\bfeat\b|\bft\b|\bfeaturing\b)\s*/;
 
 /** Lowercase words without diacritics and punctuation, separated by one space */
 export const simplifyText = (text: string) =>

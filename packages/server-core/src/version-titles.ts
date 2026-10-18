@@ -69,7 +69,7 @@ export const artistNameKey = (name: string) =>
     .replaceAll(/[^\p{L}\p{N}]+/gu, "");
 
 /** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
-export const parserRevision = "parse:v2";
+export const parserRevision = "parse:v3";
 
 const kindLabels = {
   remix: "Remix",
@@ -92,21 +92,30 @@ const kindLabels = {
   rework: "Rework",
 } satisfies Record<typeof VersionKind.Type, string>;
 
-/** `A, B & C feat. D`. No name has an artist ID until a resolver links it. */
-export const parsedCredit = (main: ReadonlyArray<string>, guests: ReadonlyArray<string>) => {
-  const joined = (names: ReadonlyArray<string>, last: string) =>
-    names.map((name, index) => {
-      if (index === names.length - 1) return { id: null, name, joinPhrase: last };
-      return { id: null, name, joinPhrase: index === names.length - 2 ? " & " : ", " };
-    });
-  const artists = [...joined(main, guests.length > 0 ? " feat. " : ""), ...joined(guests, "")];
-  return { name: artists.map((name) => name.name + name.joinPhrase).join(""), artists };
-};
+const joinedNames = (names: ReadonlyArray<string>) =>
+  names.map((name, index) => {
+    if (index === names.length - 1) return { id: null, name, joinPhrase: "" };
+    return { id: null, name, joinPhrase: index === names.length - 2 ? " & " : ", " };
+  });
+const joinNames = (names: ReadonlyArray<string>) =>
+  joinedNames(names)
+    .map((name) => name.name + name.joinPhrase)
+    .join("");
 
-/** The base title and one group for each version, for example `Rote Flaggen (Fatekkt Remix)` */
+/**
+ * `A, B & C`. Guests go into `versionedTitle`, as in Apple Music. No name has an artist ID until a
+ * resolver links it.
+ */
+export const parsedCredit = (main: ReadonlyArray<string>) => ({
+  name: joinNames(main),
+  artists: joinedNames(main),
+});
+
+/** The base title, the guests and one group for each version: `Blindflug (feat. Trille) (X Remix)` */
 export const versionedTitle = (parsed: ParsedTitle) =>
   [
     parsed.title,
+    ...(parsed.featured.length === 0 ? [] : [`(feat. ${joinNames(parsed.featured)})`]),
     ...parsed.versions.map((version) => {
       const by = version.by.join(" & ");
       if (by === "") return `(${kindLabels[version.kind]})`;
@@ -294,6 +303,9 @@ const decorationWords = [
   "tiktok(?:[ _]ver(?:sion|\\.)?)?",
   "versi[oó]n|ver\\.?",
   "\\d{4}",
+  "\\d{4}[-./]\\d{1,2}[-./]\\d{1,2}|\\d{1,2}[-./]\\d{1,2}[-./]\\d{4}",
+  // `KEY Ab`, `A#m`
+  "key:? [a-g][#b♯♭]?(?: ?(?:m|min|minor|maj|major))?|[a-g][#♯](?: ?(?:m|min|minor|maj|major))?",
   "v\\d+",
   "pt\\.? ?\\d+|part \\d+",
   "\\d+(?:\\.\\d+)?x",
@@ -301,7 +313,7 @@ const decorationWords = [
 ];
 const decoration = new RegExp(`^(?:${decorationWords.join("|")})$`, "iu");
 const trailingDecoration = new RegExp(
-  `\\s+(?:${decorationWords.filter((words) => !words.startsWith(".*")).join("|")})$`,
+  `(?:\\s+(?:${decorationWords.filter((words) => !words.startsWith(".*")).join("|")}))+$`,
   "iu",
 );
 const noiseWords = new RegExp(
@@ -315,9 +327,17 @@ const producer = /^prod(?:uced)?(?:\.\s*|\s+)(?:by\s+)?@?(.+)$/iu;
 const shortProducer = /^p(?:\.|\/|\s)\s*@?(.+)$/iu;
 const inlineProducer = /\s[[(]?prod(?:\.|uced)?(?: by)?\s+@?([^)\]]+)[)\]]?$/iu;
 const featuring = /^(?:feat\.?|ft\.?|featuring|with|w\/)\s+(.+)$/iu;
-const inlineFeaturing = /\s(?:feat\.?|ft\.?|featuring)\s+(.+)$/iu;
+const inlineFeaturing = /\s(?:feat\.?|ft\.?|featuring|w\/)\s+(.+)$/iu;
+// Only in a name: `Dancing with Myself` is a title
+const withGuests = /\swith\s+(.+)$/iu;
+const promoPrefix = /^(?:(?:world )?premiere|exclusive|out now|free (?:dl|download))\s*:\s*/iu;
+// Accounts without a display name: `user-123456`, `e#510.072.000`
+const handle = /^user[- ]?\d+$|#\d|^[^\p{L}]+$/iu;
 const setWords =
   /(?<![\p{L}\p{N}])(?:(?:live|dj|full|hours?) set|set(?=\s*(?:[)\]|(]|$))|(?:dj|party|hour) mix|mixtape|megamix|boiler room|essential mix|podcast|b2b|playlist|tracklist|timestamps|resident advisor|mixed (?:by|version)|mix\s*#?\s*\d{1,3}|mix (?:19|20)\d\d)(?![\p{L}\p{N}])/iu;
+// A set only with a long duration: `Jpop chill remix` (43 min)
+const weakSetWords =
+  /(?<![\p{L}\p{N}])(?:(?:re)?mix(?:es)?|mashup|songs|hits|nonstop|playlist|lo-?fi|live|vol\.? ?\d+|(?:19|20)\d\d)(?![\p{L}\p{N}])|[|#]|\s[x\u00d7]\s.+\s[x\u00d7]\s/iu;
 // A set, unless an artist and a title come first: `Vũ - Anh Nhớ Ra Live At Soul Of The Forest`
 const liveAt = /(?<![\p{L}\p{N}])live (?:at|@|from)\s/iu;
 // `Bonobo Boiler Room New York DJ Set`, `Layla Benitez @ Radio 1's Essential Mix`
@@ -328,7 +348,7 @@ const setHost =
 // separates only when nothing else does: `Charli XCX - So I / Party 4 U` is one title.
 const separator = /\s+(?:[-–—~|_:]|\/\/|\|\|)\s+|(?<=\S)[-–—]\s+/u;
 const slashSeparator = new RegExp(`${separator.source}|\\s+/\\s+`, "u");
-const nameSeparator = /\s*(?:,|&|\s(?:x|vs\.?|and|b2b|\+)\s)\s*/iu;
+const nameSeparator = /\s*(?:,|&|\s(?:x|\u00d7|vs\.?|b2b|\+)\s)\s*/iu;
 const brackets = new Map([
   ["(", ")"],
   ["[", "]"],
@@ -452,6 +472,8 @@ export const parseVersionTitle = (input: {
    * `Nova & Jory` whole. A name of several artists, such as `EDEN`, never decides alone.
    */
   readonly artistCount?: (key: string) => number;
+  /** A long upload with a weak hint such as `mix` or `songs` is a set */
+  readonly durationMs?: number | null;
 }) => {
   const countOf = (name: string) => {
     const key = artistNameKey(name);
@@ -462,9 +484,13 @@ export const parseVersionTitle = (input: {
     const whole = cleanName(names);
     if (whole === "") return [];
     if (countOf(whole) > 0) return [whole];
-    return whole
-      .split(nameSeparator)
-      .flatMap((name) => (cleanName(name) === "" ? [] : [cleanName(name)]));
+    return whole.split(nameSeparator).flatMap((name) => {
+      const clean = cleanName(name);
+      if (clean === "") return [];
+      // `Simon and Garfunkel` is one name, unless the catalog knows both names
+      const pair = clean.split(/\s+and\s+/iu);
+      return pair.length > 1 && pair.every((part) => countOf(part) > 0) ? pair : [clean];
+    });
   };
   // `Paula Hartmann, CLOUDY` uploads as both
   const uploaderKeys = new Set([
@@ -475,8 +501,9 @@ export const parseVersionTitle = (input: {
   const removed: Array<string> = [];
   const featured: Array<string> = [];
   const producers: Array<string> = [];
-  const providerArtists = (input.artists ?? []).flatMap((artist) => {
-    const guests = artist.match(inlineFeaturing);
+  const providerArtists = (input.artists ?? []).flatMap((field) => {
+    const artist = field.replace(promoPrefix, (match) => (removed.push(match.trim()), ""));
+    const guests = artist.match(inlineFeaturing) ?? artist.match(withGuests);
     if (guests !== null) featured.push(...splitNames(guests[1]!));
     return splitNames(guests === null ? artist : artist.slice(0, guests.index));
   });
@@ -500,10 +527,7 @@ export const parseVersionTitle = (input: {
     .normalize("NFKC")
     .replace(/\.(?:mp3|wav|flac|m4a)$/iu, "")
     .replace(/^\*\*[^*]+\*\*\s*/u, (match) => (removed.push(match.trim()), ""))
-    .replace(/^(?:premiere|exclusive|out now|free (?:dl|download))\s*:\s*/iu, (match) => {
-      removed.push(match.trim());
-      return "";
-    });
+    .replace(promoPrefix, (match) => (removed.push(match.trim()), ""));
   const underscores = (decoded.match(/_/gu)?.length ?? 0) > 2 && !decoded.includes(" ");
   const full = (underscores ? decoded.replaceAll("_", " ") : decoded)
     .replaceAll(/\p{So}|\${2,}/gu, (match) => (removed.push(match), " "))
@@ -513,7 +537,12 @@ export const parseVersionTitle = (input: {
     .slice(0, live?.index ?? 0)
     .split(new RegExp(`${slashSeparator.source}|\\s{2,}`, "u"))
     .filter((text) => text.trim() !== "");
-  const set = setWords.test(full) || (live !== null && beforeLive.length < 2);
+  // In the corpus, tracks end before 15 min and sets start at 20 min. A loop (`1 hour`) is a track.
+  const longSet =
+    (input.durationMs ?? 0) >= 20 * 60_000 &&
+    !/\d+ ?(?:hours?|hrs?)\b/iu.test(full) &&
+    weakSetWords.test(full);
+  const set = setWords.test(full) || (live !== null && beforeLive.length < 2) || longSet;
   const liveVersion = live !== null && !set;
   if (liveVersion) removed.push(full.slice(live.index));
   const title = liveVersion
@@ -627,6 +656,8 @@ export const parseVersionTitle = (input: {
             return "";
           }),
       ),
+      // `"round" - ab syndrom x novaa`: quotes mark the title
+      quoted: /^\s*["“][^"“”]+["”]\s*$/u.test(text),
       position: index * 1000,
     };
   });
@@ -691,7 +722,7 @@ export const parseVersionTitle = (input: {
   };
 
   // Segments that name the artist or the title. The others are versions, credits or decoration.
-  const core: Array<{ text: string; raw: string; index: number }> = [];
+  const core: Array<{ text: string; raw: string; quoted: boolean; index: number }> = [];
   const groupArtists: Array<string> = [];
   // A year is the title when nothing else is: `2021 (umru remix)`
   const years: Array<string> = [];
@@ -756,10 +787,10 @@ export const parseVersionTitle = (input: {
     const versionBeforeGroup = group !== "" && stripped.length < beforeGroup.length;
     if (versionBeforeGroup) groupArtists.push(group.trim().slice(1, -1));
     const kept = cleanTitle(versionBeforeGroup ? stripped : stripped + group);
-    if (kept !== "") core.push({ text: kept, raw: segment.text, index });
+    if (kept !== "") core.push({ text: kept, raw: segment.text, quoted: segment.quoted, index });
   }
   if (core.length === 0 && years[0] !== undefined)
-    core.push({ text: years[0], raw: years[0], index: -1 });
+    core.push({ text: years[0], raw: years[0], quoted: false, index: -1 });
   else removed.push(...years);
 
   // Evidence for the artist side of `A - B`: the provider, the uploader and unique catalog names
@@ -773,7 +804,8 @@ export const parseVersionTitle = (input: {
   // Hints that only break a tie: a list of names or `DJ X` is an artist
   const artistHint = (segment: (typeof core)[number]) =>
     (/,|\s(?:feat\.?|ft\.?)\s/iu.test(segment.raw) ? 1 : 0) +
-    (/^(?:dj|mc)\s/iu.test(segment.text) ? 1 : 0);
+    (/^(?:dj|mc)\s/iu.test(segment.text) ? 1 : 0) -
+    (segment.quoted ? 2 : 0);
   const hasVersion = (segment: (typeof core)[number]) =>
     versions.some((version) => Math.floor(version.position / 1000) === segment.index);
 
@@ -832,11 +864,18 @@ export const parseVersionTitle = (input: {
       ? fromTitle.title.match(/\s*[([]([^()[\]]+\s[x\u00d7]\s[^()[\]]+)[)\]]$/iu)
       : null;
   const titleText = cleanTitle(fromTitle.title.slice(0, pairGroup?.index));
+  // `Giegling Mix 07 - DJ Metatron - This Is Not` names a series, the artist and the set
+  const setParts = set ? title.split(splitter).map(cleanTitle) : [];
+  const series = setParts.find((part) => /^(?:\S.*\s)?mix\s*#?\s*\d{1,3}$/iu.test(part));
+  const setNames = setParts.filter(
+    (part) => part !== "" && part !== series && !decoration.test(part),
+  );
   // `Bonobo Boiler Room New York DJ Set`, `Gorgon City - BBC Radio 1 Essential Mix`
   const host = (() => {
-    const first = core[0]?.text.replace(trailingGroup, "") ?? "";
-    const name = !/\bmix\b|[\d()[\]{}【】]/iu.test(first) && first.split(/\s+/u).length <= 4;
-    if (core.length >= 2 && name && !setWords.test(first)) return first;
+    const first = setNames[0] ?? "";
+    const names = first.replace(trailingGroup, "").replaceAll(/\sb2b\s/giu, " & ");
+    const name = !/\bmix\b|[\d()[\]{}【】]/iu.test(names) && names.split(/\s+/u).length <= 4;
+    if (setNames.length >= 2 && name && !setWords.test(names)) return first;
     return title.match(setHost)?.[1] ?? "";
   })();
 
@@ -866,11 +905,12 @@ export const parseVersionTitle = (input: {
     version === creditOfOriginal ? [] : [artistNameKey(version.credit)],
   );
 
+  const uploaderName = handle.test(input.uploader ?? "") ? "" : (input.uploader ?? "");
   const chosen = (() => {
     if (set && providerArtists.length === 0 && host !== "")
       return { text: host, source: "title" } as const;
     if (set && providerArtists.length === 0)
-      return { text: input.uploader ?? "", source: "uploader" } as const;
+      return { text: uploaderName, source: "uploader" } as const;
     if (fromTitle.artist !== "") return { text: fromTitle.artist, source: "title" } as const;
     if (pairGroup !== null) return { text: pairGroup[1]!, source: "title" } as const;
     if (creditOfOriginal !== undefined)
@@ -879,20 +919,23 @@ export const parseVersionTitle = (input: {
       return { text: providerArtists.join(", "), source: "provider" } as const;
     if (groupArtists[0] !== undefined) return { text: groupArtists[0], source: "title" } as const;
     // A mashup without named artists is the uploader's own work, not a song of the uploader
-    if (!isMashup) return { text: input.uploader ?? "", source: "uploader" } as const;
+    if (!isMashup) return { text: uploaderName, source: "uploader" } as const;
     return { text: "", source: "none" } as const;
   })();
+  const chosenGuests = chosen.source === "title" ? chosen.text.match(withGuests) : null;
+  if (chosenGuests !== null) featured.push(...splitNames(chosenGuests[1]!));
+  const chosenText = chosen.text.slice(0, chosenGuests?.index);
   if (groupArtists[0] !== undefined && chosen.text !== groupArtists[0])
     removed.push(groupArtists[0]);
 
   // A remixer in the provider's artist field or in a Bandcamp band name is not an artist of the original
   const featuredKeys = new Set(featured.map(artistNameKey));
-  const artists = splitNames(chosen.text).filter(
+  const artists = splitNames(chosenText).filter(
     (name) =>
       !featuredKeys.has(artistNameKey(name)) &&
       (chosen.source === "title" || !credited.includes(artistNameKey(name))),
   );
-  const partArtists = splitNames(chosen.text);
+  const partArtists = splitNames(chosenText);
   const parts = isMashup
     ? partTitles.map(
         (part, index) =>
@@ -927,6 +970,15 @@ export const parseVersionTitle = (input: {
     }, []);
 
   const artistKeys = new Set(artists.map(artistNameKey));
+  // `This Is Not (Giegling Mix 07)`, as the copies that name the series in brackets
+  const setTitle = (() => {
+    const names = setNames.filter(
+      (part, index) =>
+        index > 0 || !splitNames(part).every((name) => artistKeys.has(artistNameKey(name))),
+    );
+    if (names.length === setParts.length || names.length === 0) return cleanTitle(title);
+    return [names.join(" - "), ...(series === undefined ? [] : [`(${series})`])].join(" ");
+  })();
   const versionKeys = new Set(finalVersions.flatMap((version) => version.by.map(artistNameKey)));
   const uploaderIsArtist =
     artistKeys.has(uploaderKey) && (chosen.source !== "uploader" || finalVersions.length === 0);
@@ -946,7 +998,9 @@ export const parseVersionTitle = (input: {
   return new ParsedTitle({
     artists,
     featured: set ? [] : [...new Set(featured)],
-    title: titleText || cleanTitle(marked.replaceAll(marker, " ")) || cleanTitle(title),
+    title: set
+      ? setTitle
+      : titleText || cleanTitle(marked.replaceAll(marker, " ")) || cleanTitle(title),
     versions: finalVersions,
     parts,
     removed: removed.flatMap((text) => (text.trim() === "" ? [] : [text.trim()])),

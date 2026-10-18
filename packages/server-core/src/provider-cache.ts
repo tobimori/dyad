@@ -43,6 +43,7 @@ export const cachedSummary = (item: CachedSource, providerName: string) => {
             item.source.artist === null || item.source.artist === uploader.name
               ? []
               : [item.source.artist],
+          durationMs: item.source.durationMs,
         });
 
   return new SourceSummary({
@@ -52,7 +53,7 @@ export const cachedSummary = (item: CachedSource, providerName: string) => {
     artist:
       parsed === null || parsed.artists.length === 0
         ? item.source.artist
-        : parsedCredit(parsed.artists, parsed.featured).name,
+        : parsedCredit(parsed.artists).name,
     album: item.source.album,
     durationMs: item.source.durationMs,
     codec: item.source.codec,
