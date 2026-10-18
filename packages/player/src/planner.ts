@@ -5,10 +5,14 @@ export class BeatGrid extends Data.Class<{
   readonly bpm: number;
   /** Source time of one beat in seconds. A bar starts on it if `downbeatConfidence` is high. */
   readonly beat: number;
-  /** Phase coherence R of the detected beats against the grid, 0 to 1 */
+  /** Estimated probability that `beat` is on the beat, not on the off-beat */
   readonly confidence: number;
-  /** 0 to 1 */
+  /** Estimated probability that a bar starts on `beat` */
   readonly downbeatConfidence: number;
+  /** Source time of the bar of `truePeaks[0]`. Bars are 4 beats and start on `beat`. */
+  readonly peaksFrom?: number | undefined;
+  /** True peak of each bar in dBTP. Without it, the true peak bound uses the source's true peak. */
+  readonly truePeaks?: ReadonlyArray<number> | undefined;
 }> {}
 
 /** A position on the Camelot wheel */

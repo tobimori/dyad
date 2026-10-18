@@ -4,7 +4,7 @@ import { Data, Effect, Exit, Scope, Semaphore } from "effect";
 
 import { entryLevel, peakCeiling } from "./loudness.ts";
 import type { Loudness } from "./loudness.ts";
-import { planTransition } from "./planner.ts";
+import { defaultMaxTempoChange, planTransition } from "./planner.ts";
 import type { DjAnalysis, DjStyle, Transition } from "./planner.ts";
 import { Resampler, timelineRate } from "./resampler.ts";
 import { openStretcher } from "./stretch.ts";
@@ -157,6 +157,26 @@ const openTrack = (entry: Entry, info: SourceInfo, input: number) =>
     );
     return new Track({ entry, source, scope, input, ...entryLevel(entry.loudness) });
   });
+
+// The track's true peak in `frames` lane frames from entry position `position`. In the bars of a
+// grid with bar peaks, it is the largest bar peak, else the source's true peak.
+const piecePeak = (track: Track, position: number, frames: number) => {
+  const dj = track.entry.dj;
+  if (dj === undefined) return track.peak;
+  // Room for a warp's stretch and for decoder frames that start before a bar
+  const from = position / timelineRate - 0.05;
+  const to = (position + frames * (1 + defaultMaxTempoChange)) / timelineRate + 0.05;
+  for (const grid of [dj.intro, dj.outro]) {
+    if (grid.peaksFrom === undefined || grid.truePeaks === undefined) continue;
+    const bar = 240 / grid.bpm;
+    const first = Math.floor((from - grid.peaksFrom) / bar);
+    const last = Math.floor((to - grid.peaksFrom) / bar);
+    if (first < 0 || last >= grid.truePeaks.length) continue;
+    const db = Math.max(...grid.truePeaks.slice(first, last + 1));
+    return Math.min(track.peak, track.gain * 10 ** (db / 20));
+  }
+  return track.peak;
+};
 
 const sameAlbum = (a: Entry, b: Entry) => a.album !== undefined && a.album === b.album;
 
@@ -476,10 +496,10 @@ export const openRenderer = Effect.gen(function* () {
       const from = froms[index]!;
       const gain = new Float32Array(frames);
       for (const piece of pieces(lane, from, frames)) {
+        const peak = piecePeak(piece.track, piece.position, piece.last - piece.first);
         for (let frame = piece.first; frame < piece.last; frame++) {
           gain[frame - from] = laneGain(lane, frame);
-          peaks[frame - from] =
-            (peaks[frame - from] ?? 0) + piece.track.peak * lanePeak(lane, frame);
+          peaks[frame - from] = (peaks[frame - from] ?? 0) + peak * lanePeak(lane, frame);
         }
         addSpan(
           spans,

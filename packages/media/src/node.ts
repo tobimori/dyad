@@ -357,3 +357,4 @@ export const encodeFlac = (media: string | MediaStream, startMs = 0) =>
 
 export { bitDepthOf, muxStream, openAudio, packetsFrom, startTimestamp, writePackets };
 export { AudioMeasurement, measureAudio } from "./audio-analysis.ts";
+export { BeatAnalysis, BeatWindow } from "./beat-analysis.ts";

@@ -4,8 +4,8 @@ import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 // computes them again from its own files.
 
 /**
- * Loudness and silence of one variant's audio. A local variant's source ID comes from its audio
- * hash, so the variant names the exact audio; a provider variant also needs `asset`.
+ * Loudness, silence and beats of one variant's audio. A local variant's source ID comes from its
+ * audio hash, so the variant names the exact audio; a provider variant also needs `asset`.
  */
 export const audioAnalysis = sqliteTable("audio_analysis", {
   variantId: text("variant_id").primaryKey(),
@@ -19,5 +19,7 @@ export const audioAnalysis = sqliteTable("audio_analysis", {
   truePeak: real("true_peak").notNull(),
   leadingSilenceMs: integer("leading_silence_ms").notNull(),
   trailingSilenceMs: integer("trailing_silence_ms").notNull(),
+  // An encoded `BeatAnalysis` of `@dyad/media`. Null for less than 8 s of sound.
+  beats: text("beats", { mode: "json" }),
   analyzedAt: integer("analyzed_at").notNull(),
 });

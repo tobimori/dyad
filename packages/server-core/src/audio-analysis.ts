@@ -4,7 +4,8 @@ import { Readable } from "node:stream";
 import { audioAnalysis, libraryRoot, localFile, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { AudioAnalysis } from "@dyad/domain";
-import { MediaStream, measureAudio } from "@dyad/media/node";
+import { BeatAnalysis, MediaStream, measureAudio } from "@dyad/media/node";
+import { BeatGrid, Camelot, DjAnalysis } from "@dyad/player";
 import { and, eq, inArray, isNull, ne, notInArray, or } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Path, Redacted, Schema, Stream } from "effect";
 import type { Scope } from "effect";
@@ -16,7 +17,7 @@ import type { CachedAudio } from "./media-cache.ts";
 const analysisKind = "audio.analyze";
 
 // Raise it when the measurement changes, so that every row is analyzed again
-const analyzerVersion = 1;
+const analyzerVersion = 2;
 
 /** Asks for the analysis of audio without one, for example after a library scan */
 export const requestAnalysis = Effect.gen(function* () {
@@ -40,6 +41,26 @@ export const sourceAnalysis = (sourceId: string) =>
       .where(eq(sourceVariant.sourceId, sourceId))
       .limit(1);
     return row === undefined ? null : new AudioAnalysis(row);
+  });
+
+/** The beat analysis of the source's audio, or `undefined` before the first analysis */
+export const sourceDjAnalysis = (sourceId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const [row] = yield* db
+      .select({ beats: audioAnalysis.beats })
+      .from(audioAnalysis)
+      .innerJoin(sourceVariant, eq(sourceVariant.id, audioAnalysis.variantId))
+      .where(eq(sourceVariant.sourceId, sourceId))
+      .limit(1);
+    if (row === undefined || row.beats === null) return undefined;
+    const beats = yield* Schema.decodeUnknownEffect(BeatAnalysis)(row.beats).pipe(Effect.orDie);
+    return new DjAnalysis({
+      ...beats,
+      intro: new BeatGrid(beats.intro),
+      outro: new BeatGrid(beats.outro),
+      key: beats.key === null ? undefined : new Camelot(beats.key),
+    });
   });
 
 class Target extends Data.Class<{
@@ -164,6 +185,7 @@ export const audioAnalysisLayer = Layer.effectDiscard(
       if (Option.isNone(measured)) {
         failed.add(target.variantId);
       } else {
+        const { beats } = measured.value;
         const row = {
           asset: target.asset,
           analyzerVersion,
@@ -171,6 +193,10 @@ export const audioAnalysisLayer = Layer.effectDiscard(
           truePeak: measured.value.truePeak,
           leadingSilenceMs: measured.value.leadingSilenceMs,
           trailingSilenceMs: measured.value.trailingSilenceMs,
+          beats:
+            beats === undefined
+              ? null
+              : yield* Schema.encodeEffect(BeatAnalysis)(beats).pipe(Effect.orDie),
           analyzedAt: finishedAt,
         };
         yield* db
