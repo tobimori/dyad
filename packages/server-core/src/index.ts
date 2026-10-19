@@ -1,5 +1,5 @@
 import { dieOnDatabaseError, orDieOnDatabaseError } from "@dyad/db/node";
-import { CurrentPrincipal, ServerDescriptor, ServerRpc } from "@dyad/domain";
+import { CurrentPrincipal, ServerDescriptor, ServerRpc, SourceCopies } from "@dyad/domain";
 import { Context, Effect, Layer, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
@@ -43,7 +43,12 @@ import {
 } from "./playlists.ts";
 import { heardInSets, listSets } from "./sets.ts";
 import { listProviderChoices, setProviderOrder } from "./source-preference.ts";
-import { copySearchesLayer, sourceCopies } from "./source-copies.ts";
+import {
+  copyDiscoveriesLayer,
+  copySearchesLayer,
+  sourceCopies,
+  sourceCopiesStream,
+} from "./source-copies.ts";
 import { listSources } from "./sources.ts";
 import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer } from "./peers.ts";
 import { syncHubLayer, watchChanges } from "./sync.ts";
@@ -83,6 +88,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       musicbrainzLookupsLayer,
       copyAttemptsLayer,
       copySearchesLayer,
+      copyDiscoveriesLayer,
       outputsLayer,
       receiversLayer,
       syncHubLayer,
@@ -204,7 +210,19 @@ export const serverRoutes = Layer.unwrap(
         heardInSets(recordingId).pipe(orDieOnDatabaseError("heardInSets")),
       webLinks: ({ sourceId }) => webLinks(sourceId).pipe(orDieOnDatabaseError("webLinks")),
       sourceCopies: ({ sourceId }) =>
-        sourceCopies(sourceId).pipe(orDieOnDatabaseError("sourceCopies")),
+        forwardStream(
+          (home) => home.sourceCopies({ sourceId }),
+          sourceCopiesStream(sourceId).pipe(
+            Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("sourceCopies"))),
+          ),
+          // Offline, a device shows the copies that it knows
+          Stream.fromEffect(
+            sourceCopies(sourceId).pipe(
+              Effect.map((copies) => new SourceCopies({ copies, searching: false })),
+              orDieOnDatabaseError("sourceCopies"),
+            ),
+          ),
+        ),
       pairServer: (payload) => pairServer(payload).pipe(orDieOnDatabaseError("pairServer")),
       listServerPeers: () => listServerPeers.pipe(orDieOnDatabaseError("listServerPeers")),
       unpairServer: ({ replicaId }) =>

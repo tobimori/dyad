@@ -1,10 +1,11 @@
 import { audioLabel, formatDuration, titleOf } from "@dyad/client-runtime";
 import type { ServerAtoms } from "@dyad/client-runtime";
-import type { SourceCopy, SourceSummary } from "@dyad/domain";
+import type { SourceCopies, SourceCopy, SourceSummary } from "@dyad/domain";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 
 import { commands } from "../context/keymap.ts";
+import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
 import { SelectList, SelectOption } from "../ui/select-list.tsx";
 import { useToast } from "../ui/toast.tsx";
@@ -40,10 +41,12 @@ function PlayFromDialog(props: {
 }) {
   const dialog = useDialog();
   const toast = useToast();
-  const result: AsyncResult.AsyncResult<ReadonlyArray<SourceCopy>, unknown> = useAtomValue(
+  const theme = useTheme();
+  const result: AsyncResult.AsyncResult<SourceCopies, unknown> = useAtomValue(
     props.atoms.sourceCopies(props.source.id),
   );
-  const copies = AsyncResult.isSuccess(result) ? result.value : [];
+  const copies = AsyncResult.isSuccess(result) ? result.value.copies : [];
+  const searching = AsyncResult.isSuccess(result) && result.value.searching;
 
   const options = copies.map(
     (copy, index) =>
@@ -57,7 +60,8 @@ function PlayFromDialog(props: {
 
   const empty = () => {
     if (AsyncResult.isFailure(result)) return "Cannot load the copies. Try again.";
-    return AsyncResult.isInitial(result) ? "Loading…" : "No other copy of this song is known";
+    if (AsyncResult.isInitial(result)) return "Loading…";
+    return searching ? "Searching all providers…" : "No other copy of this song is known";
   };
 
   const choose = (index: number) => {
@@ -84,6 +88,9 @@ function PlayFromDialog(props: {
         empty={empty()}
         onChoose={choose}
       />
+      {searching && copies.length > 0 ? (
+        <text fg={theme.muted}>Searching all providers…</text>
+      ) : null}
     </Dialog>
   );
 }

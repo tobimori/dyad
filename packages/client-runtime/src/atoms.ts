@@ -118,9 +118,21 @@ export const serverAtoms = (
     heardInSets: Atom.family((recordingId: RecordingId) =>
       live((client) => client.heardInSets({ recordingId })).pipe(Atom.setIdleTTL(pageIdleTime)),
     ),
-    /** All copies of the recording of a source. No idle time: a new order applies at once. */
+    /**
+     * All copies of the recording of a source, again after each change and after the server
+     * searched the providers. No idle time: a new order applies at once.
+     */
     sourceCopies: Atom.family((sourceId: string) =>
-      live((client) => client.sourceCopies({ sourceId })),
+      runtime.atom(
+        Stream.unwrap(
+          ServerConnection.useSync((client) =>
+            client.watchChanges().pipe(
+              Stream.switchMap(() => client.sourceCopies({ sourceId })),
+              Stream.retry(Schedule.spaced("1 second")),
+            ),
+          ),
+        ),
+      ),
     ),
     /** The tracklist of a DJ set source */
     sourceSegments: Atom.family((sourceId: string) =>

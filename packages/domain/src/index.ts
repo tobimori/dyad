@@ -343,6 +343,12 @@ export class SourceCopy extends Schema.Class<SourceCopy>("SourceCopy")({
   unavailable: Schema.NullOr(Schema.Literals(["account_required", "unavailable"])),
 }) {}
 
+export class SourceCopies extends Schema.Class<SourceCopies>("SourceCopies")({
+  copies: Schema.Array(SourceCopy),
+  /** The server searches the providers for more copies; another emission follows */
+  searching: Schema.Boolean,
+}) {}
+
 export class TracklistEditFailed extends Schema.TaggedError<TracklistEditFailed>()(
   "TracklistEditFailed",
   { reason: Schema.Literals(["source_not_found"]) },
@@ -1020,10 +1026,12 @@ const OwnerRpc = RpcGroup.make(
     success: Schema.Array(WebLink),
   }),
   // All copies of the recording of the source on all providers and as files, in the user's
-  // source order, also the copies that the user cannot play
+  // source order, also the copies that the user cannot play. The known copies come first, then
+  // the copies again after a search of the providers.
   Rpc.make("sourceCopies", {
     payload: { sourceId: Schema.String.check(Schema.isUUID()) },
-    success: Schema.Array(SourceCopy),
+    success: SourceCopies,
+    stream: true,
   }),
   // Hides the tracklists of the source, or shows them again
   Rpc.make("hideTracklist", {
