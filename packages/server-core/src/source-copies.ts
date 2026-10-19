@@ -18,9 +18,11 @@ import {
   compareSources,
 } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
+import { artistNameKey } from "@dyad/plugin/tracklist";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Array as Arr, Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 
+import { linkFoundArtists, minSharedSongs } from "./artist-matching.ts";
 import { artistIdOf } from "./artists.ts";
 import { isrcRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
@@ -46,7 +48,7 @@ import {
 import { recordingGroup } from "./sets.ts";
 import { providerOrder } from "./source-preference.ts";
 import { versionWordsOf } from "./ranking.ts";
-import { playableSources, sourceSummary } from "./sources.ts";
+import { addProviderSource, playableSources, sourceSummary } from "./sources.ts";
 
 // The root of an artist ID of a provider
 const artistRoot = Effect.fn(function* (provider: string, externalId: string) {
@@ -376,6 +378,77 @@ export const queueCopyDiscovery = Effect.fn("queueCopyDiscovery")(function* (
   );
 });
 
+const nameOf = (source: ProviderSource, artistId: string) =>
+  [...source.artists, ...(source.uploader === null ? [] : [source.uploader])].find(
+    (artist) => artist.id === artistId,
+  )?.name;
+
+// Links the artist of a cached source, for example a YouTube channel of a radio song, to a
+// same-named artist of another provider when the cache has at least 2 songs of both with the same
+// title and duration. A name only finds the candidates; one candidate per provider must remain.
+const linkByCachedSongs = Effect.fn(function* (sourceId: string) {
+  const db = yield* Database;
+  const own = Option.getOrNull(yield* cachedProviderSource(sourceId));
+  const ownId = own === null ? null : yield* cachedArtistId(own);
+  const name = own === null || ownId === null ? undefined : nameOf(own.source, ownId);
+  if (own === null || ownId === null || name === undefined) return;
+  const key = artistNameKey(name);
+
+  const rows = yield* db
+    .select({ provider: providerItem.provider, data: providerItem.data })
+    .from(providerItem)
+    .where(
+      or(
+        ...spellings(name).map(
+          (spelling) =>
+            sql`json_extract(${providerItem.data}, '$.artist') like ${`%${spelling.replaceAll(/[\\%_]/g, "\\$&")}%`} escape '\\'`,
+        ),
+      ),
+    );
+  const songs = (yield* Effect.forEach(rows, (row) =>
+    Option.match(Schema.decodeUnknownOption(ProviderSource)(row.data), {
+      onNone: () => Effect.succeed([]),
+      onSome: (decoded) =>
+        Effect.gen(function* () {
+          const item = yield* toCachedSource(row.provider, decoded);
+          const artistId = yield* cachedArtistId(item);
+          const facts = yield* cachedSongFacts(item);
+          const artistName = artistId === null ? undefined : nameOf(decoded, artistId);
+          return artistId === null || facts === null || artistName === undefined
+            ? []
+            : [{ provider: row.provider, artistId, artistName, ...facts }];
+        }),
+    }),
+  )).flat();
+
+  const mine = songs.filter((song) => song.provider === own.provider && song.artistId === ownId);
+  const ownRoot = mine[0]?.artistRoot;
+  const candidates = Arr.groupBy(
+    songs.filter(
+      (song) =>
+        song.provider !== own.provider &&
+        song.artistRoot !== ownRoot &&
+        artistNameKey(song.artistName) === key,
+    ),
+    (song) => `${song.provider}:${song.artistId}`,
+  );
+  const scored = Object.values(candidates).map((group) => {
+    const [first] = group;
+    const shared = mine.filter((song) =>
+      group.some(
+        (other) =>
+          other.titleKey === song.titleKey && fitsDuration(other.durationMs, song.durationMs),
+      ),
+    ).length;
+    return { scheme: first.provider, externalId: first.artistId, shared };
+  });
+  const proven = scored.filter((candidate) => candidate.shared >= minSharedSongs);
+  const unique = proven.filter(
+    (candidate) => proven.filter((other) => other.scheme === candidate.scheme).length === 1,
+  );
+  yield* linkFoundArtists({ scheme: own.provider, externalId: ownId }, unique);
+});
+
 export const copyDiscoveryLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const jobs = yield* Jobs;
@@ -387,6 +460,10 @@ export const copyDiscoveryLayer = Layer.effectDiscard(
           const targets = yield* discoveryTargets(sourceId, true);
           const query = targets.length === 0 ? null : songQuery(yield* songText(sourceId));
           if (query !== null) yield* discover(sourceId, query, targets);
+          yield* linkByCachedSongs(sourceId);
+          // The proven copies enter the catalog, so that the room can choose the best one
+          const { sameSong } = yield* groupOf(sourceId);
+          yield* Effect.forEach(sameSong, addProviderSource, { discard: true });
         }).pipe(orDieOnDatabaseError("copyDiscovery")),
       { homeOnly: true },
     );

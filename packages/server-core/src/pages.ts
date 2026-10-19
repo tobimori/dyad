@@ -51,7 +51,7 @@ import {
   queueEditions,
   splitEdition,
 } from "./albums.ts";
-import { linkFoundArtists } from "./artist-matching.ts";
+import { linkFoundArtists, minSharedSongs } from "./artist-matching.ts";
 import { artistIdOf } from "./artists.ts";
 import { uuidV5 } from "./ids.ts";
 import { normV1, simplifyText, withoutGuests } from "./normalize.ts";
@@ -819,9 +819,6 @@ const groupPage = (group: ArtistGroup) =>
       );
     }).pipe(orDieOnDatabaseError("artistPage")),
   );
-
-// Two songs, so that one song with a common title does not link two artists of the same name
-const minSharedSongs = 2;
 
 // Searches the curated providers that the group lacks for the name of the page. A found artist
 // joins the group when it is the only one of its provider with the name and at least

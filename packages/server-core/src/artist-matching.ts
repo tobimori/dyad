@@ -319,6 +319,9 @@ const NameSearchEvidence = Schema.Struct({
   intoExternalId: Schema.String,
 });
 
+/** Two songs, so that one song with a common title does not link two artists of the same name */
+export const minSharedSongs = 2;
+
 /**
  * Links each provider artist that a search by the name of the group of `member` found, and that
  * shares songs with the group, to that group. A MusicBrainz root stays the root; two groups with
