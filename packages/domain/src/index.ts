@@ -99,6 +99,12 @@ export const PartialDate = Schema.String.check(Schema.isPattern(/^\d{4}(-\d{2}(-
 export const ReleaseType = Schema.Literals(["album", "single", "ep"]);
 export const SecondaryType = Schema.Literals(["compilation", "live"]);
 
+/** A song of a library mark, with the copy that the owner saw */
+export class MarkedSong extends Schema.Class<MarkedSong>("MarkedSong")({
+  recordingId: RecordingId,
+  sourceId: Schema.NullOr(Schema.String),
+}) {}
+
 /** The owner's marks by each ID of the marked merge groups */
 export class LibraryMarks extends Schema.Class<LibraryMarks>("LibraryMarks")({
   recordings: Schema.Record(Schema.String, LibraryMark),
@@ -180,6 +186,8 @@ export class PageState extends Schema.Class<PageState>("PageState")({
 export class ArtistPage extends Schema.Class<ArtistPage>("ArtistPage")({
   /** The canonical ref, which can differ from the requested ref */
   ref: ArtistRef,
+  /** The root artist, to mark it. `null` for a page of local files. */
+  artistId: Schema.NullOr(Schema.String),
   /** `null` for a library page */
   providerName: Schema.NullOr(Schema.String),
   name: Schema.NullOr(Schema.String),
@@ -191,6 +199,8 @@ export class ArtistPage extends Schema.Class<ArtistPage>("ArtistPage")({
 export class AlbumPage extends Schema.Class<AlbumPage>("AlbumPage")({
   /** The canonical ref, which can differ from the requested ref */
   ref: AlbumRef,
+  /** The root album, to mark it. `null` before its edition is in the catalog. */
+  albumId: Schema.NullOr(Schema.String),
   /** `null` for a library page */
   providerName: Schema.NullOr(Schema.String),
   album: Schema.NullOr(AlbumCard),
@@ -954,15 +964,16 @@ const OwnerRpc = RpcGroup.make(
   Rpc.make("removePlaylistEntry", { payload: { entryId: Schema.String } }),
   Rpc.make("listMarks", { success: LibraryMarks }),
   /**
-   * `null` clears the owner's mark, so that the imports decide again. `sourceId`: the copy that the
-   * owner marked, so that a search result enters the catalog.
+   * `null` clears the owner's mark, so that the imports decide again. `songs`: the marked song, or
+   * the tracks of a marked album, with the copies that the owner saw, so that search and page
+   * results enter the catalog. An album save saves these songs.
    */
   Rpc.make("setLibraryMark", {
     payload: {
       entityType: LibraryEntityType,
       entityId: Schema.String.check(Schema.isUUID()),
       mark: Schema.NullOr(LibraryMark),
-      sourceId: Schema.NullOr(Schema.String),
+      songs: Schema.Array(MarkedSong),
     },
   }),
   // One place up or down

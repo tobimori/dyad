@@ -6,7 +6,7 @@ import {
 } from "@dyad/domain";
 import { Option } from "effect";
 
-export { libraryAlbumRef, libraryArtistRef } from "@dyad/domain";
+export { catalogArtistId, libraryAlbumRef, libraryArtistRef } from "@dyad/domain";
 
 // Everything after the namespace comes from the client and is untrusted
 const decodeKey = Option.liftThrowable(decodeURIComponent);
@@ -30,10 +30,6 @@ export const providerRefParts = (ref: string) => {
     ? Option.none()
     : Option.some({ provider, externalId });
 };
-
-/** The artist ID of a catalog artist ref */
-export const catalogArtistId = (ref: string) =>
-  ref.startsWith(catalogPrefix) ? Option.some(ref.slice(catalogPrefix.length)) : Option.none();
 
 /** The artist key of a library artist ref. `None` for another namespace or a malformed ref. */
 export const libraryArtistKey = (ref: string) =>

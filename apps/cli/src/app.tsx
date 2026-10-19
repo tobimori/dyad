@@ -6,7 +6,7 @@ import type {
   ServerAtoms,
   SessionClient,
 } from "@dyad/client-runtime";
-import { ArtistPage, RadioStart, segmentIndexAt } from "@dyad/domain";
+import { AlbumPage, ArtistPage, RadioStart, segmentIndexAt } from "@dyad/domain";
 import type {
   AlbumCard,
   AlbumRef,
@@ -556,7 +556,7 @@ export function App(props: {
       ...(recordingId === null
         ? []
         : [playlistActions.add([{ recordingId, sourceId: source.id }])]),
-      ...libraryMarks(source),
+      ...libraryMarks.song(source),
       ...(playingSet && identified.length > 0 && !savesSet
         ? [playlistActions.saveSet(titleOf(source), identified)]
         : []),
@@ -616,6 +616,20 @@ export function App(props: {
     return [];
   };
 
+  // The marks of the shown album or artist
+  const pageMarks = (loaded: AlbumPage | ArtistPage | null) => {
+    if (Schema.is(AlbumPage)(loaded) && loaded.albumId !== null) {
+      const tracks = loaded.tracks.flatMap((track) =>
+        track.edition === null ? [track.source] : [],
+      );
+      return libraryMarks.album(loaded.albumId, loaded.album?.title ?? "the album", tracks);
+    }
+    if (Schema.is(ArtistPage)(loaded) && loaded.artistId !== null) {
+      return libraryMarks.artist(loaded.artistId, loaded.name ?? "the artist");
+    }
+    return [];
+  };
+
   const pageActions = () => {
     const loaded = AsyncResult.isSuccess(page.result) ? page.result.value : null;
     const artist = loaded !== null && Schema.is(ArtistPage)(loaded) ? loaded.name : null;
@@ -623,10 +637,12 @@ export function App(props: {
       view === "browse" && route instanceof ArtistRoute && artist !== null
         ? [artistRadio(artist)]
         : [];
+    const marks = view === "browse" ? pageMarks(loaded) : [];
     if (view !== "browse" || route instanceof SectionRoute || pageSources.length === 0)
-      return radio;
+      return [...radio, ...marks];
 
     return [
+      ...marks,
       new Action({
         command: commands.playAll,
         label: "Play all",

@@ -9,6 +9,7 @@ import {
   RecordingId,
 } from "./index.ts";
 import type { SourceCopy, SourceSummary } from "./index.ts";
+import { Option } from "effect";
 
 /** The namespace of refs to the server's library folder. Provider IDs cannot be `library`. */
 export const libraryRefPrefix = "library:";
@@ -31,10 +32,19 @@ export const catalogRefPrefix = "catalog:";
 export const catalogArtistRef = (artistId: string) =>
   ArtistRef.make(`${catalogRefPrefix}${artistId}`);
 
+/** The artist ID of a catalog artist ref */
+export const catalogArtistId = (ref: string) =>
+  ref.startsWith(catalogRefPrefix)
+    ? Option.some(ref.slice(catalogRefPrefix.length))
+    : Option.none();
+
 const accountPrefix = "account:";
 
 /** The origin of library items and playlists from the user's linked account */
 export const accountOrigin = (provider: string) => `${accountPrefix}${provider}`;
+
+/** The origin of the songs that the save of an album added */
+export const albumOrigin = (albumId: string) => `album:${albumId}`;
 
 export const playlistSummary = (
   row: {

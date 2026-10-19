@@ -1,4 +1,5 @@
 import { formatDuration, titleOf } from "@dyad/client-runtime";
+import { catalogArtistId } from "@dyad/domain";
 import type {
   AlbumCard,
   ArtistCard,
@@ -7,7 +8,7 @@ import type {
   SourceSummary,
 } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
-import { Data } from "effect";
+import { Data, Option } from "effect";
 import { useRef, useState } from "react";
 
 import { useTheme } from "../theme/theme.ts";
@@ -274,13 +275,19 @@ function RowCells(props: {
     );
   }
 
+  const artistMark = Option.match(catalogArtistId(row.artist.ref), {
+    onNone: () => undefined,
+    onSome: marks.artist,
+  });
   return (
     <>
-      {marker}
+      <text width={markerWidth} fg={theme.accent}>
+        {props.playing ? "▶" : markerOf(artistMark, false)}
+      </text>
       <Cell
         text={row.artist.name}
         width={Math.max(0, props.width - markerWidth - gap)}
-        fg={theme.text}
+        fg={artistMark === "disliked" ? theme.faint : theme.text}
         bold={bold}
       />
     </>

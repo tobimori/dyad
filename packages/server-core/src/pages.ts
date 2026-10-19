@@ -47,6 +47,7 @@ import {
   albumEditions,
   albumPageRefs,
   assertEdition,
+  providerAlbum,
   queueEditions,
   splitEdition,
 } from "./albums.ts";
@@ -70,7 +71,7 @@ import {
 import { Tags, playableSources, position, sourceSummary } from "./sources.ts";
 import { sameNamedSong } from "./ranking.ts";
 import { providerOrder } from "./source-preference.ts";
-import { inLibrary, listLibrary, marksById, songEntries } from "./user-library.ts";
+import { entityMarks, inLibrary, listLibrary, marksById, songEntries } from "./user-library.ts";
 
 // Library pages come from the tags of the files on this replica. Binding will replace them with
 // catalog pages that resolve the same `library:` refs through `local_key`.
@@ -182,6 +183,8 @@ const pageTracks = (files: ReadonlyArray<LibraryFile>) =>
 class LibrarySource extends Data.Class<{
   readonly summary: SourceSummary;
   readonly artistName: string | null;
+  /** The root of the first credited artist */
+  readonly artistId: string | null;
 }> {}
 
 // The saved songs with a copy of a linked provider, one copy each. It reads only replicated rows,
@@ -197,14 +200,18 @@ const librarySources = Effect.gen(function* () {
       : [],
   );
 
-  // The first credited name, as the artist card shows it
+  // The first credited artist, as the artist card shows it
   const ids = [...new Set(summaries.flatMap((summary) => summary.recordingId ?? []))];
   const bound = alias(recording, "bound");
-  const names = new Map(
+  const credits = new Map(
     ids.length === 0
       ? []
       : (yield* db
-          .select({ id: bound.id, name: songArtist.name })
+          .select({
+            id: bound.id,
+            name: songArtist.name,
+            artistId: sql<string | null>`coalesce(${artist.mergedIntoId}, ${songArtist.artistId})`,
+          })
           .from(bound)
           .innerJoin(
             songArtist,
@@ -213,19 +220,26 @@ const librarySources = Effect.gen(function* () {
               eq(songArtist.position, 0),
             ),
           )
-          .where(inArray(bound.id, ids))).map((row) => [row.id, row.name]),
+          .leftJoin(artist, eq(artist.id, songArtist.artistId))
+          .where(inArray(bound.id, ids))).map((row) => [row.id, row]),
   );
-  return summaries.map(
-    (summary) =>
-      new LibrarySource({
-        summary,
-        artistName: names.get(summary.recordingId ?? "") ?? summary.artist,
-      }),
-  );
+  return summaries.map((summary) => {
+    const credit = credits.get(summary.recordingId ?? "");
+    return new LibrarySource({
+      summary,
+      artistName: credit?.name ?? summary.artist,
+      artistId: credit?.artistId ?? null,
+    });
+  });
 });
 
+// One card per catalog artist, so that the copies of several providers share it
 const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
-  [...groupBy(sources, (item) => item.summary.artistRef)].map(
+  [
+    ...groupBy(sources, (item) =>
+      item.artistId === null ? item.summary.artistRef : catalogArtistRef(item.artistId),
+    ),
+  ].map(
     ([ref, group]) =>
       new ArtistCard({
         ref,
@@ -233,6 +247,23 @@ const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
         artworkUrl: null,
       }),
   );
+
+// The followed artists that no saved song shows
+const followedArtistCards = Effect.fn(function* (shown: ReadonlySet<string>) {
+  const db = yield* Database;
+  const roots = [...(yield* entityMarks("artist"))].flatMap(([root, group]) =>
+    group.mark === "favorite" && !shown.has(catalogArtistRef(root)) ? [root] : [],
+  );
+  if (roots.length === 0) return [];
+  const rows = yield* db
+    .select({ id: artist.id, name: artist.name })
+    .from(artist)
+    .where(inArray(artist.id, roots));
+  return rows.map(
+    (row) =>
+      new ArtistCard({ ref: catalogArtistRef(row.id), name: row.name ?? "", artworkUrl: null }),
+  );
+});
 
 // The card types of an album type. A DJ mix and a broadcast have no card type yet.
 const cardTypes = (type: typeof album.$inferSelect.type) => {
@@ -347,7 +378,9 @@ export const listLibraryArtists = Effect.gen(function* () {
         artworkUrl: null,
       }),
   );
-  return [...local, ...libraryArtistCards(saved)].toSorted((a, b) => a.name.localeCompare(b.name));
+  const cards = [...local, ...libraryArtistCards(saved)];
+  const followed = yield* followedArtistCards(new Set(cards.map((card) => card.ref)));
+  return [...cards, ...followed].toSorted((a, b) => a.name.localeCompare(b.name));
 });
 
 /** The albums of the saved files on this replica and of the provider library, by artist and title */
@@ -400,6 +433,7 @@ const localArtistPage = Effect.fn(function* (ref: ArtistRef) {
 
   return new ArtistPage({
     ref: libraryArtistRef(key.value),
+    artistId: null,
     providerName: null,
     name:
       mostCommon(own.map((file) => albumArtistOf(file.tags))) ??
@@ -432,6 +466,7 @@ const localAlbumPage = Effect.fn(function* (ref: AlbumRef) {
 
   return new AlbumPage({
     ref: album.ref,
+    albumId: null,
     providerName: null,
     album,
     tracks: pageTracks(files),
@@ -1172,6 +1207,7 @@ const mixedArtistPage = Effect.fn(function* (
   const named = pages.find((page) => page.data !== null)?.data?.artist;
   return new ArtistPage({
     ref: pageRef,
+    artistId: root,
     providerName: null,
     name: catalog.name ?? named?.name ?? null,
     artworkUrl:
@@ -1290,6 +1326,7 @@ export const albumPage = (ref: AlbumRef) =>
             if (page.data === null) {
               return new AlbumPage({
                 ref,
+                albumId: null,
                 providerName: page.providerName,
                 album:
                   (yield* libraryAlbumCards(saved).pipe(orDieOnDatabaseError("albumPage")))[0] ??
@@ -1309,6 +1346,10 @@ export const albumPage = (ref: AlbumRef) =>
 
             return new AlbumPage({
               ref,
+              albumId:
+                (yield* providerAlbum(parts.provider, parts.externalId).pipe(
+                  orDieOnDatabaseError("providerAlbum"),
+                ))?.albumId ?? null,
               providerName: page.providerName,
               album: releaseCard(page.provider, page.data.release),
               tracks: yield* albumTracks(page, parts.externalId, page.data).pipe(

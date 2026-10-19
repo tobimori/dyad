@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 13;
+export const syncProtocolVersion = 14;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -20,9 +20,12 @@ const Uuid = Schema.String.check(Schema.isUUID());
 export const LibraryEntityType = Schema.Literals(["recording", "album", "artist"]);
 export type LibraryEntityType = typeof LibraryEntityType.Type;
 
-/** `user` for a save in Dyad, `account:<provider>` for an import from a linked account */
+/**
+ * `user` for a save in Dyad, `account:<provider>` for an import from a linked account, `album:<album
+ * ID>` for the songs of a saved album
+ */
 export const LibraryOrigin = Schema.String.check(
-  Schema.isPattern(/^(user|account:.+)$/),
+  Schema.isPattern(/^(user|account:.+|album:.+)$/),
   Schema.isMaxLength(200),
 );
 

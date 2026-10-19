@@ -19,7 +19,8 @@ export const libraryItem = sqliteTable(
     // The bound recording, album or artist of what the user marked, not its merge root. Views
     // resolve the root, so that merges and splits follow what the user marked.
     entityId: text("entity_id").notNull(),
-    // `user` for a save in Dyad, `account:<provider>` for an import from the user's linked account
+    // `user` for a save in Dyad, `account:<provider>` for an import from the user's linked account,
+    // `album:<album ID>` for the songs of a saved album
     origin: text("origin").notNull(),
     // `favorite` includes saved. A `removed` user row keeps an import from adding the entity again.
     mark: text("mark", { enum: ["saved", "favorite", "disliked", "removed"] })

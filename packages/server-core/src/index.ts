@@ -170,8 +170,8 @@ export const serverRoutes = Layer.unwrap(
       removePlaylistEntry: ({ entryId }) =>
         removePlaylistEntry(entryId).pipe(orDieOnDatabaseError("removePlaylistEntry")),
       listMarks: () => listMarks.pipe(orDieOnDatabaseError("listMarks")),
-      setLibraryMark: ({ entityType, entityId, mark, sourceId }) =>
-        setLibraryMark(entityType, entityId, mark, sourceId).pipe(
+      setLibraryMark: ({ entityType, entityId, mark, songs }) =>
+        setLibraryMark(entityType, entityId, mark, songs).pipe(
           orDieOnDatabaseError("setLibraryMark"),
         ),
       movePlaylistEntry: ({ playlistId, entryId, direction }) =>

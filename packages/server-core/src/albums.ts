@@ -142,11 +142,8 @@ const originalFirst = (a: typeof edition.$inferSelect, b: typeof edition.$inferS
   Number(a.editionWords !== null) - Number(b.editionWords !== null) ||
   a.id.localeCompare(b.id);
 
-/**
- * The editions of the album of a provider edition, the original first, with the provider albums
- * that give their tracks. Empty when the album has only one edition.
- */
-export const albumEditions = Effect.fn("albumEditions")(function* (
+/** The root edition and album of a provider album, once its edition is in the catalog */
+export const providerAlbum = Effect.fn("providerAlbum")(function* (
   provider: string,
   externalId: string,
 ) {
@@ -156,13 +153,26 @@ export const albumEditions = Effect.fn("albumEditions")(function* (
     .select({ root: sql<string>`coalesce(${edition.mergedIntoId}, ${edition.id})` })
     .from(edition)
     .where(eq(edition.id, id));
-  if (page === undefined) return [];
+  if (page === undefined) return null;
   const [owner] = yield* db
     .select({ id: sql<string>`coalesce(${album.mergedIntoId}, ${album.id})` })
     .from(edition)
     .innerJoin(album, eq(album.id, edition.albumId))
     .where(eq(edition.id, page.root));
-  if (owner === undefined) return [];
+  return owner === undefined ? null : { editionId: page.root, albumId: owner.id };
+});
+
+/**
+ * The editions of the album of a provider edition, the original first, with the provider albums
+ * that give their tracks. Empty when the album has only one edition.
+ */
+export const albumEditions = Effect.fn("albumEditions")(function* (
+  provider: string,
+  externalId: string,
+) {
+  const db = yield* Database;
+  const owner = yield* providerAlbum(provider, externalId);
+  if (owner === null) return [];
 
   const editions = yield* db
     .select({ edition })
@@ -171,7 +181,7 @@ export const albumEditions = Effect.fn("albumEditions")(function* (
     .where(
       and(
         isNull(edition.mergedIntoId),
-        sql`coalesce(${album.mergedIntoId}, ${album.id}) = ${owner.id}`,
+        sql`coalesce(${album.mergedIntoId}, ${album.id}) = ${owner.albumId}`,
       ),
     );
   if (editions.length < 2) return [];
@@ -197,7 +207,7 @@ export const albumEditions = Effect.fn("albumEditions")(function* (
     .toSorted(originalFirst)
     .map((row) => ({
       words: row.editionWords ?? row.title,
-      hasPage: row.id === page.root,
+      hasPage: row.id === owner.editionId,
       // `<plugin>:<album ID>`
       albums: lists.flatMap((list) => (list.root === row.id ? [list.originRef] : [])),
     }));

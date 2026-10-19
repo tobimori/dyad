@@ -17,6 +17,7 @@ import {
   PlaylistNotFound,
   PlaylistRow,
   RecordingId,
+  albumOrigin,
   libraryView,
 } from "@dyad/domain";
 import type { LibraryEntityType, LibraryMark, PlaylistLink, PlaylistLinkState } from "@dyad/domain";
@@ -141,8 +142,8 @@ const effectiveMark = (
   return rows.some((row) => row.mark === "favorite") ? "favorite" : "saved";
 };
 
-// The effective mark of each marked entity, by merge root, with the marked entity IDs
-const entityMarks = Effect.fn(function* (entityType: LibraryEntityType) {
+/** The effective mark of each marked entity, by merge root, with the marked entity IDs */
+export const entityMarks = Effect.fn(function* (entityType: LibraryEntityType) {
   const db = yield* Database;
   const table = markTables[entityType];
   const rows = yield* db
@@ -260,6 +261,54 @@ export const listMarks = Effect.gen(function* () {
 /** Whether a mark puts the entity in the library */
 export const inLibrary = (mark: LibraryMark) => mark === "saved" || mark === "favorite";
 
+// The songs of a saved album have their own origin, so that removing the album removes only them.
+// Saving the album again brings back the songs that the owner removed.
+const saveAlbumSongs = Effect.fn(function* (
+  albumId: string,
+  mark: LibraryMark | null,
+  songs: ReadonlyArray<{ readonly recordingId: string }>,
+) {
+  const db = yield* Database;
+  const clock = yield* HlcClock;
+  const saved = mark !== null && inLibrary(mark);
+  const ids = new Set(saved ? songs.map((song) => song.recordingId) : []);
+  yield* Effect.forEach(
+    yield* groupOf("album", albumId),
+    (member) => setMembership(albumOrigin(member), member === albumId ? ids : new Set(), true),
+    { discard: true },
+  );
+  if (ids.size === 0) return;
+
+  const rootOf = yield* rootsOf([...ids]);
+  const members = yield* membersOf("recording", [...new Set([...ids].map(rootOf))]);
+  const removed = yield* db
+    .select()
+    .from(libraryItem)
+    .where(
+      and(
+        eq(libraryItem.entityType, "recording"),
+        eq(libraryItem.origin, "user"),
+        eq(libraryItem.mark, "removed"),
+        eq(libraryItem.deleted, false),
+        inArray(libraryItem.entityId, members),
+      ),
+    );
+  if (removed.length === 0) return;
+  const changeSeq = yield* nextChangeSeq;
+  yield* Effect.forEach(
+    removed,
+    ({ changeSeq: _seq, ...row }) =>
+      Effect.gen(function* () {
+        const hlc = yield* clock.next;
+        yield* writeRow(
+          new LibraryItemRow({ table: "library_item", ...row, hlc, deleted: true }),
+          changeSeq,
+        );
+      }),
+    { discard: true },
+  );
+});
+
 /**
  * Sets the owner's mark of an entity. `null` clears it, so that the imports decide again. `removed`
  * takes the entity out of the library: a row only when an import has it, so that the next import
@@ -269,11 +318,11 @@ export const setLibraryMark = Effect.fn("setLibraryMark")(function* (
   entityType: LibraryEntityType,
   entityId: string,
   mark: LibraryMark | null,
-  sourceId: string | null,
+  songs: ReadonlyArray<{ readonly recordingId: string; readonly sourceId: string | null }>,
 ) {
   const db = yield* Database;
-  if (entityType === "recording")
-    yield* addReferencedSources([{ sourceId, recordingId: entityId }]);
+  yield* addReferencedSources(songs);
+  if (entityType === "album") yield* saveAlbumSongs(entityId, mark, songs);
   const clock = yield* HlcClock;
   const members = yield* groupOf(entityType, entityId);
   const rows = yield* db
@@ -287,12 +336,11 @@ export const setLibraryMark = Effect.fn("setLibraryMark")(function* (
   if (mark === null || (mark === "removed" && !imported)) {
     yield* Effect.forEach(
       ownRows.filter((row) => !row.deleted),
-      (row) =>
+      ({ changeSeq: _seq, ...row }) =>
         Effect.gen(function* () {
-          const { changeSeq: _seq, ...values } = row;
           const hlc = yield* clock.next;
           yield* writeRow(
-            new LibraryItemRow({ table: "library_item", ...values, hlc, deleted: true }),
+            new LibraryItemRow({ table: "library_item", ...row, hlc, deleted: true }),
             changeSeq,
           );
         }),
