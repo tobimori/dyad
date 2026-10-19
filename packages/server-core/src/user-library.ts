@@ -27,6 +27,7 @@ import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
 import { generateKeyBetween } from "fractional-indexing";
 
 import { uuidV5 } from "./ids.ts";
+import { queueMarkWrites } from "./mark-writes.ts";
 import { providerOrder } from "./source-preference.ts";
 import { addReferencedSources, playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
@@ -320,57 +321,60 @@ const saveAlbumSongs = Effect.fn(function* (
  * takes the entity out of the library: a row only when an import has it, so that the next import
  * does not add it again.
  */
-export const setLibraryMark = Effect.fn("setLibraryMark")(function* (
-  entityType: LibraryEntityType,
-  entityId: string,
-  mark: LibraryMark | null,
-  songs: ReadonlyArray<{ readonly recordingId: string; readonly sourceId: string | null }>,
-) {
-  const db = yield* Database;
-  yield* addReferencedSources(songs);
-  if (entityType === "album") yield* saveAlbumSongs(entityId, mark, songs);
-  const clock = yield* HlcClock;
-  const members = yield* groupOf(entityType, entityId);
-  const rows = yield* db
-    .select()
-    .from(libraryItem)
-    .where(and(eq(libraryItem.entityType, entityType), inArray(libraryItem.entityId, members)));
-  const ownRows = rows.filter((row) => row.origin === "user");
-  const changeSeq = yield* nextChangeSeq;
+export const setLibraryMark = Effect.fn("setLibraryMark")(
+  function* (
+    entityType: LibraryEntityType,
+    entityId: string,
+    mark: LibraryMark | null,
+    songs: ReadonlyArray<{ readonly recordingId: string; readonly sourceId: string | null }>,
+  ) {
+    const db = yield* Database;
+    yield* addReferencedSources(songs);
+    if (entityType === "album") yield* saveAlbumSongs(entityId, mark, songs);
+    const clock = yield* HlcClock;
+    const members = yield* groupOf(entityType, entityId);
+    const rows = yield* db
+      .select()
+      .from(libraryItem)
+      .where(and(eq(libraryItem.entityType, entityType), inArray(libraryItem.entityId, members)));
+    const ownRows = rows.filter((row) => row.origin === "user");
+    const changeSeq = yield* nextChangeSeq;
 
-  const imported = rows.some((row) => row.origin !== "user" && !row.deleted);
-  if (mark === null || (mark === "removed" && !imported)) {
-    yield* Effect.forEach(
-      ownRows.filter((row) => !row.deleted),
-      ({ changeSeq: _seq, ...row }) =>
-        Effect.gen(function* () {
-          const hlc = yield* clock.next;
-          yield* writeRow(
-            new LibraryItemRow({ table: "library_item", ...row, hlc, deleted: true }),
-            changeSeq,
-          );
-        }),
-      { discard: true },
+    const imported = rows.some((row) => row.origin !== "user" && !row.deleted);
+    if (mark === null || (mark === "removed" && !imported)) {
+      yield* Effect.forEach(
+        ownRows.filter((row) => !row.deleted),
+        ({ changeSeq: _seq, ...row }) =>
+          Effect.gen(function* () {
+            const hlc = yield* clock.next;
+            yield* writeRow(
+              new LibraryItemRow({ table: "library_item", ...row, hlc, deleted: true }),
+              changeSeq,
+            );
+          }),
+        { discard: true },
+      );
+      return;
+    }
+
+    const own = ownRows.find((row) => row.entityId === entityId);
+    yield* writeRow(
+      new LibraryItemRow({
+        table: "library_item",
+        id: own?.id ?? (yield* libraryItemId({ entityType, entityId, origin: "user" })),
+        entityType,
+        entityId,
+        origin: "user",
+        mark,
+        addedAt: own === undefined || own.deleted ? yield* Clock.currentTimeMillis : own.addedAt,
+        hlc: yield* clock.next,
+        deleted: false,
+      }),
+      changeSeq,
     );
-    return;
-  }
-
-  const own = ownRows.find((row) => row.entityId === entityId);
-  yield* writeRow(
-    new LibraryItemRow({
-      table: "library_item",
-      id: own?.id ?? (yield* libraryItemId({ entityType, entityId, origin: "user" })),
-      entityType,
-      entityId,
-      origin: "user",
-      mark,
-      addedAt: own === undefined || own.deleted ? yield* Clock.currentTimeMillis : own.addedAt,
-      hlc: yield* clock.next,
-      deleted: false,
-    }),
-    changeSeq,
-  );
-});
+  },
+  Effect.tap(() => queueMarkWrites),
+);
 
 /** Adds a playlist of a remote playlist, linked to it */
 export const addLinkedPlaylist = Effect.fn("addLinkedPlaylist")(function* (

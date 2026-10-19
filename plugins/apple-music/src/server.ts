@@ -6,6 +6,7 @@ import {
   ProviderAudio,
   ProviderError,
   ProviderLibrary,
+  ProviderMarks,
   ProviderPlaylists,
   Recommender,
 } from "@dyad/plugin";
@@ -35,6 +36,8 @@ import {
   readLibrarySongs,
   readPlaylists,
   readPlaylistTracks,
+  saveSongs,
+  setFavorites,
 } from "./library.ts";
 import { readCharts, readPersonal } from "./home.ts";
 import { readAlbum, readArtist } from "./pages.ts";
@@ -261,6 +264,15 @@ export const appleMusicPlugin = new Plugin({
           ),
       });
 
+      const marks = new ProviderMarks({
+        save: (credentials, songs) =>
+          readLibrary((session) => saveSongs(libraryPace, session, songs))(credentials),
+        favorite: (credentials, songs, favorite) =>
+          readLibrary((session) => setFavorites(libraryPace, session, songs, favorite))(
+            credentials,
+          ),
+      });
+
       const link = Effect.fn(
         function* (credentials: Credentials) {
           const token = yield* mediaUserToken(credentials);
@@ -288,6 +300,7 @@ export const appleMusicPlugin = new Plugin({
           account: { login, link },
           library,
           playlists,
+          marks,
           metadataPriority: 30,
           download: { leaseDays: 30 },
           // Library IDs such as `i.abc` have no public page. The site picks the storefront.

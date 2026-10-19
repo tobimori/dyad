@@ -1,0 +1,1 @@
+ALTER TABLE `library_sync_state` ADD `marks_seq` integer;

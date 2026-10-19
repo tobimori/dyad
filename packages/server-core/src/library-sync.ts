@@ -21,6 +21,7 @@ import type {
   LibrarySnapshot,
   LibrarySong,
   ProviderLibrary,
+  ProviderMarks,
 } from "@dyad/plugin";
 import { and, asc, count, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { HlcClock } from "@dyad/sync";
@@ -29,14 +30,16 @@ import { Clock, Data, Effect, Equal, Layer, Option, Schema } from "effect";
 import { queueEditions } from "./albums.ts";
 import { boundRecordingId, uuidV5 } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
+import { MarkWritesPayload, markWritesKind } from "./mark-writes.ts";
 import { PlaylistPushPayload, playlistPushKind, queuePlaylistPush } from "./playlist-push.ts";
 import { cacheProviderSources } from "./provider-cache.ts";
 import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
-import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
+import { currentChangeSeq, nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { readRow } from "./replication.ts";
 import {
   addLinkedPlaylist,
+  marksById,
   mergeRemoteEntries,
   patchPlaylist,
   rootsOf,
@@ -637,6 +640,151 @@ const runPlaylistPush = Effect.fn(
   Effect.catchTag("AccountChanged", () => Effect.void),
 );
 
+/**
+ * Sends the owner's song marks since the cursor: saves, favorites and removed favorites. Each change
+ * goes out once. The `account:` rows then show what the provider has, so that a later change back
+ * goes out too; the next import confirms them.
+ */
+const writeMarks = Effect.fn(function* (account: LinkedAccount, writes: ProviderMarks) {
+  const db = yield* Database;
+  const origin = accountOrigin(account.provider);
+  const head = yield* currentChangeSeq;
+  const [state] = yield* db
+    .select({ marksSeq: librarySyncState.marksSeq })
+    .from(librarySyncState)
+    .where(eq(librarySyncState.provider, account.provider));
+  const cursor = state?.marksSeq ?? head;
+  const moveCursor = writeIfLinked(account, writeState(account, { marksSeq: head }));
+
+  const changed = yield* db
+    .selectDistinct({ entityId: libraryItem.entityId })
+    .from(libraryItem)
+    .where(
+      and(
+        eq(libraryItem.entityType, "recording"),
+        sql`${libraryItem.changeSeq} > ${cursor} and ${libraryItem.changeSeq} <= ${head}`,
+        sql`${libraryItem.origin} not like 'account:%'`,
+      ),
+    );
+  if (changed.length === 0) return yield* moveCursor;
+
+  const rootOf = yield* rootsOf(changed.map((row) => row.entityId));
+  const roots = [...new Set(changed.map((row) => rootOf(row.entityId)))];
+  const marks = yield* marksById("recording");
+  const root = sql<string>`coalesce(${recording.mergedIntoId}, ${recording.id})`;
+  const copies = yield* db
+    .select({ externalId: source.externalId, root })
+    .from(source)
+    .innerJoin(recording, eq(recording.id, source.recordingId))
+    .where(
+      and(
+        eq(source.provider, account.provider),
+        eq(source.availability, "available"),
+        inArray(root, roots),
+      ),
+    )
+    .orderBy(asc(source.id));
+  const copyOf = new Map(copies.toReversed().map((copy) => [copy.root, copy.externalId]));
+  const provided = yield* db
+    .select({ entityId: libraryItem.entityId, mark: libraryItem.mark, root })
+    .from(libraryItem)
+    .innerJoin(recording, eq(recording.id, libraryItem.entityId))
+    .where(
+      and(eq(libraryItem.origin, origin), eq(libraryItem.deleted, false), inArray(root, roots)),
+    );
+  const providedOf = new Map(provided.map((row) => [row.root, row]));
+
+  const songs = yield* Effect.forEach(
+    roots.flatMap((song) => {
+      const externalId = copyOf.get(song);
+      return externalId === undefined ? [] : [{ song, externalId }];
+    }),
+    ({ song, externalId }) =>
+      Effect.gen(function* () {
+        const provider = providedOf.get(song);
+        return {
+          externalId,
+          // The import binds the account's copy to this recording
+          entityId: provider?.entityId ?? (yield* boundRecordingId(account.provider, externalId)),
+          mark: marks.get(song),
+          has: provider?.mark,
+        };
+      }),
+  );
+  const saves = songs.filter(
+    (song) => (song.mark === "saved" || song.mark === "favorite") && song.has === undefined,
+  );
+  const favorites = songs.filter((song) => song.mark === "favorite" && song.has !== "favorite");
+  const unfavorites = songs.filter((song) => song.mark !== "favorite" && song.has === "favorite");
+  const externalIds = (list: typeof songs) => list.map((song) => song.externalId);
+
+  const saved = writes.save === undefined ? [] : saves;
+  if (writes.save !== undefined && saved.length > 0) {
+    yield* writes.save(account.credentials, externalIds(saved));
+  }
+  const favorite = writes.favorite;
+  if (favorite !== undefined && favorites.length > 0) {
+    yield* favorite(account.credentials, externalIds(favorites), true);
+  }
+  if (favorite !== undefined && unfavorites.length > 0) {
+    yield* favorite(account.credentials, externalIds(unfavorites), false);
+  }
+
+  const marksNow = new Map([
+    ...saved.map((song) => [song.entityId, "saved" as const] as const),
+    ...(favorite === undefined ? [] : unfavorites).map(
+      (song) => [song.entityId, "saved" as const] as const,
+    ),
+    ...(favorite === undefined ? [] : favorites).map(
+      (song) => [song.entityId, "favorite" as const] as const,
+    ),
+  ]);
+  yield* writeIfLinked(
+    account,
+    Effect.gen(function* () {
+      yield* setMembership(origin, marksNow, false);
+      yield* writeState(account, { marksSeq: head });
+    }),
+  );
+  yield* Effect.logInfo("Library marks sent to the provider").pipe(
+    Effect.annotateLogs({
+      provider: account.provider,
+      saved: saved.length,
+      favorites: favorite === undefined ? 0 : favorites.length,
+      removedFavorites: favorite === undefined ? 0 : unfavorites.length,
+    }),
+  );
+});
+
+const runMarkWrites = Effect.fn(
+  function* (payload: typeof MarkWritesPayload.Type) {
+    const providers = yield* Providers;
+    const writes = providers.get(payload.provider)?.marks;
+    const account = yield* loadAccount(payload.provider);
+    if (writes === undefined || Option.isNone(account)) return;
+
+    yield* writeMarks(account.value, writes).pipe(
+      Effect.catchTag("LibraryError", (error) =>
+        Effect.gen(function* () {
+          yield* Effect.logWarning("Library marks write failed").pipe(
+            Effect.annotateLogs({
+              provider: payload.provider,
+              kind: error.kind,
+              reason: error.reason,
+            }),
+          );
+          if (error.kind === "account") return;
+          if (error.kind === "failed") return yield* error;
+          return yield* new RetryLater({
+            retryAfterSeconds: error.retryAfterSeconds ?? throttleBaseSeconds,
+          });
+        }),
+      ),
+    );
+  },
+  Effect.catchTag("AccountChanged", () => Effect.void),
+);
+
 const importLibrary = Effect.fn(function* (account: LinkedAccount, library: ProviderLibrary) {
   const db = yield* Database;
   const jobs = yield* Jobs;
@@ -751,10 +899,20 @@ const queueLibraryEditions = Effect.fn(function* (provider: string) {
 });
 
 export const queueLibrarySync = Effect.fn("queueLibrarySync")(function* (provider: string) {
+  const db = yield* Database;
   const jobs = yield* Jobs;
   const providers = yield* Providers;
   if (providers.get(provider)?.library === undefined) return;
 
+  // The marks from before the link stay in Dyad
+  const head = yield* currentChangeSeq;
+  yield* db
+    .insert(librarySyncState)
+    .values({ provider, marksSeq: head })
+    .onConflictDoUpdate({
+      target: librarySyncState.provider,
+      set: { marksSeq: sql`coalesce(${librarySyncState.marksSeq}, ${head})` },
+    });
   yield* jobs.enqueue(jobKind, provider, { provider });
 });
 
@@ -778,6 +936,7 @@ export const forgetLibrary = Effect.fn("forgetLibrary")(function* (provider: str
   yield* touchGroups(removed.map((row) => row.recordingId));
   yield* db.delete(libraryRemotePlaylist).where(eq(libraryRemotePlaylist.provider, provider));
   yield* jobs.cancel(jobKind, provider);
+  yield* jobs.cancel(markWritesKind, provider);
 });
 
 export const syncLibrary = Effect.fn("syncLibrary")(function* (provider: string) {
@@ -849,6 +1008,7 @@ export const librarySyncLayer = Layer.effectDiscard(
 
     yield* jobs.register(jobKind, SyncPayload, runLibrarySync);
     yield* jobs.register(playlistPushKind, PlaylistPushPayload, runPlaylistPush);
+    yield* jobs.register(markWritesKind, MarkWritesPayload, runMarkWrites);
 
     const accounts = yield* db
       .select({ provider: providerAccount.provider })

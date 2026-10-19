@@ -585,5 +585,12 @@
       "\nALTER TABLE `library_remote_track` DROP COLUMN `seen_at`;",
       "\nDELETE FROM `library_item` WHERE `entity_type` = 'release';\n"
     ]
+  },
+  {
+    "name": "20261019181411_add_marks_write_cursor",
+    "folderMillis": 1792433651000,
+    "hash": "d8d85ce6e1b4fb647325a5ed909f2b9feb233bdc116e80e5ba6d4543c4623862",
+    "bps": true,
+    "sql": ["ALTER TABLE `library_sync_state` ADD `marks_seq` integer;"]
   }
 ]

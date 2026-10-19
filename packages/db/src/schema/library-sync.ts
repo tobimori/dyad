@@ -26,6 +26,8 @@ export const librarySyncState = sqliteTable("library_sync_state", {
   error: text("error"),
   // Throttled runs in a row. Sets the wait before the next run.
   throttleCount: integer("throttle_count").notNull().default(0),
+  // The owner's song marks up to this `change_seq` went to the account. Starts at the link.
+  marksSeq: integer("marks_seq"),
 });
 
 /**

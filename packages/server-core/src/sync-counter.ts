@@ -20,6 +20,13 @@ export const nextChangeSeq = Effect.gen(function* () {
   return row.changeSeq;
 });
 
+/** The newest `change_seq` of this replica */
+export const currentChangeSeq = Effect.gen(function* () {
+  const db = yield* Database;
+  const [row] = yield* db.select({ value: replicaIdentity.changeSeq }).from(replicaIdentity);
+  return row?.value ?? 0;
+});
+
 /**
  * Sets a new `revision` on the current root of each recording, so that clients load its merge
  * group again. Call it after the change.

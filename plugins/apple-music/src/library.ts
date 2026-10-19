@@ -252,6 +252,47 @@ export const addPlaylistSongs = (
     { discard: true },
   );
 
+// `ids[songs]` takes many IDs; a write answers 202 without a body
+const writeSongIds = (
+  pace: Pace,
+  session: AppleSession,
+  method: "POST" | "DELETE",
+  path: string,
+  songIds: ReadonlyArray<string>,
+  stage: string,
+) =>
+  Effect.forEach(
+    Arr.chunksOf(songIds, 100),
+    (chunk) => {
+      const request = HttpClientRequest.make(method)(`${amp}${path}`).pipe(
+        HttpClientRequest.setUrlParam("ids[songs]", chunk.join(",")),
+        authorize(session),
+      );
+      return pace(send(request)).pipe(Effect.mapError(appleError(stage, request)));
+    },
+    { discard: true },
+  );
+
+/** Adds catalog songs to the library */
+export const saveSongs = (pace: Pace, session: AppleSession, songIds: ReadonlyArray<string>) =>
+  writeSongIds(pace, session, "POST", "/v1/me/library", songIds, "save songs");
+
+/** Adds catalog songs to the favorites, or removes them */
+export const setFavorites = (
+  pace: Pace,
+  session: AppleSession,
+  songIds: ReadonlyArray<string>,
+  favorite: boolean,
+) =>
+  writeSongIds(
+    pace,
+    session,
+    favorite ? "POST" : "DELETE",
+    "/v1/me/favorites",
+    songIds,
+    favorite ? "add favorites" : "remove favorites",
+  );
+
 /** One request. The newest song and the count change when songs are added or removed. */
 export const probeLibrary = Effect.fn("probeLibrary")(function* (
   pace: Pace,

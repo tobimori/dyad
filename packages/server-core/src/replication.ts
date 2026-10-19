@@ -25,6 +25,7 @@ import { projectRecordings } from "./assertions.ts";
 import { isrcRecordingId } from "./ids.ts";
 import { deriveArtists } from "./artist-matching.ts";
 import { resolveRoots } from "./matching.ts";
+import { queueMarkWrites } from "./mark-writes.ts";
 import { pushIfHeld } from "./playlist-push.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { EntryText, deriveEntryMatches, deriveTracklists } from "./tracklists.ts";
@@ -333,5 +334,12 @@ export const mergePeerRows = Effect.fn("mergePeerRows")(function* (rows: Readonl
     }),
   );
   yield* Effect.forEach(playlistIds, pushIfHeld, { discard: true });
+  const marked = changed.some(
+    (row) =>
+      row.table === "library_item" &&
+      row.entityType === "recording" &&
+      !row.origin.startsWith("account:"),
+  );
+  if (marked) yield* queueMarkWrites;
   return adopted.length > 0 ? yield* adoptedSeq : undefined;
 });

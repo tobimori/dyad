@@ -1,7 +1,8 @@
-import { replicaIdentity } from "@dyad/db";
-import { Database, orDieOnDatabaseError } from "@dyad/db/node";
+import { orDieOnDatabaseError } from "@dyad/db/node";
 import { SyncHint } from "@dyad/domain";
 import { Context, Effect, Layer, PubSub, Ref, Schedule, Stream } from "effect";
+
+import { currentChangeSeq } from "./sync-counter.ts";
 
 /** Publishes after each commit that took a `change_seq` */
 export class SyncHub extends Context.Service<SyncHub, PubSub.PubSub<void>>()(
@@ -13,16 +14,9 @@ export class SyncHub extends Context.Service<SyncHub, PubSub.PubSub<void>>()(
 export const syncHubLayer = Layer.effect(
   SyncHub,
   Effect.gen(function* () {
-    const db = yield* Database;
     const hub = yield* PubSub.sliding<void>(1);
 
-    const counter = db
-      .select({ value: replicaIdentity.changeSeq })
-      .from(replicaIdentity)
-      .pipe(
-        Effect.map(([row]) => row?.value ?? 0),
-        orDieOnDatabaseError("watchSync"),
-      );
+    const counter = currentChangeSeq.pipe(orDieOnDatabaseError("watchSync"));
     const last = yield* Ref.make(yield* counter);
 
     yield* counter.pipe(

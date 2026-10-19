@@ -291,6 +291,25 @@ export class ProviderPlaylists extends Data.Class<{
 }> {}
 
 /**
+ * Writes the owner's song marks to the library of a linked account. Songs are
+ * `ProviderSource.externalId` values. The core sends saves and favorites once, after each change.
+ * It does not remove songs from the library: removals stay in Dyad.
+ */
+export class ProviderMarks extends Data.Class<{
+  /** Adds the songs to the library */
+  readonly save?: (
+    credentials: Credentials,
+    songs: ReadonlyArray<string>,
+  ) => Effect.Effect<void, LibraryError>;
+  /** Adds the songs to the favorites, or removes them from the favorites */
+  readonly favorite?: (
+    credentials: Credentials,
+    songs: ReadonlyArray<string>,
+    favorite: boolean,
+  ) => Effect.Effect<void, LibraryError>;
+}> {}
+
+/**
  * A streaming service. The core calls each function with the credentials of the user who plays or
  * searches. Without `account`, the credentials are empty.
  */
@@ -360,6 +379,8 @@ export class Provider extends Data.Class<{
   readonly library?: ProviderLibrary;
   /** Only for providers with `library`, which reads the playlists */
   readonly playlists?: ProviderPlaylists;
+  /** Only for providers with `library`, whose import reads the marks back */
+  readonly marks?: ProviderMarks;
   /** Higher wins when providers share a recording. Curated catalogs rank above uploads */
   readonly metadataPriority?: number;
   /**
