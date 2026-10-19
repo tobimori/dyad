@@ -22,6 +22,9 @@ class SavedPlayback extends Schema.Class<SavedPlayback>("SavedPlayback")({
   group: Schema.Array(OutputId).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   shuffle: Schema.Boolean,
   repeat: RepeatMode,
+  autoplay: Playback.fields.autoplay,
+  crossfadeSeconds: Playback.fields.crossfadeSeconds,
+  djStyle: Playback.fields.djStyle,
 }) {}
 
 /**
@@ -84,6 +87,9 @@ export const saveSession = Effect.fn("saveSession")(function* (
         group: playback.group,
         shuffle: playback.shuffle,
         repeat: playback.repeat,
+        autoplay: playback.autoplay,
+        crossfadeSeconds: playback.crossfadeSeconds,
+        djStyle: playback.djStyle,
       }),
     ),
     updatedAt: yield* Clock.currentTimeMillis,

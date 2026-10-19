@@ -127,11 +127,15 @@ class MovedQueue extends Data.Class<{
 }> {}
 
 // The device players of all rooms: a device plays its own room, or joins the group of another
-const makeHousehold = () => ({
-  players: new Map<OutputId, Player>(),
-  connections: new Set<Connection>(),
-  nextGeneration: 1,
-});
+const makeHousehold = (urlOutputs: typeof Outputs.Service) => {
+  const players = new Map<OutputId, Player>();
+  return {
+    players,
+    connections: new Set<Connection>(),
+    nextGeneration: 1,
+    available: (outputId: OutputId) => players.has(outputId) || urlOutputs.has(outputId),
+  };
+};
 
 // The play of the current entry since the output started it
 class OpenPlay extends Data.Class<{
@@ -198,7 +202,7 @@ const makeSession = Effect.fn(function* (
     }
   };
 
-  const available = (outputId: OutputId) => players.has(outputId) || urlOutputs.has(outputId);
+  const available = household.available;
 
   const timedCapable = (outputId: OutputId) =>
     players.has(outputId)
@@ -1280,7 +1284,7 @@ const makeSessions = Effect.gen(function* () {
         >
       >
     >();
-  const household = makeHousehold();
+  const household = makeHousehold(urlOutputs);
   const rooms = new Map<OutputId, Session>();
   // The last known name of each room's output
   const names = new Map<OutputId, string>();
@@ -1302,8 +1306,7 @@ const makeSessions = Effect.gen(function* () {
     ),
     ...urlOutputs.list(),
   ];
-  const available = (outputId: OutputId) =>
-    household.players.has(outputId) || urlOutputs.has(outputId);
+  const available = household.available;
 
   const broadcastOutputs = () => {
     const event = SessionEvent.cases.OutputsChanged.make({ outputs: outputs() });
