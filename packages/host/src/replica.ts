@@ -42,10 +42,8 @@ import { ServerConfig } from "./config.ts";
 
 const builtinPlugins: ReadonlyArray<Plugin> = [
   localFilesPlugin,
-  airplayPlugin,
   appleMusicPlugin,
   bandcampPlugin,
-  castPlugin,
   deezerPlugin,
   hypemPlugin,
   mixesdbPlugin,
@@ -53,6 +51,10 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
   soundcloudPlugin,
   youtubePlugin,
 ];
+
+// The server replica holds the rooms of the speakers. A device replica holds only the room of its
+// device, so that two replicas never drive one speaker.
+const outputPlugins: ReadonlyArray<Plugin> = [airplayPlugin, castPlugin];
 
 /** A full replica: database, plugins, jobs, replication and the HTTP server. `routes` adds routes. */
 export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
@@ -133,7 +135,14 @@ export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
           tracklistsLayer,
           recommendationsLayer,
           peerSyncLayer,
-        ).pipe(Layer.provide(pluginLayer(builtinPlugins, packageJson.version))),
+        ).pipe(
+          Layer.provide(
+            pluginLayer(
+              device ? builtinPlugins : [...builtinPlugins, ...outputPlugins],
+              packageJson.version,
+            ),
+          ),
+        ),
         HttpRouter.serve(allRoutes).pipe(
           Layer.provide(
             NodeHttpServer.layer(() => createServer(), {
