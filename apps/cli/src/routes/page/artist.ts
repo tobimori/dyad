@@ -7,13 +7,9 @@ import { AlbumRow, ArtistRow, counted, headed, trackRows } from "../../component
 const sectionHeadings = {
   top_tracks: "Top tracks",
   tracks: "Tracks",
-  albums: "Albums",
-  singles_eps: "Singles and EPs",
-  compilations: "Compilations",
-  live: "Live",
+  discography: "Discography",
   appears_on: "Appears on",
   in_library: "In your library",
-  other: "Other releases",
   similar_artists: "Similar artists",
 };
 
@@ -23,9 +19,6 @@ const isRelease = (section: AlbumSection) =>
 
 // Keys use the section kind, not the position, so a new section does not move the cursor
 export const artistPageRows = (page: ArtistPage) => {
-  const releaseSections = page.sections.filter(Schema.is(AlbumSection)).filter(isRelease);
-  const onlyOther = releaseSections.length === 1 && releaseSections[0]?.kind === "other";
-
   return page.sections.flatMap((section, index) => {
     const first = index === 0;
 
@@ -35,8 +28,7 @@ export const artistPageRows = (page: ArtistPage) => {
     }
 
     if (Schema.is(AlbumSection)(section)) {
-      const label =
-        onlyOther && section.kind === "other" ? "Releases" : sectionHeadings[section.kind];
+      const label = sectionHeadings[section.kind];
       const rows = section.albums.map(
         (album) => new AlbumRow({ key: `${section.kind}:${album.ref}`, album }),
       );

@@ -143,16 +143,8 @@ export class TrackSection extends Schema.TaggedClass<TrackSection>()("TrackSecti
 }) {}
 
 export class AlbumSection extends Schema.TaggedClass<AlbumSection>()("AlbumSection", {
-  /** Newest first. Clients call `other` "Releases" when it is the only album section. */
-  kind: Schema.Literals([
-    "albums",
-    "singles_eps",
-    "compilations",
-    "live",
-    "appears_on",
-    "in_library",
-    "other",
-  ]),
+  /** Newest first. `discography` has the artist's own releases of all types. */
+  kind: Schema.Literals(["discography", "appears_on", "in_library"]),
   albums: Schema.Array(AlbumCard),
 }) {}
 

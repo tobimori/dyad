@@ -132,25 +132,15 @@ const albumCard = (ref: AlbumRef, files: ReadonlyArray<LibraryFile>) => {
 const albumCards = (files: ReadonlyArray<LibraryFile>) =>
   [...groupBy(files, (file) => file.summary.albumRef)].map(([ref, group]) => albumCard(ref, group));
 
-const sectionKind = (album: AlbumCard) => {
-  if (album.secondaryTypes.includes("compilation")) return "compilations";
-  if (album.secondaryTypes.includes("live")) return "live";
-  if (album.primaryType === "single" || album.primaryType === "ep") return "singles_eps";
-  if (album.primaryType === "album") return "albums";
-  return "other";
-};
-
 // Library and provider pages give the same order: newest first, albums without a date last
 const newestFirst = (a: AlbumCard, b: AlbumCard) =>
   (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "") || a.title.localeCompare(b.title);
 
-const releaseKinds = ["albums", "singles_eps", "compilations", "live", "other"] as const;
-
+// One mixed discography: the type shows on each card, not as a section
 const releaseSections = (albums: ReadonlyArray<AlbumCard>) =>
-  releaseKinds.flatMap((kind) => {
-    const section = albums.filter((album) => sectionKind(album) === kind).toSorted(newestFirst);
-    return section.length === 0 ? [] : [new AlbumSection({ kind, albums: section })];
-  });
+  albums.length === 0
+    ? []
+    : [new AlbumSection({ kind: "discography", albums: albums.toSorted(newestFirst) })];
 
 const pageTracks = (files: ReadonlyArray<LibraryFile>) =>
   files
