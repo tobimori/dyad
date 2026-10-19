@@ -26,8 +26,6 @@ export const source = sqliteTable(
     // The recording that the source binds to when it enters `source`. It never changes; matching
     // merges this recording into others with `entity_merge`.
     recordingId: text("recording_id"),
-    // Set when the source is a known album position
-    trackId: text("track_id"),
     rawTitle: text("raw_title"),
     rawArtist: text("raw_artist"),
     rawAlbum: text("raw_album"),
@@ -45,7 +43,6 @@ export const source = sqliteTable(
   (table) => [
     uniqueIndex("source_provider_idx").on(table.provider, table.externalId),
     index("source_recording_idx").on(table.recordingId),
-    index("source_track_idx").on(table.trackId),
     index("source_change_idx").on(table.changeSeq),
   ],
 );

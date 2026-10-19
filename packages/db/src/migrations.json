@@ -554,5 +554,15 @@
       "\nALTER TABLE `edition` DROP COLUMN `artist_id`;",
       "\nALTER TABLE `recording` DROP COLUMN `artist_credit_id`;"
     ]
+  },
+  {
+    "name": "20261019131123_drop_source_track",
+    "folderMillis": 1792415483000,
+    "hash": "9ed81671aa4bb868a158d834af6ad3df5540e78b942e4741dc5b9c1e6ea83b3e",
+    "bps": true,
+    "sql": [
+      "DROP INDEX IF EXISTS `source_track_idx`;",
+      "\nALTER TABLE `source` DROP COLUMN `track_id`;"
+    ]
   }
 ]

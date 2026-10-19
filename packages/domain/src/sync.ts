@@ -152,7 +152,6 @@ export class SourceRow extends Schema.Class<SourceRow>("SourceRow")({
   externalId: Schema.String,
   kind: Schema.Literals(["stream", "live", "file", "purchase"]),
   recordingId: Schema.NullOr(RecordingId),
-  trackId: Schema.NullOr(Schema.String),
   rawTitle: Schema.NullOr(Schema.String),
   rawArtist: Schema.NullOr(Schema.String),
   rawAlbum: Schema.NullOr(Schema.String),
