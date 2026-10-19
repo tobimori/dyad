@@ -10,6 +10,7 @@ import {
 import { Database } from "@dyad/db/node";
 import { RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
+import { artistNameKey } from "@dyad/plugin/tracklist";
 import { HlcClock } from "@dyad/sync";
 import { and, eq, getColumns, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
@@ -32,6 +33,7 @@ import {
   parserRevision,
   versionedTitle,
 } from "./version-titles.ts";
+import type { ParsedTitle } from "./version-titles.ts";
 
 // Projection columns before replication assigns revisions
 const projection = { policyVersion: 1, revision: 0 };
@@ -67,6 +69,19 @@ const artistCounts = (keys: ReadonlyArray<string>) =>
     for (const row of [...catalog, ...searched.flat()]) ids.get(row.nameKey ?? "")?.add(row.id);
     return new Map([...ids].map(([key, found]) => [key, found.size]));
   });
+
+// An uploader that the title names as the artist is that artist, for example the channel `SXTN`
+const uploaderCredit = (parsed: ParsedTitle, uploader: CreditedArtist | null) => {
+  const credit = parsedCredit(parsed);
+  if (uploader === null || parsed.uploaderRole !== "artist") return credit;
+  const key = artistNameKey(uploader.name);
+  return {
+    ...credit,
+    artists: credit.artists.map((named) =>
+      artistNameKey(named.name) === key ? { ...named, id: uploader.id } : named,
+    ),
+  };
+};
 
 const assertParsedTitle = (
   recordingId: string,
@@ -106,7 +121,7 @@ const assertParsedTitle = (
       `${item.provider}:${item.externalId}`,
       {
         title: versionedTitle(parsed),
-        artist_credit: parsed.artists.length === 0 ? null : parsedCredit(parsed),
+        artist_credit: parsed.artists.length === 0 ? null : uploaderCredit(parsed, item.uploader),
         versions: parsed.versions,
         mashup_parts: parsed.parts,
         uploader_role: item.uploader === null ? null : parsed.uploaderRole,

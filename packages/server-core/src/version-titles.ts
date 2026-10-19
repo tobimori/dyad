@@ -69,7 +69,7 @@ export class ParsedTitle extends Schema.Class<ParsedTitle>("ParsedTitle")({
 }) {}
 
 /** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
-export const parserRevision = "parse:v6";
+export const parserRevision = "parse:v7";
 
 const kindLabels = {
   remix: "Remix",
