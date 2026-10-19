@@ -424,9 +424,3 @@ export const sourceSummary = (row: {
 /** The disc or track number. Tags such as `3/12` give the position and the total. */
 export const position = (tags: typeof Tags.Type, key: "disc" | "track") =>
   Number.parseInt(tags[key] ?? "", 10) || null;
-
-/** The files on this replica */
-export const listSources = Effect.gen(function* () {
-  const rows = yield* playableSources(isNotNull(localFile.id));
-  return rows.map(sourceSummary);
-});

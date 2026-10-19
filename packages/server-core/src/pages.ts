@@ -70,7 +70,7 @@ import {
 import { Tags, playableSources, position, sourceSummary } from "./sources.ts";
 import { sameNamedSong } from "./ranking.ts";
 import { providerOrder } from "./source-preference.ts";
-import { listLibrary, songEntries } from "./user-library.ts";
+import { inLibrary, listLibrary, marksById, songEntries } from "./user-library.ts";
 
 // Library pages come from the tags of the files on this replica. Binding will replace them with
 // catalog pages that resolve the same `library:` refs through `local_key`.
@@ -325,9 +325,18 @@ export const libraryAlbumCards = Effect.fn("libraryAlbumCards")(function* (
   });
 });
 
-/** The album artists of the files on this replica and the artists of the provider library */
+// A file is in the library only when its song is saved
+const savedFiles = Effect.fn(function* (match: SQL | undefined) {
+  const marks = yield* marksById("recording");
+  return (yield* libraryFiles(match)).filter((file) => {
+    const mark = marks.get(file.summary.recordingId ?? "");
+    return mark !== undefined && inLibrary(mark);
+  });
+});
+
+/** The album artists of the saved files on this replica and the artists of the provider library */
 export const listLibraryArtists = Effect.gen(function* () {
-  const files = yield* libraryFiles(isNotNull(localFile.albumArtistKey));
+  const files = yield* savedFiles(isNotNull(localFile.albumArtistKey));
   const saved = yield* librarySources;
 
   const local = [...groupBy(files, (file) => file.albumArtistKey)].map(
@@ -341,9 +350,9 @@ export const listLibraryArtists = Effect.gen(function* () {
   return [...local, ...libraryArtistCards(saved)].toSorted((a, b) => a.name.localeCompare(b.name));
 });
 
-/** The albums of the files on this replica and of the provider library, by artist and title */
+/** The albums of the saved files on this replica and of the provider library, by artist and title */
 export const listLibraryAlbums = Effect.gen(function* () {
-  const files = yield* libraryFiles(
+  const files = yield* savedFiles(
     and(isNotNull(localFile.albumArtistKey), isNotNull(localFile.albumKey)),
   );
   const saved = yield* librarySources;

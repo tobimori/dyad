@@ -180,8 +180,8 @@ const entityMarks = Effect.fn(function* (entityType: LibraryEntityType) {
 /** The effective mark of each marked song, by merge root, with the marked recording IDs */
 export const recordingMarks = entityMarks("recording");
 
-// The mark of each ID of the marked merge groups
-const marksById = Effect.fn(function* (entityType: LibraryEntityType) {
+/** The mark of each ID of the marked merge groups */
+export const marksById = Effect.fn(function* (entityType: LibraryEntityType) {
   const db = yield* Database;
   const table = markTables[entityType];
   const marks = yield* entityMarks(entityType);

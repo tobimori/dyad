@@ -74,7 +74,6 @@ export const serverAtoms = (
     connection: runtime.atom(ServerConnection),
     // `Atom` 4.0.5 calls an argument that is a function, and a service key is a class
     status: runtime.subscriptionRef(() => Effect.service(ConnectionStatus)),
-    sources: live((client) => client.listSources()),
     library: live((client) => client.listLibrary()),
     marks: live((client) => client.listMarks()),
     playlists: live((client) => client.listPlaylists()),

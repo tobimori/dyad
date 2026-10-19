@@ -824,8 +824,6 @@ const PublicRpc = RpcGroup.make(
 );
 
 const OwnerRpc = RpcGroup.make(
-  // The files on the server
-  Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
   Rpc.make("listPlaylistEntries", {
     payload: { playlistId: Schema.String },
     success: Schema.Array(PlaylistEntry),

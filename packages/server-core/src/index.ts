@@ -55,7 +55,6 @@ import {
   sourceCopies,
   sourceCopiesStream,
 } from "./source-copies.ts";
-import { listSources } from "./sources.ts";
 import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer } from "./peers.ts";
 import { syncHubLayer, watchChanges } from "./sync.ts";
 import { timedRoute } from "./timed-route.ts";
@@ -112,7 +111,6 @@ export const serverRoutes = Layer.unwrap(
     const handlers = ServerRpc.toLayer({
       describe: () => Effect.succeed(descriptor),
       pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError("pair")),
-      listSources: () => listSources.pipe(orDieOnDatabaseError("listSources")),
       listPlaylistEntries: ({ playlistId }) =>
         listPlaylistEntries(playlistId).pipe(orDieOnDatabaseError("listPlaylistEntries")),
       // The replica with the credentials imports the libraries
