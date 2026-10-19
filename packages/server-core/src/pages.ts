@@ -793,7 +793,8 @@ const catalogArtist = (root: string) =>
   });
 
 // Releases of two providers are one card when they are editions of one album, else when they have
-// the same title and no other stated type. The title is without edition words, guests and an
+// the same title and no other stated type or dates at most 7 days apart. Upload providers state
+// types that other providers do not share. The title is without edition words, guests and an
 // `EP` or `Single` suffix, so that `Say It (feat. Tove Lo) [Remixes]` is `Say It (Remixes)`.
 const releaseTitle = (card: AlbumCard) =>
   simplifyText(
@@ -803,6 +804,14 @@ const releaseTitle = (card: AlbumCard) =>
   ).replace(/\s(?:ep|single)$/u, "");
 const releaseType = (card: AlbumCard) =>
   card.primaryType === null ? null : `${card.primaryType}|${card.secondaryTypes.join()}`;
+const sameRelease = (a: AlbumCard, b: AlbumCard) => {
+  if (releaseTitle(a) !== releaseTitle(b)) return false;
+  const [typeA, typeB] = [releaseType(a), releaseType(b)];
+  if (typeA === null || typeB === null || typeA === typeB) return true;
+  const day = /^\d{4}-\d{2}-\d{2}$/u;
+  if (!day.test(a.releaseDate ?? "") || !day.test(b.releaseDate ?? "")) return false;
+  return Math.abs(Date.parse(a.releaseDate!) - Date.parse(b.releaseDate!)) <= 7 * 86_400_000;
+};
 
 // Fetching while one page fetches, else fresh when one page is fresh, else the first failure
 const combinedState = (states: ReadonlyArray<PageState>) =>
@@ -855,10 +864,7 @@ const mixedArtistPage = (
     // Catalog albums first, then the releases of each provider in priority order
     const cards = new Map<string, AlbumCard>();
     const sameTitle = (card: AlbumCard) =>
-      [...cards].find(([, other]) => {
-        const [a, b] = [releaseType(card), releaseType(other)];
-        return releaseTitle(other) === releaseTitle(card) && (a === null || b === null || a === b);
-      })?.[0];
+      [...cards].find(([, other]) => sameRelease(card, other))?.[0];
     for (const { id, card } of catalog.albums) cards.set(`album:${id}`, card);
     const keyOf = (provider: string, card: AlbumCard, externalId: string) => {
       const albumId = albumOfEdition.get(editionIds.get(`${provider}:${externalId}`) ?? "");
