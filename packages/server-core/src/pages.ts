@@ -1,4 +1,12 @@
-import { libraryItem, localFile, providerItem, providerPage, recording, source } from "@dyad/db";
+import {
+  album,
+  libraryItem,
+  localFile,
+  providerItem,
+  providerPage,
+  recording,
+  source,
+} from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AlbumCard,
@@ -14,7 +22,7 @@ import {
   SourceSummary,
   TrackSection,
 } from "@dyad/domain";
-import type { AlbumRef } from "@dyad/domain";
+import { AlbumRef } from "@dyad/domain";
 import { ProviderAlbum, ProviderArtist, ProviderSource } from "@dyad/plugin";
 import type {
   Credentials,
@@ -23,15 +31,15 @@ import type {
   ProviderRelease,
   ProviderTrack,
 } from "@dyad/plugin";
-import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
 import { albumEditions, assertEdition } from "./albums.ts";
 import { artistPageRef } from "./artists.ts";
-import { albumTypeOf, editionBase, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
+import { albumTypeOf, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
-import { normV1, normalizeArtist } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
 import { Providers, linkedProviders, usableProviders } from "./providers.ts";
 import {
@@ -211,58 +219,94 @@ const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
       }),
   );
 
-/**
- * One card for all editions of an album: the same artist and the same name without edition
- * suffixes. It opens the edition with the most saved tracks, else the original edition. The card
- * counts the given tracks, because the provider's album is not known without a fetch.
- */
-export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "summary">>) => {
-  const editions = [...groupBy(sources, (item) => item.summary.albumRef)].map(([ref, group]) => {
-    const artistRef = mostCommon(group.map((item) => item.summary.artistRef ?? undefined));
-    return new AlbumCard({
-      ref,
-      // A release without an album name is a single, for example on Bandcamp
-      title:
-        mostCommon(group.map((item) => item.summary.album ?? undefined)) ??
-        mostCommon(group.map((item) => item.summary.title ?? undefined)) ??
-        "",
-      artist: mostCommon(group.map((item) => item.summary.artist ?? undefined)),
-      artistRef: artistRef === null ? null : ArtistRef.make(artistRef),
-      releaseDate: null,
-      primaryType: null,
-      secondaryTypes: [],
-      explicit: group.some((item) => item.summary.explicit),
-      trackCount: group.length,
-      artworkUrl:
-        group.find((item) => item.summary.artworkUrl !== null)?.summary.artworkUrl ?? null,
-    });
-  });
-
-  const albums = groupBy(
-    editions,
-    (card) => `${normalizeArtist(card.artist ?? "")}\n${normV1(editionBase(card.title))}`,
-  );
-  return [...albums.values()].flatMap((group) => {
-    const [shown] = group.toSorted(
-      (a, b) =>
-        (b.trackCount ?? 0) - (a.trackCount ?? 0) ||
-        Number(editionBase(a.title) !== a.title) - Number(editionBase(b.title) !== b.title) ||
-        a.ref.localeCompare(b.ref),
-    );
-    if (shown === undefined) return [];
-    const card = new AlbumCard({
-      ...shown,
-      title: editionBase(shown.title),
-      explicit: group.some((edition) => edition.explicit),
-      trackCount: group.reduce((total, edition) => total + (edition.trackCount ?? 0), 0),
-      artworkUrl:
-        shown.artworkUrl ??
-        group.find((edition) => edition.artworkUrl !== null)?.artworkUrl ??
-        null,
-    });
-    return [card];
-  });
+// The card types of an album type. A DJ mix and a broadcast have no card type yet.
+const cardTypes = (type: typeof album.$inferSelect.type) => {
+  if (type === "compilation" || type === "live") {
+    return { primaryType: "album" as const, secondaryTypes: [type] };
+  }
+  if (type === "album" || type === "ep" || type === "single") {
+    return { primaryType: type, secondaryTypes: [] };
+  }
+  return { primaryType: null, secondaryTypes: [] };
 };
+
+/**
+ * One card for each album of the given tracks. A track without an album groups by its provider
+ * album. The card counts the given tracks and opens the provider album of most of them.
+ */
+export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "summary">>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const ids = [...new Set(sources.flatMap((item) => item.summary.recordingId ?? []))];
+    const bound = alias(recording, "bound");
+    const memberAlbum = alias(album, "member_album");
+    const albums = new Map(
+      ids.length === 0
+        ? []
+        : (yield* db
+            .select({ id: bound.id, album })
+            .from(bound)
+            .innerJoin(
+              recording,
+              eq(recording.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`),
+            )
+            .innerJoin(memberAlbum, eq(memberAlbum.id, recording.albumId))
+            .innerJoin(
+              album,
+              eq(album.id, sql`coalesce(${memberAlbum.mergedIntoId}, ${memberAlbum.id})`),
+            )
+            .where(inArray(bound.id, ids))).map((row) => [row.id, row.album]),
+    );
+    const albumOf = (item: Pick<LibrarySource, "summary">) =>
+      albums.get(item.summary.recordingId ?? "");
+
+    const groups = groupBy(sources, (item) => {
+      const found = albumOf(item);
+      return found === undefined ? item.summary.albumRef : `album:${found.id}`;
+    });
+    return [...groups.values()].flatMap((group) => {
+      const ref = mostCommon(group.map((item) => item.summary.albumRef ?? undefined));
+      if (ref === null) return [];
+      const [first] = group;
+      const found = first === undefined ? undefined : albumOf(first);
+      const artistRef = mostCommon(group.map((item) => item.summary.artistRef ?? undefined));
+      const artworkUrl =
+        group.find((item) => item.summary.artworkUrl !== null)?.summary.artworkUrl ?? null;
+      const shared = {
+        ref: AlbumRef.make(ref),
+        artistRef: artistRef === null ? null : ArtistRef.make(artistRef),
+        explicit: group.some((item) => item.summary.explicit),
+        trackCount: group.length,
+      };
+      if (found?.title != null) {
+        return [
+          new AlbumCard({
+            ...shared,
+            title: found.title,
+            artist: found.artistName,
+            releaseDate: found.year === null ? null : String(found.year),
+            ...cardTypes(found.type),
+            artworkUrl: found.artworkUrl ?? artworkUrl,
+          }),
+        ];
+      }
+      return [
+        new AlbumCard({
+          ...shared,
+          // A release without an album name is a single, for example on Bandcamp
+          title:
+            mostCommon(group.map((item) => item.summary.album ?? undefined)) ??
+            mostCommon(group.map((item) => item.summary.title ?? undefined)) ??
+            "",
+          artist: mostCommon(group.map((item) => item.summary.artist ?? undefined)),
+          releaseDate: null,
+          primaryType: null,
+          secondaryTypes: [],
+          artworkUrl,
+        }),
+      ];
+    });
+  });
 
 /** The album artists of the files on this replica and the artists of the provider library */
 export const listLibraryArtists = Effect.gen(function* () {
@@ -287,7 +331,7 @@ export const listLibraryAlbums = Effect.gen(function* () {
   );
   const saved = yield* librarySources;
 
-  return [...albumCards(files), ...libraryAlbumCards(saved)].toSorted(
+  return [...albumCards(files), ...(yield* libraryAlbumCards(saved))].toSorted(
     (a, b) => (a.artist ?? "").localeCompare(b.artist ?? "") || a.title.localeCompare(b.title),
   );
 });
@@ -581,7 +625,9 @@ const refArtistPage = (ref: ArtistRef) =>
           Effect.gen(function* () {
             const data = page.data;
             const saved = page.library.filter((item) => item.summary.artistRef === ref);
-            const inLibrary = libraryAlbumCards(saved).toSorted(newestFirst);
+            const inLibrary = (yield* libraryAlbumCards(saved).pipe(
+              orDieOnDatabaseError("artistPage"),
+            )).toSorted(newestFirst);
             const topTracks = yield* providerTracks(
               page.provider,
               page.providerName,
@@ -716,7 +762,9 @@ export const albumPage = (ref: AlbumRef) =>
               return new AlbumPage({
                 ref,
                 providerName: page.providerName,
-                album: libraryAlbumCards(saved)[0] ?? null,
+                album:
+                  (yield* libraryAlbumCards(saved).pipe(orDieOnDatabaseError("albumPage")))[0] ??
+                  null,
                 tracks: saved.map(
                   (item) =>
                     new PageTrack({

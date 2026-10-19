@@ -564,5 +564,12 @@
       "DROP INDEX IF EXISTS `source_track_idx`;",
       "\nALTER TABLE `source` DROP COLUMN `track_id`;"
     ]
+  },
+  {
+    "name": "20261019132206_add_recording_album",
+    "folderMillis": 1792416126000,
+    "hash": "b79e4041c93cf9b64c8fb70d6e1551f3a5980f86ad542cd6e206b6ed55ba5a03",
+    "bps": true,
+    "sql": ["ALTER TABLE `recording` ADD `album_id` text;"]
   }
 ]

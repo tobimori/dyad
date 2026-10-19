@@ -3,6 +3,20 @@ import { Schema } from "effect";
 
 import type { Tags } from "./sources.ts";
 
+/** The `artist_credit` assertion of a recording or an edition */
+export const ArtistCredit = Schema.Struct({
+  name: Schema.String,
+  artists: Schema.Array(
+    Schema.Struct({
+      // Null for a name that no evidence links to an artist
+      id: Schema.NullOr(Schema.String),
+      name: Schema.String,
+      // Text after the name, for example ` feat. `. Origins that give only `name` omit it.
+      joinPhrase: Schema.optionalKey(Schema.String),
+    }),
+  ),
+});
+
 /** The `album_type` assertion: the type of the release of the `album` of the same origin */
 export const AlbumType = Schema.Struct({
   primary: Schema.NullOr(ReleaseType),
@@ -41,11 +55,3 @@ export const albumTypeOf = (types: string | undefined, compilation: boolean) => 
 
 export const tagAlbumType = (tags: typeof Tags.Type) =>
   albumTypeOf(tagReleaseTypes(tags), tags.compilation === "1");
-
-// Bracketed suffixes with an edition word at the end of an album name, for example
-// `(Deluxe Edition)`, `(Bonus Track Version)` or `[2011 Remaster]`
-const editionSuffixes =
-  /(?:\s*[([][^()[\]]*\b(?:deluxe|edition|remaster(?:ed)?|expanded|anniversary|bonus|reissue|special|collector'?s|international)\b[^()[\]]*[)\]])+$/i;
-
-/** The album name without its edition suffixes, for example `Album` for `Album (Deluxe) [Remastered]` */
-export const editionBase = (album: string) => album.replace(editionSuffixes, "") || album;

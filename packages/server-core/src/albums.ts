@@ -14,8 +14,8 @@ import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Layer, Schema } from "effect";
 
 import { creditNames, creditedArtists, projectArtistRows, sameNames } from "./artists.ts";
-import { ArtistCredit, assertFields, projectRecordings, resolveField } from "./assertions.ts";
-import { AlbumType, ReleaseDate } from "./editions.ts";
+import { assertFields, projectRecordings, resolveField } from "./assertions.ts";
+import { AlbumType, ArtistCredit, ReleaseDate } from "./editions.ts";
 import { boundRecordingId, upcEditionId, uuidV5 } from "./ids.ts";
 import { effectiveTarget, followEdges, writeSystemMerge } from "./matching.ts";
 import { Jobs } from "./jobs.ts";

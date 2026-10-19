@@ -45,7 +45,10 @@ const recentAlbums = Effect.gen(function* () {
   }
 
   const cards = new Map(
-    libraryAlbumCards(summaries.map((summary) => ({ summary }))).map((card) => [card.ref, card]),
+    (yield* libraryAlbumCards(summaries.map((summary) => ({ summary })))).map((card) => [
+      card.ref,
+      card,
+    ]),
   );
   return [...weights]
     .filter(([, weight]) => weight > 0)

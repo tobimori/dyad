@@ -1,0 +1,1 @@
+ALTER TABLE `recording` ADD `album_id` text;

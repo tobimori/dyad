@@ -8,7 +8,7 @@ import { alias } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
 import type { editionFields } from "./albums.ts";
-import { AlbumType, ReleaseDate } from "./editions.ts";
+import { AlbumType, ArtistCredit, ReleaseDate } from "./editions.ts";
 import { projectArtists } from "./artists.ts";
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
@@ -16,19 +16,6 @@ import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { MashupPart, ParsedTitle, TitleSeries, TitleVersion } from "./version-titles.ts";
 
 const schemaVersion = 1;
-
-export const ArtistCredit = Schema.Struct({
-  name: Schema.String,
-  artists: Schema.Array(
-    Schema.Struct({
-      // Null for a name that no evidence links to an artist
-      id: Schema.NullOr(Schema.String),
-      name: Schema.String,
-      // Text after the name, for example ` feat. `. Origins that give only `name` omit it.
-      joinPhrase: Schema.optionalKey(Schema.String),
-    }),
-  ),
-});
 
 // Stored field names, and the schema of their values
 export const fields = {
@@ -365,6 +352,7 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
         artistName:
           resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
         album: shown?.title ?? resolveField(providers, own, "album", fields.album),
+        albumId: shown?.albumId ?? null,
         durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
         artworkUrl:
           shown?.artworkUrl ?? resolveField(providers, own, "artwork_url", fields.artwork_url),
@@ -375,6 +363,7 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
         row.title === resolved.title &&
         row.artistName === resolved.artistName &&
         row.album === resolved.album &&
+        row.albumId === resolved.albumId &&
         row.durationMs === resolved.durationMs &&
         row.artworkUrl === resolved.artworkUrl &&
         row.explicit === resolved.explicit;
