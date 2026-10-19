@@ -12,7 +12,7 @@ export const pluginTransport = (
   engine: typeof Engine.Service | null,
   segmentsOf: (sourceId: string) => ReadonlyArray<SourceSegment>,
 ) => {
-  const send = Effect.fnUntraced(function* (command: typeof SessionCommand.Type) {
+  const send = Effect.fn(function* (command: typeof SessionCommand.Type) {
     const view = yield* SubscriptionRef.get(session.view);
     // Offline, only the device that plays can change its own audio
     if (!view.connected && isTransportCommand(command) && engine?.controlOffline(command)) {
@@ -41,7 +41,7 @@ export const pluginTransport = (
     };
   });
 
-  const seekTo = Effect.fnUntraced(function* (ms: number) {
+  const seekTo = Effect.fn(function* (ms: number) {
     const entry = yield* current;
     if (entry === undefined) return;
     const end = entry.durationMs;
@@ -49,7 +49,7 @@ export const pluginTransport = (
     yield* send(SessionCommand.cases.Seek.make({ entryId: entry.id, positionMs }));
   });
 
-  const skip = Effect.fnUntraced(function* (direction: 1 | -1) {
+  const skip = Effect.fn(function* (direction: 1 | -1) {
     const entry = yield* current;
     if (entry === undefined) return;
     const target = skipSeekTarget(segmentsOf(entry.sourceId), entry.positionMs, direction);

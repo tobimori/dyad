@@ -57,7 +57,7 @@ const searchPage = (query: string, offset: number) =>
     SearchResults,
   );
 
-const searchBatch = Effect.fnUntraced(function* (isrcs: ReadonlyArray<string>) {
+const searchBatch = Effect.fn(function* (isrcs: ReadonlyArray<string>) {
   const query = isrcs.map((isrc) => `isrc:${isrc}`).join(" OR ");
 
   const first = yield* searchPage(query, 0);

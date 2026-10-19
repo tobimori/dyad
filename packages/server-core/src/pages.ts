@@ -85,7 +85,7 @@ class LibraryFile extends Data.Class<{
 }> {}
 
 // One entry per source. A source with several files gives the tags of one of them.
-const libraryFiles = Effect.fnUntraced(function* (match: SQL | undefined) {
+const libraryFiles = Effect.fn(function* (match: SQL | undefined) {
   const rows = yield* playableSources(and(isNotNull(localFile.id), match));
 
   return rows.map(
@@ -355,7 +355,7 @@ export const listLibraryAlbums = Effect.gen(function* () {
 
 // The albums of the album artist, the albums where the artist has tracks, and the artist's tracks
 // without an album
-const localArtistPage = Effect.fnUntraced(function* (ref: ArtistRef) {
+const localArtistPage = Effect.fn(function* (ref: ArtistRef) {
   const key = libraryArtistKey(ref);
   if (Option.isNone(key)) return yield* new PageNotFound();
 
@@ -410,7 +410,7 @@ const localArtistPage = Effect.fnUntraced(function* (ref: ArtistRef) {
 });
 
 // The tracks of the album in disc and track order
-const localAlbumPage = Effect.fnUntraced(function* (ref: AlbumRef) {
+const localAlbumPage = Effect.fn(function* (ref: AlbumRef) {
   const keys = libraryAlbumKeys(ref);
   if (Option.isNone(keys)) return yield* new PageNotFound();
 
@@ -674,7 +674,7 @@ export const artistPage = (ref: ArtistRef) =>
       );
 
 // The merge group of an artist ref. A provider artist without a catalog row is a group of one.
-const groupOf = Effect.fnUntraced(function* (ref: ArtistRef) {
+const groupOf = Effect.fn(function* (ref: ArtistRef) {
   const db = yield* Database;
   const parts = Option.getOrNull(providerRefParts(ref));
   const requested =
@@ -785,7 +785,7 @@ const artistSearchLifetimeMs = 24 * 60 * 60 * 1000;
 // Searches the curated providers that the group lacks for the name of the page. A found artist
 // joins the group when it is the only one of its provider with the name and at least
 // `minSharedSongs` songs of the page. A name alone never links.
-const linkByName = Effect.fnUntraced(function* (group: ArtistGroup, page: ArtistPage) {
+const linkByName = Effect.fn(function* (group: ArtistGroup, page: ArtistPage) {
   const songs = page.sections.flatMap((section) =>
     Schema.is(TrackSection)(section) ? section.tracks.map((track) => track.source) : [],
   );
@@ -867,7 +867,7 @@ const linkByName = Effect.fnUntraced(function* (group: ArtistGroup, page: Artist
 
 // The albums with the artist as first album artist, the songs that credit the artist, and the
 // cached results of the provider artists without a page, for example a YouTube channel
-const catalogArtist = Effect.fnUntraced(function* (
+const catalogArtist = Effect.fn(function* (
   root: string,
   pageless: ReadonlyArray<{ readonly provider: string; readonly externalId: string }>,
 ) {
@@ -1027,7 +1027,7 @@ const combinedState = (states: ReadonlyArray<PageState>) =>
   states[0] ??
   new PageState({ status: "fresh", fetchedAt: null, reason: null });
 
-const mixedArtistPage = Effect.fnUntraced(function* (
+const mixedArtistPage = Effect.fn(function* (
   pageRef: ArtistRef,
   root: string,
   catalog: Effect.Success<ReturnType<typeof catalogArtist>>,
@@ -1193,7 +1193,7 @@ const mixedArtistPage = Effect.fnUntraced(function* (
 
 // All tracks of the album: the tracks of the original edition, then the tracks of the other
 // editions that are not on it, marked with their edition words
-const albumTracks = Effect.fnUntraced(function* (
+const albumTracks = Effect.fn(function* (
   page: PageInput<ProviderAlbum>,
   externalId: string,
   data: ProviderAlbum,
@@ -1204,7 +1204,7 @@ const albumTracks = Effect.fnUntraced(function* (
   const editions = yield* albumEditions(page.provider, externalId);
   if (editions.length === 0) return own;
 
-  const cached = Effect.fnUntraced(function* (originRef: string) {
+  const cached = Effect.fn(function* (originRef: string) {
     const parts = Option.getOrNull(providerRefParts(originRef));
     if (parts === null) return [];
     const [row] = yield* db
@@ -1255,7 +1255,7 @@ const albumTracks = Effect.fnUntraced(function* (
   });
 });
 
-const firstNonEmpty = Effect.fnUntraced(function* <A, E, R>(
+const firstNonEmpty = Effect.fn(function* <A, E, R>(
   lists: ReadonlyArray<Effect.Effect<ReadonlyArray<A>, E, R>>,
 ) {
   for (const list of lists) {

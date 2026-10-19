@@ -24,7 +24,7 @@ const opener = (url: string) => {
 class OpenFailed extends Data.TaggedError("OpenFailed")<{}> {}
 
 /** Fails when the system has no opener, for example over SSH */
-const openUrl = Effect.fnUntraced(
+const openUrl = Effect.fn(
   function* (url: string) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const code = yield* spawner.exitCode(opener(url));

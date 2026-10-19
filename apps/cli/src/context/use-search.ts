@@ -22,7 +22,7 @@ export function useSearch(props: {
     fiber.current = null;
   };
 
-  const failed = Effect.fnUntraced(function* (cause: Cause.Cause<unknown>) {
+  const failed = Effect.fn(function* (cause: Cause.Cause<unknown>) {
     yield* Effect.logWarning("Cannot search", describeFailure(cause));
     setStatus("Cannot search");
     props.onFailure("The search failed. Check the connection and try again.");

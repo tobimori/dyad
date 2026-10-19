@@ -135,10 +135,7 @@ const makeOutputs = Effect.gen(function* () {
   };
 
   /** Keeps the outputs of `registration` up to date until the scope closes */
-  const follow = Effect.fnUntraced(function* (
-    registration: string,
-    outputs: UrlOutputs | TimedOutputs,
-  ) {
+  const follow = Effect.fn(function* (registration: string, outputs: UrlOutputs | TimedOutputs) {
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => discovered.delete(registration)).pipe(Effect.andThen(notify)),
     );
@@ -152,10 +149,7 @@ const makeOutputs = Effect.gen(function* () {
 
   // The last holder wins. The earlier holder closes without a stop, so that its last commands come
   // before ours.
-  const hold = Effect.fnUntraced(function* (
-    id: OutputId,
-    holder: { readonly taken: Effect.Effect<void> },
-  ) {
+  const hold = Effect.fn(function* (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) {
     const { registration, nativeId } = locate(id);
     const outputs = registrations.get(registration);
     if (outputs === undefined || !has(id)) {
@@ -184,10 +178,7 @@ const makeOutputs = Effect.gen(function* () {
   const kindError = new OutputError({ reason: "The output is of another kind" });
 
   /** Opens the URL output for a session until the scope closes */
-  const open = Effect.fnUntraced(function* (
-    id: OutputId,
-    holder: { readonly taken: Effect.Effect<void> },
-  ) {
+  const open = Effect.fn(function* (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) {
     const { outputs, nativeId } = yield* hold(id, holder);
     if (!(outputs instanceof UrlOutputs)) return yield* kindError;
 
@@ -212,7 +203,7 @@ const makeOutputs = Effect.gen(function* () {
    * Makes the URL output play what `coordinator` plays, until the scope closes. The output belongs
    * to the session like after `open`.
    */
-  const join = Effect.fnUntraced(function* (
+  const join = Effect.fn(function* (
     id: OutputId,
     coordinator: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
@@ -231,7 +222,7 @@ const makeOutputs = Effect.gen(function* () {
    * Opens the timed output, or the timed twin of a URL output, like `open`. A timed device reports
    * no volume, so the volume that the core set last applies again.
    */
-  const openTimed = Effect.fnUntraced(function* (
+  const openTimed = Effect.fn(function* (
     id: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
   ) {
@@ -274,7 +265,7 @@ const makeOutputs = Effect.gen(function* () {
       () => Effect.sync(() => liveStreams.delete(id)),
     );
 
-  const setDelay = Effect.fnUntraced(function* (id: OutputId, delayMs: number) {
+  const setDelay = Effect.fn(function* (id: OutputId, delayMs: number) {
     yield* db
       .insert(outputSetting)
       .values({ outputId: id, delayMs })

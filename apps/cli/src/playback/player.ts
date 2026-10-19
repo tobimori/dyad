@@ -38,7 +38,7 @@ class Received extends Data.Class<{
 }> {}
 
 // Keeps the whole response in one buffer, so that a seek can start a decoder anywhere in it
-const download = Effect.fnUntraced(
+const download = Effect.fn(
   function* <E>(
     body: Stream.Stream<Uint8Array, E>,
     received: SubscriptionRef.SubscriptionRef<Received>,
@@ -106,7 +106,7 @@ type Format = (typeof decoders)[number][0];
 const startPoint = new SeekPoint({ prefix: new Uint8Array(0), offset: 0, frame: 0 });
 
 // The grant in `path` stays valid for hours, so a new start needs no new `preparePlayback`
-const startDownload = Effect.fnUntraced(function* (
+const startDownload = Effect.fn(function* (
   serverUrl: string,
   path: string,
   format: Format,
@@ -256,7 +256,7 @@ export const openTrack = Effect.fn("openTrack")(function* (
   };
   yield* Effect.addFinalizer(() => Effect.sync(stopStream));
 
-  const play = Effect.fnUntraced(function* (from: Download, point: SeekPoint, pointMs: number) {
+  const play = Effect.fn(function* (from: Download, point: SeekPoint, pointMs: number) {
     stopStream();
 
     const body = Stream.concat(Stream.succeed(point.prefix), readFrom(from.received, point.offset));
@@ -331,7 +331,7 @@ export const openTrack = Effect.fn("openTrack")(function* (
       : Scope.close(previous.scope, Exit.void);
   };
 
-  const moveTo = Effect.fnUntraced(function* (ms: number) {
+  const moveTo = Effect.fn(function* (ms: number) {
     for (const from of [current, base]) {
       const start = pointIn(from, ms);
       if (start === undefined) continue;

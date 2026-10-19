@@ -61,7 +61,7 @@ const BandcampItem = Schema.fromJsonString(
 );
 
 // `/go/<kind>/<item>` answers 302 with the track page, or with `/not/found` when it has none
-const linkedPage = Effect.fnUntraced(function* (kind: keyof typeof links, itemId: string) {
+const linkedPage = Effect.fn(function* (kind: keyof typeof links, itemId: string) {
   const client = yield* HttpClient.HttpClient;
   const response = yield* client.get(`${webUrl}/go/${kind}/${itemId}`).pipe(
     // The core's client uses `fetch`, which follows redirects unless told otherwise
@@ -80,7 +80,7 @@ const linkedPage = Effect.fnUntraced(function* (kind: keyof typeof links, itemId
 });
 
 // The ID of the linked track on the Bandcamp or SoundCloud provider, from its page
-const targetOf = Effect.fnUntraced(function* (kind: keyof typeof links, page: string) {
+const targetOf = Effect.fn(function* (kind: keyof typeof links, page: string) {
   const link = links[kind];
   const html = yield* getText(HttpClientRequest.get(page)).pipe(
     Effect.mapError(() => new ProviderError({ reason: `Cannot read the ${link.name} page` })),
@@ -104,7 +104,7 @@ const targetOf = Effect.fnUntraced(function* (kind: keyof typeof links, page: st
 });
 
 // The first kind with a page, and the track on its provider
-const firstLink = Effect.fnUntraced(function* (
+const firstLink = Effect.fn(function* (
   pace: Effect.Success<ReturnType<typeof makePacer>>,
   itemId: string,
 ) {
@@ -119,7 +119,7 @@ const firstLink = Effect.fnUntraced(function* (
   return Option.none();
 });
 
-const readShelf = Effect.fnUntraced(function* (
+const readShelf = Effect.fn(function* (
   pace: Effect.Success<ReturnType<typeof makePacer>>,
   title: string,
   request: HttpClientRequest.HttpClientRequest,

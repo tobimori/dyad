@@ -91,7 +91,7 @@ export const writeSystemMerge = Effect.fn("writeSystemMerge")(function* (edge: {
   return true;
 });
 
-const writeEdge = Effect.fnUntraced(function* (edge: Edge) {
+const writeEdge = Effect.fn(function* (edge: Edge) {
   const db = yield* Database;
   const { intoOrigin, ...merge } = edge;
   const changed = yield* writeSystemMerge({ entityType: "recording", ...merge });
@@ -113,7 +113,7 @@ export const fitsDuration = (durationMs: number | null | undefined, referenceMs:
   Math.abs(durationMs - referenceMs) <=
     Math.max(durationToleranceMs, referenceMs * durationToleranceShare);
 
-const queueLookup = Effect.fnUntraced(function* (isrc: string) {
+const queueLookup = Effect.fn(function* (isrc: string) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const lookups = yield* MusicBrainzLookups;
@@ -140,7 +140,7 @@ const queueLookup = Effect.fnUntraced(function* (isrc: string) {
  * Merges the ISRC recording into the MusicBrainz recording only when MusicBrainz has exactly
  * one recording with the ISRC and its duration fits.
  */
-const applyLookup = Effect.fnUntraced(function* (isrc: string, referenceMs: number | null) {
+const applyLookup = Effect.fn(function* (isrc: string, referenceMs: number | null) {
   const db = yield* Database;
   const isrcRecording = yield* isrcRecordingId(isrc);
 
@@ -202,7 +202,7 @@ const applyLookup = Effect.fnUntraced(function* (isrc: string, referenceMs: numb
  * Recordings of the ISRC merge when their duration fits the median. Two edits that share an
  * ISRC by mistake stay apart.
  */
-const matchIsrc = Effect.fnUntraced(function* (isrc: string, newMember: string | null) {
+const matchIsrc = Effect.fn(function* (isrc: string, newMember: string | null) {
   const db = yield* Database;
   const isrcRecording = yield* isrcRecordingId(isrc);
 
@@ -249,7 +249,7 @@ const matchIsrc = Effect.fnUntraced(function* (isrc: string, newMember: string |
  * Writes the MBID tag and ISRC matches of a recording. Matches that its metadata no longer
  * supports become rejects.
  */
-const matchRecording = Effect.fnUntraced(function* (recordingId: string, mbid: string | null) {
+const matchRecording = Effect.fn(function* (recordingId: string, mbid: string | null) {
   const db = yield* Database;
   const isrc = (yield* resolvedValues([recordingId], "isrc", fields.isrc)).get(recordingId) ?? null;
   const mbidTarget = mbid === null ? null : yield* musicbrainzRecordingId(mbid);
@@ -381,7 +381,7 @@ export const songCandidates = Effect.fn("songCandidates")(function* (
 
 // An ISRC or an MBID tag. Such a recording follows that evidence. Only the recording of a copy
 // decides; an ISRC or MusicBrainz recording is the root of a group of copies.
-const hasStrongIdentity = Effect.fnUntraced(function* (recordingId: string) {
+const hasStrongIdentity = Effect.fn(function* (recordingId: string) {
   const db = yield* Database;
   const [row] = yield* db
     .select({ origin: recording.origin })
@@ -412,7 +412,7 @@ export const rootRank = (origin: string | null) =>
  * IDs), the same title key and a fitting duration. Without a candidate it stays alone. Never a
  * group whose root is the recording itself, so that two copies do not point at each other.
  */
-const decideSong = Effect.fnUntraced(function* (recordingId: string) {
+const decideSong = Effect.fn(function* (recordingId: string) {
   const db = yield* Database;
   const facts = yield* songFacts(recordingId);
   const strong = yield* hasStrongIdentity(recordingId);
@@ -525,7 +525,7 @@ export const resolveRoots = Effect.fn("resolveRoots")(function* (recordingIds: I
   const affected = [...new Set([...seeds, ...members.map((row) => row.id)])];
 
   const targets = new Map<string, string | null>();
-  const targetOf = Effect.fnUntraced(function* (id: string) {
+  const targetOf = Effect.fn(function* (id: string) {
     const known = targets.get(id);
     if (known !== undefined) return known;
 
@@ -680,7 +680,7 @@ export const waitForMusicBrainz = Effect.fn("waitForMusicBrainz")(function* (
 
 const LookupPayload = Schema.Struct({ isrc: Schema.String });
 
-const writeLookup = Effect.fnUntraced(function* (
+const writeLookup = Effect.fn(function* (
   isrc: string,
   recordings: ReadonlyArray<MusicBrainzRecording>,
 ) {
@@ -711,7 +711,7 @@ const writeLookup = Effect.fnUntraced(function* (
 });
 
 // ISRCs that wait share the request of this job
-const runLookup = Effect.fnUntraced(function* ({ isrc }: typeof LookupPayload.Type) {
+const runLookup = Effect.fn(function* ({ isrc }: typeof LookupPayload.Type) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const lookup = (yield* MusicBrainzLookups).get(musicbrainzLookupKey);

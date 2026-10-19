@@ -229,7 +229,7 @@ export const openCast = Effect.fn("openCast")(function* (device: CastDevice) {
   );
 
   // Starts the Default Media Receiver when it does not run, which ends another app on the device
-  const ensureApp = Effect.fnUntraced(function* (target: Connection) {
+  const ensureApp = Effect.fn(function* (target: Connection) {
     const running = yield* Ref.get(target.app);
     if (running === null) {
       const answer = yield* target.channel.request(namespaces.receiver, receiverId, {
@@ -260,7 +260,7 @@ export const openCast = Effect.fn("openCast")(function* (device: CastDevice) {
   const expectStatus = (command: string, type: string, answer: CastEvent) =>
     answer.type === type ? Effect.void : Effect.flatMap(failure(command, answer), Effect.fail);
 
-  const mediaCommand = Effect.fnUntraced(function* (command: string, payload: Schema.JsonObject) {
+  const mediaCommand = Effect.fn(function* (command: string, payload: Schema.JsonObject) {
     const target = yield* connection;
     const mediaSessionId = yield* Ref.get(target.mediaSessionId);
     if (mediaSessionId === null) {
@@ -282,7 +282,7 @@ export const openCast = Effect.fn("openCast")(function* (device: CastDevice) {
           new UnsupportedFormat({ device: name, reason: `Cast cannot play ${mimeType}` }),
         );
 
-  const load = Effect.fnUntraced(function* (url: string, metadata: TrackMetadata, startMs: number) {
+  const load = Effect.fn(function* (url: string, metadata: TrackMetadata, startMs: number) {
     yield* checkFormat(metadata.mimeType);
     const target = yield* connection;
     const app = yield* ensureApp(target);
@@ -297,7 +297,7 @@ export const openCast = Effect.fn("openCast")(function* (device: CastDevice) {
     yield* expectStatus("load", "MEDIA_STATUS", answer);
   });
 
-  const next = Effect.fnUntraced(function* (url: string, metadata: TrackMetadata) {
+  const next = Effect.fn(function* (url: string, metadata: TrackMetadata) {
     yield* checkFormat(metadata.mimeType);
     yield* mediaCommand("next", {
       type: "QUEUE_INSERT",
@@ -305,7 +305,7 @@ export const openCast = Effect.fn("openCast")(function* (device: CastDevice) {
     });
   });
 
-  const setVolume = Effect.fnUntraced(function* (volume: number) {
+  const setVolume = Effect.fn(function* (volume: number) {
     const target = yield* connection;
     const level = Math.min(Math.max(volume, 0), 1);
     const answer = yield* target.channel.request(namespaces.receiver, receiverId, {

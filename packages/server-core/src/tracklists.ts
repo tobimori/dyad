@@ -59,12 +59,12 @@ export class Tracklists extends Context.Service<
 
 export const tracklistsServiceLayer = Layer.effect(Tracklists, makeTracklists);
 
-const publish = Effect.fnUntraced(function* (sourceId: string) {
+const publish = Effect.fn(function* (sourceId: string) {
   yield* PubSub.publish((yield* Tracklists).changes, sourceId);
 });
 
 // An unchanged assertion writes nothing
-const writeAssertion = Effect.fnUntraced(function* (
+const writeAssertion = Effect.fn(function* (
   target: { readonly entityType: string; readonly entityId: string; readonly field: string },
   assertion: {
     readonly origin: "provider" | "admin" | "match";
@@ -132,7 +132,7 @@ const entryEntity = (entry: { readonly artist: string | null; readonly title: st
 /** The raw text of a tracklist entry, in the evidence of its match */
 export const EntryText = Schema.Struct({ artist: Schema.String, title: Schema.String });
 
-const retract = Effect.fnUntraced(function* (ids: ReadonlyArray<string>) {
+const retract = Effect.fn(function* (ids: ReadonlyArray<string>) {
   if (ids.length === 0) return;
   const db = yield* Database;
   const hlc = yield* (yield* HlcClock).next;
@@ -146,7 +146,7 @@ const retract = Effect.fnUntraced(function* (ids: ReadonlyArray<string>) {
   );
 });
 
-const tracklistAssertions = Effect.fnUntraced(function* (sourceId: string) {
+const tracklistAssertions = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
   return yield* db
     .select()
@@ -162,7 +162,7 @@ const tracklistAssertions = Effect.fnUntraced(function* (sourceId: string) {
 });
 
 // The candidates with the origin ref `prefix` that a read no longer finds are withdrawn
-const assertProviderTracklists = Effect.fnUntraced(function* (
+const assertProviderTracklists = Effect.fn(function* (
   sourceId: string,
   prefix: string,
   tracklists: ReadonlyArray<ProviderTracklist>,
@@ -208,7 +208,7 @@ const selectTracklist = (assertions: ReadonlyArray<typeof catalogAssertion.$infe
 };
 
 // The DJs of each recording that is a set, from its own assertions
-const setArtists = Effect.fnUntraced(function* (recordingIds: ReadonlyArray<string>) {
+const setArtists = Effect.fn(function* (recordingIds: ReadonlyArray<string>) {
   const sets = yield* resolvedValues(recordingIds, "set", fields.set);
   const credits = yield* resolvedValues(recordingIds, "artist_credit", fields.artist_credit);
   return new Map(
@@ -220,7 +220,7 @@ const setArtists = Effect.fnUntraced(function* (recordingIds: ReadonlyArray<stri
 });
 
 // The other sources of the same set: the same DJs and event words, and nearly the same duration
-const setCopies = Effect.fnUntraced(function* (sourceId: string) {
+const setCopies = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
   const [row] = yield* db.select().from(source).where(eq(source.id, sourceId));
   const durationMs = row?.rawDurationMs ?? null;
@@ -263,7 +263,7 @@ const setCopies = Effect.fnUntraced(function* (sourceId: string) {
 
 // The best tracklist that a copy selected from its own candidates. Without nearly the same
 // duration, its entries have no times.
-const copyTracklist = Effect.fnUntraced(function* (sourceId: string) {
+const copyTracklist = Effect.fn(function* (sourceId: string) {
   const copies = yield* setCopies(sourceId);
   const lists = yield* Effect.forEach(copies, (copy) =>
     Effect.gen(function* () {
@@ -301,7 +301,7 @@ const entryKey = (entry: { readonly artist: string | null; readonly title: strin
  * that is better. A segment gets the match of its text, also when another source found it.
  * Returns whether a segment changed.
  */
-const deriveSegments = Effect.fnUntraced(function* (sourceId: string) {
+const deriveSegments = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
   const [row] = yield* db.select().from(source).where(eq(source.id, sourceId));
   if (row === undefined) return false;
@@ -372,7 +372,7 @@ const deriveSegments = Effect.fnUntraced(function* (sourceId: string) {
 });
 
 // The copies of a set can select the tracklist of the source, so they change with it
-const deriveWithCopies = Effect.fnUntraced(function* (sourceId: string) {
+const deriveWithCopies = Effect.fn(function* (sourceId: string) {
   const copies = yield* setCopies(sourceId);
   const changed = yield* Effect.forEach([sourceId, ...copies.map((copy) => copy.id)], (id) =>
     deriveSegments(id).pipe(Effect.map((derived) => (derived ? [id] : []))),
@@ -418,7 +418,7 @@ const fits =
     normalizeText(candidate.title) === normalizeText(text.title) &&
     normalizeArtist(candidate.artist ?? "") === normalizeArtist(text.artist);
 
-const unmatchedSegments = Effect.fnUntraced(function* (sourceId: string) {
+const unmatchedSegments = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
   const rows = yield* db
     .select()
@@ -430,7 +430,7 @@ const unmatchedSegments = Effect.fnUntraced(function* (sourceId: string) {
   });
 });
 
-const queueMatch = Effect.fnUntraced(function* (sourceId: string) {
+const queueMatch = Effect.fn(function* (sourceId: string) {
   if (!(yield* MusicBrainzLookups).has(musicbrainzLookupKey)) return;
   if ((yield* unmatchedSegments(sourceId)).length === 0) return;
   yield* (yield* Jobs).enqueue(
@@ -467,14 +467,14 @@ export const queueTracklistRead = Effect.fn("queueTracklistRead")(function* (sou
 
 const ReadPayload = Schema.Struct({ sourceId: Schema.String });
 
-const runRead = Effect.fnUntraced(function* ({ sourceId }: typeof ReadPayload.Type) {
+const runRead = Effect.fn(function* ({ sourceId }: typeof ReadPayload.Type) {
   const db = yield* Database;
   const tracklists = yield* Tracklists;
   const [row] = yield* db.select().from(source).where(eq(source.id, sourceId));
   if (row === undefined) return;
 
   // A failed read changes nothing, and the next play tries again
-  const failed = Effect.fnUntraced(function* (error: ProviderError) {
+  const failed = Effect.fn(function* (error: ProviderError) {
     tracklists.readAt.delete(sourceId);
     yield* Effect.logWarning("Cannot read the tracklists").pipe(
       Effect.annotateLogs({ sourceId, reason: error.reason }),
@@ -540,7 +540,7 @@ export const deriveEntryMatches = Effect.fn("deriveEntryMatches")(function* (
   yield* Effect.forEach(changed, publish, { discard: true });
 });
 
-const assertMatch = Effect.fnUntraced(function* (text: typeof EntryText.Type, recordingId: string) {
+const assertMatch = Effect.fn(function* (text: typeof EntryText.Type, recordingId: string) {
   yield* writeAssertion(yield* entryEntity(text), {
     origin: "match",
     originRef: musicbrainzLookupKey,
@@ -578,7 +578,7 @@ export const assertSegmentMatches = Effect.fn("assertSegmentMatches")(function* 
   );
 });
 
-const writeMatch = Effect.fnUntraced(function* (
+const writeMatch = Effect.fn(function* (
   text: typeof EntryText.Type,
   candidate: MusicBrainzRecording,
 ) {
@@ -601,7 +601,7 @@ const MatchPayload = Schema.Struct({
 
 // The ListenBrainz mapper, then the MusicBrainz search. MusicBrainz is often busy for a minute
 // (October 2026), so each segment keeps its match and the job continues after the last one.
-const runMatch = Effect.fnUntraced(function* ({ sourceId, after }: typeof MatchPayload.Type) {
+const runMatch = Effect.fn(function* ({ sourceId, after }: typeof MatchPayload.Type) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const lookup = (yield* MusicBrainzLookups).get(musicbrainzLookupKey);
@@ -644,7 +644,7 @@ const runMatch = Effect.fnUntraced(function* ({ sourceId, after }: typeof MatchP
 });
 
 /** The segments of the source, with the canonical fields of the matched recordings */
-const segmentsOf = Effect.fnUntraced(function* (sourceId: string) {
+const segmentsOf = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
   const rows = yield* db
     .select()

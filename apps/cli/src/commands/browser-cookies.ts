@@ -273,7 +273,7 @@ export const parseSafariCookies = (data: Buffer) => {
   return cookies;
 };
 
-const firefoxCookies = Effect.fnUntraced(
+const firefoxCookies = Effect.fn(
   function* (database: DatabaseSync) {
     const version = yield* Schema.decodeUnknownEffect(
       Schema.Struct({ user_version: Schema.Finite }),
@@ -309,7 +309,7 @@ const firefoxCookies = Effect.fnUntraced(
     ),
 );
 
-const chromiumCookies = Effect.fnUntraced(
+const chromiumCookies = Effect.fn(
   function* (database: DatabaseSync, browser: CookieBrowser, login: BrowserLogin, now: number) {
     const meta = yield* Schema.decodeUnknownEffect(DatabaseVersion)(
       yield* Effect.try(() =>

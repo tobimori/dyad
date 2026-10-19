@@ -64,7 +64,7 @@ class LinkedAccount extends Data.Class<{
   readonly credentials: Credentials;
 }> {}
 
-const loadAccount = Effect.fnUntraced(function* (provider: string) {
+const loadAccount = Effect.fn(function* (provider: string) {
   const db = yield* Database;
   const [row] = yield* db
     .select({ id: providerAccount.id, hlc: providerAccount.hlc, values: credential.values })
@@ -85,7 +85,7 @@ const loadAccount = Effect.fnUntraced(function* (provider: string) {
 
 // A read takes up to a minute. An unlink or a new link during the read must not bring back the
 // library of the old link.
-const writeIfLinked = Effect.fnUntraced(function* <A, E, R>(
+const writeIfLinked = Effect.fn(function* <A, E, R>(
   account: LinkedAccount,
   write: Effect.Effect<A, E, R>,
 ) {
@@ -104,7 +104,7 @@ const writeIfLinked = Effect.fnUntraced(function* <A, E, R>(
   );
 });
 
-const writeState = Effect.fnUntraced(function* (
+const writeState = Effect.fn(function* (
   account: LinkedAccount,
   values: Omit<typeof librarySyncState.$inferInsert, "provider">,
 ) {
@@ -118,7 +118,7 @@ const writeState = Effect.fnUntraced(function* (
     });
 });
 
-const writeRemotePlaylist = Effect.fnUntraced(function* (
+const writeRemotePlaylist = Effect.fn(function* (
   account: LinkedAccount,
   remoteId: string,
   values: Omit<typeof libraryRemotePlaylist.$inferInsert, "provider" | "remoteId">,
@@ -133,10 +133,7 @@ const writeRemotePlaylist = Effect.fnUntraced(function* (
     });
 });
 
-const writeSongs = Effect.fnUntraced(function* (
-  account: LinkedAccount,
-  songs: ReadonlyArray<LibrarySong>,
-) {
+const writeSongs = Effect.fn(function* (account: LinkedAccount, songs: ReadonlyArray<LibrarySong>) {
   const db = yield* Database;
   const provider = account.provider;
   const known = new Map(
@@ -224,7 +221,7 @@ const incompleteReasonOf = (
   return null;
 };
 
-const importSongs = Effect.fnUntraced(function* (
+const importSongs = Effect.fn(function* (
   account: LinkedAccount,
   library: ProviderLibrary,
   before: LibraryProbe,
@@ -275,7 +272,7 @@ const remotePlaylistOf = (account: LinkedAccount, remoteId: string) =>
  * entries, because a part of an ordered list has no order. Returns the provider's songs as bound
  * recordings, or `None` after an incomplete read.
  */
-const pullPlaylist = Effect.fnUntraced(function* (
+const pullPlaylist = Effect.fn(function* (
   account: LinkedAccount,
   library: ProviderLibrary,
   link: {
@@ -335,10 +332,7 @@ const pullPlaylist = Effect.fnUntraced(function* (
  * changes since the last sync, so that the edits in Dyad stay. A removed remote playlist unlinks
  * its playlist.
  */
-const importPlaylists = Effect.fnUntraced(function* (
-  account: LinkedAccount,
-  library: ProviderLibrary,
-) {
+const importPlaylists = Effect.fn(function* (account: LinkedAccount, library: ProviderLibrary) {
   const db = yield* Database;
   const list = yield* library.playlists(account.credentials);
 
@@ -474,7 +468,7 @@ const withoutEach = <A>(
  * Reads the provider playlist, then sends the new songs in Dyad with `add`. Entries without a
  * source of the provider stay only in Dyad.
  */
-const pushPlaylist = Effect.fnUntraced(function* (
+const pushPlaylist = Effect.fn(function* (
   account: LinkedAccount,
   library: ProviderLibrary,
   writes: ProviderPlaylists,
@@ -588,7 +582,7 @@ const pushPlaylist = Effect.fnUntraced(function* (
   );
 });
 
-const runPlaylistPush = Effect.fnUntraced(
+const runPlaylistPush = Effect.fn(
   function* (payload: typeof PlaylistPushPayload.Type) {
     const providers = yield* Providers;
     const row = yield* readRow("playlist", payload.playlistId);
@@ -638,10 +632,7 @@ const runPlaylistPush = Effect.fnUntraced(
   Effect.catchTag("AccountChanged", () => Effect.void),
 );
 
-const importLibrary = Effect.fnUntraced(function* (
-  account: LinkedAccount,
-  library: ProviderLibrary,
-) {
+const importLibrary = Effect.fn(function* (account: LinkedAccount, library: ProviderLibrary) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const startedAt = yield* Clock.currentTimeMillis;
@@ -678,7 +669,7 @@ const importLibrary = Effect.fnUntraced(function* (
 });
 
 // `account` stops the runs until a new link. `failed` uses the backoff of the queue.
-const recordFailure = Effect.fnUntraced(function* (account: LinkedAccount, error: LibraryError) {
+const recordFailure = Effect.fn(function* (account: LinkedAccount, error: LibraryError) {
   const db = yield* Database;
   yield* Effect.logWarning("Library import failed").pipe(
     Effect.annotateLogs({ provider: account.provider, kind: error.kind, reason: error.reason }),
@@ -715,7 +706,7 @@ const recordFailure = Effect.fnUntraced(function* (account: LinkedAccount, error
   });
 });
 
-const runLibrarySync = Effect.fnUntraced(
+const runLibrarySync = Effect.fn(
   function* (payload: typeof SyncPayload.Type) {
     const providers = yield* Providers;
 
@@ -739,7 +730,7 @@ const runLibrarySync = Effect.fnUntraced(
 );
 
 // The albums of all library songs, also of songs that this sync did not change
-const queueLibraryEditions = Effect.fnUntraced(function* (provider: string) {
+const queueLibraryEditions = Effect.fn(function* (provider: string) {
   const db = yield* Database;
   const rows = yield* db
     .selectDistinct({

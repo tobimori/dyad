@@ -84,7 +84,7 @@ const bound = alias(recording, "bound");
 const canonical = alias(recording, "canonical");
 
 // Plays from before the link stay unsent. A DJ set would show as one long song.
-const waitingPlays = Effect.fnUntraced(function* (linkedAt: number) {
+const waitingPlays = Effect.fn(function* (linkedAt: number) {
   const db = yield* Database;
   const title = sql<string>`coalesce(${canonical.title}, ${source.rawTitle})`;
   const artist = sql<string>`coalesce(${canonical.artistName}, ${source.rawArtist})`;
@@ -120,7 +120,7 @@ const waitingPlays = Effect.fnUntraced(function* (linkedAt: number) {
     .limit(scrobbleBatch);
 });
 
-const runScrobble = Effect.fnUntraced(function* (payload: typeof ScrobblePayload.Type) {
+const runScrobble = Effect.fn(function* (payload: typeof ScrobblePayload.Type) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const recommender = (yield* Recommenders).get(payload.recommender);

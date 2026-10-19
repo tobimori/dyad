@@ -67,7 +67,7 @@ const renewAfterSeconds = (timeout: string | undefined) => {
 };
 
 /** The variables of a GENA event. `LastChange` is expanded to its variables. */
-const eventVariables = Effect.fnUntraced(function* (body: string) {
+const eventVariables = Effect.fn(function* (body: string) {
   const variables = new Map<string, string>();
   const properties = yield* decodeXml(PropertySet, body);
 
@@ -144,7 +144,7 @@ export const subscribeEvents = Effect.fn("subscribeEvents")(function* (
   const port = address instanceof Object ? address.port : 0;
   const callback = `http://${yield* localAddressTo(host)}:${port}/`;
 
-  const keepSubscribed = Effect.fnUntraced(
+  const keepSubscribed = Effect.fn(
     function* (service: UpnpService) {
       const first = yield* subscribe(service.eventUrl, {
         CALLBACK: `<${callback}>`,

@@ -123,7 +123,7 @@ const isMine = (view: SessionView) =>
   view.playback.group.length === 0 &&
   !view.superseded;
 
-const makeEngine = Effect.fnUntraced(function* (options: {
+const makeEngine = Effect.fn(function* (options: {
   readonly audio: Audio;
   readonly serverUrl: string;
   readonly volume: number;
@@ -197,7 +197,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
     return closing === null ? Effect.void : Scope.close(closing, Exit.void);
   });
 
-  const closeListen = Effect.fnUntraced(function* (completed: boolean) {
+  const closeListen = Effect.fn(function* (completed: boolean) {
     const closing = listen;
     if (closing === null) return;
     listen = null;
@@ -215,7 +215,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
   // A quit while offline keeps the play of the current entry
   yield* Effect.addFinalizer(() => closeListen(false));
 
-  const run = Effect.fnUntraced(
+  const run = Effect.fn(
     function* (
       session: typeof SessionClient.Service,
       callbacks: {
@@ -240,7 +240,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
 
       // A failed download stays until `failedTrack` or a reconnect drops it, so that a failed
       // next entry does not ask the server a second time when it starts
-      const bufferOf = Effect.fnUntraced(function* (entry: QueueEntry) {
+      const bufferOf = Effect.fn(function* (entry: QueueEntry) {
         const existing = buffers.get(entry.id);
         if (existing !== undefined) return existing;
 
@@ -296,7 +296,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
         }
       });
 
-      const report = Effect.fnUntraced(function* (
+      const report = Effect.fn(function* (
         view: SessionView,
         fields: {
           readonly entryId: EntryId;
@@ -368,11 +368,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
           : Effect.void;
 
       // The failure text of the entry before stays until audio plays
-      const started = Effect.fnUntraced(function* (
-        opened: number,
-        loaded: Track,
-        copy: string | null,
-      ) {
+      const started = Effect.fn(function* (opened: number, loaded: Track, copy: string | null) {
         if (opened !== token) return;
         track = loaded;
         callbacks.onFailure(null);
@@ -380,7 +376,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
         yield* reportState(yield* latest);
       });
 
-      const open = Effect.fnUntraced(function* (entry: QueueEntry, startMs: number) {
+      const open = Effect.fn(function* (entry: QueueEntry, startMs: number) {
         yield* stopAudio;
         const opened = token;
         const buffered = yield* bufferOf(entry);
@@ -415,7 +411,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
       // Offline, the device goes on with the next entry that it downloaded completely. A skip of
       // the user stays on the current entry when no other entry has its audio.
       // RETURN TYPE: `open` and the functions that it calls back refer to each other
-      const advanceOffline = Effect.fnUntraced(function* (
+      const advanceOffline = Effect.fn(function* (
         reason: "end" | "skip" | "failed",
         direction: 1 | -1,
       ): Effect.fn.Return<void> {
@@ -476,7 +472,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
       });
 
       // RETURN TYPE: see `advanceOffline`
-      const failedTrack = Effect.fnUntraced(function* (
+      const failedTrack = Effect.fn(function* (
         opened: number,
         entry: QueueEntry,
         cause: Cause.Cause<unknown>,
@@ -521,7 +517,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
       // The engine starts the next entry itself, then reports the end, so that the gap stays
       // short. The server then makes the next entry current.
       // RETURN TYPE: see `advanceOffline`
-      const ended = Effect.fnUntraced(function* (opened: number): Effect.fn.Return<void> {
+      const ended = Effect.fn(function* (opened: number): Effect.fn.Return<void> {
         const entryId = current;
         if (opened !== token || entryId === null) return;
 
@@ -553,7 +549,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
       };
 
       // The server adopted what this device did offline, or its state wins
-      const reconnected = Effect.fnUntraced(function* (view: SessionView) {
+      const reconnected = Effect.fn(function* (view: SessionView) {
         const sent = sentResume;
         sentResume = null;
         advanced = [];
@@ -574,7 +570,7 @@ const makeEngine = Effect.fnUntraced(function* (options: {
         yield* closeListen(false);
       });
 
-      const reconcile = Effect.fnUntraced(function* (view: SessionView) {
+      const reconcile = Effect.fn(function* (view: SessionView) {
         yield* applyVolume(view);
         // Offline, this device decides what it plays
         if (!view.connected) {

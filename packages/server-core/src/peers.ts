@@ -43,14 +43,14 @@ export class PeerEchoes extends Context.Service<PeerEchoes, Map<string, Set<numb
 
 export const peerEchoesLayer = Layer.sync(PeerEchoes, () => new Map());
 
-const addEcho = Effect.fnUntraced(function* (peer: string, changeSeq: number | undefined) {
+const addEcho = Effect.fn(function* (peer: string, changeSeq: number | undefined) {
   if (changeSeq === undefined) return;
   const echoes = yield* PeerEchoes;
   echoes.set(peer, (echoes.get(peer) ?? new Set()).add(changeSeq));
 });
 
 // Values before the cursor are no longer read, so they go
-const echoesAfter = Effect.fnUntraced(function* (peer: string, cursor: PeerCursor) {
+const echoesAfter = Effect.fn(function* (peer: string, cursor: PeerCursor) {
   const echoes = (yield* PeerEchoes).get(peer) ?? new Set();
   for (const changeSeq of echoes) if (changeSeq < cursor.changeSeq) echoes.delete(changeSeq);
   return [...echoes];
@@ -62,7 +62,7 @@ const checkVersion = (protocolVersion: number) =>
     : Effect.fail(new UpgradeRequired({ serverProtocolVersion: syncProtocolVersion }));
 
 /** Makes a token for the redeeming server. Only its hash stays here. */
-const redeem = Effect.fnUntraced(function* (request: PeerRedeemRequest) {
+const redeem = Effect.fn(function* (request: PeerRedeemRequest) {
   yield* checkVersion(request.protocolVersion);
   const db = yield* Database;
   const identity = yield* ReplicaDatabase;
@@ -115,7 +115,7 @@ export const peerAuthenticationLayer = Layer.effect(
   }),
 );
 
-const peerPull = Effect.fnUntraced(function* (request: PeerPullRequest) {
+const peerPull = Effect.fn(function* (request: PeerPullRequest) {
   yield* checkVersion(request.protocolVersion);
   const db = yield* Database;
   const identity = yield* ReplicaDatabase;
@@ -133,7 +133,7 @@ const peerPull = Effect.fnUntraced(function* (request: PeerPullRequest) {
   });
 });
 
-const peerPush = Effect.fnUntraced(function* (request: PeerPushRequest) {
+const peerPush = Effect.fn(function* (request: PeerPushRequest) {
   yield* checkVersion(request.protocolVersion);
   const db = yield* Database;
   yield* addEcho(yield* CurrentPeer, yield* db.transaction(() => mergePeerRows(request.rows)));
@@ -195,7 +195,7 @@ const peerConnection = (url: string, token: string | null) =>
   );
 
 // The answer of a peer that cannot be reached is not a pairing reason
-const redeemAt = Effect.fnUntraced(
+const redeemAt = Effect.fn(
   function* (url: string, workspaceId: WorkspaceId | null, code: string) {
     const identity = yield* ReplicaDatabase;
     const connection = yield* PeerConnection;
@@ -331,7 +331,7 @@ class PeerSyncFailed extends Data.TaggedError("PeerSyncFailed")<{
   readonly reason: "revoked" | "upgrade_required" | "unreachable" | "other_server";
 }> {}
 
-const saveState = Effect.fnUntraced(function* (
+const saveState = Effect.fn(function* (
   replicaId: string,
   state: Partial<typeof serverPeer.$inferInsert>,
 ) {
@@ -340,7 +340,7 @@ const saveState = Effect.fnUntraced(function* (
 });
 
 /** Pulls the peer's rows after the cursor, then pushes this replica's rows after the peer's cursor */
-const syncPeer = Effect.fnUntraced(
+const syncPeer = Effect.fn(
   function* (peer: typeof serverPeer.$inferSelect) {
     const db = yield* Database;
     const connection = yield* PeerConnection;

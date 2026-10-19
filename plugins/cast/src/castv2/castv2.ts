@@ -75,7 +75,7 @@ const encodeMessage = (destinationId: string, namespace: string, payload: string
 };
 
 // Reads the length-delimited fields, which hold all strings of `CastMessage`
-const decodeMessage = Effect.fnUntraced(function* (bytes: Uint8Array) {
+const decodeMessage = Effect.fn(function* (bytes: Uint8Array) {
   const strings = new Map<number, string>();
   let offset = 0;
 
@@ -197,7 +197,7 @@ export const openChannel = Effect.fn("openChannel")(function* (
       .write(encodeMessage(destinationId, namespace, JSON.stringify(payload)))
       .pipe(Effect.mapError((error) => unreachable(error.message)));
 
-  const request = Effect.fnUntraced(function* (
+  const request = Effect.fn(function* (
     namespace: string,
     destinationId: string,
     payload: Schema.JsonObject,

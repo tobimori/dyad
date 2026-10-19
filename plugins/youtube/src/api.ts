@@ -297,7 +297,7 @@ const decodeVideoId = (externalId: string) =>
     Effect.mapError(() => new ProviderError({ reason: "Invalid video ID" })),
   );
 
-const readPlayer = Effect.fnUntraced(function* (
+const readPlayer = Effect.fn(function* (
   withVisitor: Effect.Success<typeof visitorCache>,
   videoId: string,
 ) {
@@ -339,7 +339,7 @@ export const playerCache = (withVisitor: Effect.Success<typeof visitorCache>) =>
 
 type Players = Effect.Success<ReturnType<typeof playerCache>>;
 
-const adaptiveFormats = Effect.fnUntraced(function* <S extends Schema.ConstraintDecoder<unknown>>(
+const adaptiveFormats = Effect.fn(function* <S extends Schema.ConstraintDecoder<unknown>>(
   players: Players,
   externalId: string,
   schema: S,
@@ -399,7 +399,7 @@ export const searchVideos = Effect.fn("searchVideos")(function* (query: string) 
   );
 });
 
-const playerStream = Effect.fnUntraced(function* (
+const playerStream = Effect.fn(function* (
   format: {
     readonly url: string;
     readonly contentLength: number;
@@ -467,7 +467,7 @@ const likeCount = (text: string | undefined) => {
 const commentPages = 3;
 
 // The pinned comment, then comments of the uploader, then the most likes
-const commentTracklist = Effect.fnUntraced(function* (next: typeof Next.Type) {
+const commentTracklist = Effect.fn(function* (next: typeof Next.Type) {
   const first = next.contents?.twoColumnWatchNextResults.results.results.contents
     .find((content) => content.itemSectionRenderer?.sectionIdentifier === "comment-item-section")
     ?.itemSectionRenderer?.contents.flatMap((item) =>

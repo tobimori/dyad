@@ -157,7 +157,7 @@ const NameMention = Schema.Struct({
 });
 
 // The names that credits and uploaders give each external ID
-const mentionsOf = Effect.fnUntraced(function* (externalIds: ReadonlyArray<string>) {
+const mentionsOf = Effect.fn(function* (externalIds: ReadonlyArray<string>) {
   const db = yield* Database;
   const chunks = yield* Effect.forEach(Arr.chunksOf(externalIds, chunkSize), (chunk) =>
     Effect.gen(function* () {

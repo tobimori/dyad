@@ -72,7 +72,7 @@ const toLibrarySong = (item: typeof LibrarySongItem.Type) => {
 
 // Apple sometimes answers 404 or an empty page after `next` promised more items. Then the snapshot
 // keeps the items so far, but is incomplete.
-const readPages = Effect.fnUntraced(function* <S extends Schema.Top>(
+const readPages = Effect.fn(function* <S extends Schema.Top>(
   pace: Pace,
   request: HttpClientRequest.HttpClientRequest,
   item: S,

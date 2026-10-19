@@ -377,7 +377,7 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
     return packet;
   };
 
-  const play = Effect.fnUntraced(
+  const play = Effect.fn(
     function* <E, R>(source: Stream.Stream<Int16Array | Float32Array, E, R>, startAt: NtpTime) {
       const own = generation;
       const startRtp = rtpTime;
@@ -468,7 +468,7 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
       ? rtpTime
       : (mapping.rtp + Math.round((millisBetween(mapping.ntp, time) / 1000) * sampleRate)) >>> 0;
 
-  const setMetadata = Effect.fnUntraced(function* (metadata: TrackMetadata) {
+  const setMetadata = Effect.fn(function* (metadata: TrackMetadata) {
     const start = rtpAt(metadata.startAt);
     const parameter = (contentType: string, body: Uint8Array) =>
       rtsp.request("SET_PARAMETER", uri, {

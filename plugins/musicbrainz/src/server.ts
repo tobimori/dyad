@@ -19,7 +19,7 @@ const toMusicBrainzError = (error: LookupError | RateLimited) =>
 
 // The ListenBrainz mapper first. Only its misses use the MusicBrainz search, which allows one
 // request per second.
-const recordingsByText = Effect.fnUntraced(function* (
+const recordingsByText = Effect.fn(function* (
   items: ReadonlyArray<{ readonly key: string; readonly artist: string; readonly title: string }>,
 ) {
   const mapped = yield* lookupRecordings(items);

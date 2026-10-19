@@ -147,7 +147,7 @@ const decoder = Effect.gen(function* () {
     send(session, ms, frame);
   };
 
-  const open = Effect.fnUntraced(function* (session: Session) {
+  const open = Effect.fn(function* (session: Session) {
     yield* call(() => libav.mkreaderdev(session.device));
     const [demuxer, streams] = yield* call(() => libav.ff_init_demuxer_file(session.device));
     session.demuxer = demuxer;
@@ -164,7 +164,7 @@ const decoder = Effect.gen(function* () {
     session.msPerTick = (stream.time_base_num / stream.time_base_den) * 1000;
   });
 
-  const decodeNext = Effect.fnUntraced(function* (session: Session) {
+  const decodeNext = Effect.fn(function* (session: Session) {
     const [result, packets] = yield* call(() =>
       libav.ff_read_frame_multi(session.demuxer, session.packet, { limit: 1 }),
     );
@@ -190,7 +190,7 @@ const decoder = Effect.gen(function* () {
     port.postMessage(End.make({ session: session.id }));
   });
 
-  const close = Effect.fnUntraced(
+  const close = Effect.fn(
     function* (session: Session) {
       if (session.codec !== 0) {
         yield* call(() => libav.ff_free_decoder(session.codec, session.packet, session.frame));

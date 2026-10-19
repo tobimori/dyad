@@ -168,7 +168,7 @@ export class ProviderPlayback extends Data.Class<{
     | undefined;
 }> {}
 
-const selectSource = Effect.fnUntraced(function* (sourceId: string) {
+const selectSource = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
   const [row] = yield* db
     .select({ source, variant: sourceVariant, root: libraryRoot.path, file: localFile.path })
@@ -181,7 +181,7 @@ const selectSource = Effect.fnUntraced(function* (sourceId: string) {
   return row;
 });
 
-const providerPlayback = Effect.fnUntraced(function* (item: {
+const providerPlayback = Effect.fn(function* (item: {
   readonly sourceId: string;
   readonly provider: string;
   readonly externalId: string;
@@ -323,7 +323,7 @@ export const choosePlayableSource = Effect.fn("choosePlayableSource")(function* 
 
 // A copy plays when it gives audio before the first byte: a file, a complete cache file or a
 // resolve. A source that failed a moment ago fails again without a request.
-const tryCopy = Effect.fnUntraced(
+const tryCopy = Effect.fn(
   function* (sourceId: string, capabilities: PlaybackCapabilities) {
     const { failed } = yield* CopyAttempts;
     const failedAt = failed.get(sourceId);
@@ -391,7 +391,7 @@ export const choosePlayableCopy = Effect.fn("choosePlayableCopy")(function* (
 });
 
 // The source that plays, when it is not the requested source
-const copySummary = Effect.fnUntraced(function* (sourceId: string, copyId: string) {
+const copySummary = Effect.fn(function* (sourceId: string, copyId: string) {
   if (copyId === sourceId) return null;
   const [row] = yield* playableSources(eq(source.id, copyId));
   if (row !== undefined) return sourceSummary(row);
@@ -455,7 +455,7 @@ class SourceAudio extends Data.Class<{
 
 // Cached audio plays only with the keys of the asset in the file. Keys of another asset, for
 // example after the provider replaced the song's file, make it a cache miss.
-const cachedAudio = Effect.fnUntraced(function* (playable: ProviderPlayback) {
+const cachedAudio = Effect.fn(function* (playable: ProviderPlayback) {
   const cache = yield* MediaCache;
   if (playable.cacheId === null) return Option.none();
 

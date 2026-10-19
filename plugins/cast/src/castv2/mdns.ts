@@ -25,7 +25,7 @@ const query = encode({
   questions: [{ type: "PTR", name: service, class: "IN" }],
 });
 
-const open = Effect.fnUntraced(function* (port: number) {
+const open = Effect.fn(function* (port: number) {
   // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
   const socket = yield* NodeDatagramSocket.make({
     bind: { address: "0.0.0.0", port },
@@ -49,7 +49,7 @@ const txtRecord = (data: string | Uint8Array | ReadonlyArray<string | Uint8Array
 };
 
 // A response usually holds the PTR, SRV, TXT and A records of a device
-const devicesIn = Effect.fnUntraced(
+const devicesIn = Effect.fn(
   function* (payload: Uint8Array, source: string) {
     const packet = yield* Effect.try(() => decode(Buffer.from(payload)));
     const records = [...(packet.answers ?? []), ...(packet.additionals ?? [])];

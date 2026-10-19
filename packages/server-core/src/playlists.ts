@@ -40,7 +40,7 @@ export const listPlaylists = Effect.gen(function* () {
 const jitterDigits = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 // Two random characters make equal keys from inserts on two replicas at the same place unlikely
-const keyBetween = Effect.fnUntraced(function* (before: string | null, after: string | null) {
+const keyBetween = Effect.fn(function* (before: string | null, after: string | null) {
   const key = generateKeyBetween(before, after);
   const digit = Effect.map(
     Random.nextIntBetween(0, jitterDigits.length, { halfOpen: true }),
@@ -50,7 +50,7 @@ const keyBetween = Effect.fnUntraced(function* (before: string | null, after: st
   return after === null || jittered < after ? jittered : key;
 });
 
-const liveEntries = Effect.fnUntraced(function* (playlistId: string) {
+const liveEntries = Effect.fn(function* (playlistId: string) {
   const db = yield* Database;
   return yield* db
     .select({ id: playlistEntry.id, position: playlistEntry.position })
@@ -59,7 +59,7 @@ const liveEntries = Effect.fnUntraced(function* (playlistId: string) {
     .orderBy(asc(playlistEntry.position), asc(playlistEntry.id));
 });
 
-const ownedPlaylist = Effect.fnUntraced(function* (playlistId: string) {
+const ownedPlaylist = Effect.fn(function* (playlistId: string) {
   const row = yield* readRow("playlist", playlistId);
   if (row?.table !== "playlist" || row.deleted) {
     return yield* new PlaylistNotFound();
@@ -67,7 +67,7 @@ const ownedPlaylist = Effect.fnUntraced(function* (playlistId: string) {
   return row;
 });
 
-const appendEntries = Effect.fnUntraced(function* (
+const appendEntries = Effect.fn(function* (
   playlistId: string,
   entries: ReadonlyArray<typeof EntryInput.Type>,
 ) {
@@ -155,7 +155,7 @@ export const editPlaylist = Effect.fn("editPlaylist")(function* (
   yield* pushIfHeld(playlistId);
 });
 
-const patchEntry = Effect.fnUntraced(function* (
+const patchEntry = Effect.fn(function* (
   id: string,
   fields: { readonly position?: string; readonly deleted?: true },
 ) {

@@ -92,7 +92,7 @@ const indexFile = "index.json";
 // A device online for a long time still renews its leases and follows its playlists
 const checkInterval = "1 hour";
 
-const makeDownloads = Effect.fnUntraced(function* (options: {
+const makeDownloads = Effect.fn(function* (options: {
   /** One folder per server, because source IDs and leases belong to one server */
   readonly directory: string;
   readonly serverUrl: string;
@@ -150,7 +150,7 @@ const makeDownloads = Effect.fnUntraced(function* (options: {
     )
     .pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot save the downloads", cause)));
 
-  const removeFiles = Effect.fnUntraced(function* (sourceIds: ReadonlyArray<string>) {
+  const removeFiles = Effect.fn(function* (sourceIds: ReadonlyArray<string>) {
     if (sourceIds.length === 0) return;
     const current = yield* SubscriptionRef.get(state);
     for (const sourceId of sourceIds) {
@@ -190,7 +190,7 @@ const makeDownloads = Effect.fnUntraced(function* (options: {
   });
 
   // A failed read keeps the last sources; only a missing album or playlist empties the pin
-  const expand = Effect.fnUntraced(
+  const expand = Effect.fn(
     function* (pin: DownloadPin) {
       if (pin.kind === "song") return pin.sourceIds;
       if (pin.kind === "playlist") {
@@ -216,7 +216,7 @@ const makeDownloads = Effect.fnUntraced(function* (options: {
       ),
   );
 
-  const download = Effect.fnUntraced(
+  const download = Effect.fn(
     function* (sourceId: string, quality: typeof DownloadQuality.Type) {
       const plan = yield* connection.prepareDownload({
         sourceId,

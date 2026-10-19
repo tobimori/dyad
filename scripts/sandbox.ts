@@ -62,7 +62,7 @@ const generateTones = Effect.fn(function* (library: string) {
 });
 
 // The source stays read-only, so that the sandbox never changes a real database
-const copyDatabase = Effect.fnUntraced(
+const copyDatabase = Effect.fn(
   function* (source: string, target: string) {
     const sql = yield* SqliteClient.SqliteClient;
     yield* sql`VACUUM INTO ${target}`;

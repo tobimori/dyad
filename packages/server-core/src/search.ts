@@ -23,7 +23,7 @@ const discoveredResults = 5;
 // refreshes and retries of the plugin
 const answerTimeout = "8 seconds";
 
-const searchLocalSources = Effect.fnUntraced(function* (query: string) {
+const searchLocalSources = Effect.fn(function* (query: string) {
   const db = yield* Database;
   // `%` and `_` in the query match only themselves
   const pattern = `%${query.replaceAll(/[\\%_]/g, "\\$&")}%`;
@@ -114,7 +114,7 @@ class Answer extends Data.Class<{
 }> {}
 
 // A failure, a defect or a timeout of one plugin skips only that provider
-const searchProvider = Effect.fnUntraced(function* (
+const searchProvider = Effect.fn(function* (
   id: string,
   name: string,
   search: NonNullable<Provider["search"]>,
@@ -167,7 +167,7 @@ const fetchPopularity = (
 
 // Plays of the candidates, of their ISRCs and of their artists. The ISRC of a played provider
 // source is known only while it is in the provider cache.
-const loadPlays = Effect.fnUntraced(function* (candidates: ReadonlyArray<Candidate>, now: number) {
+const loadPlays = Effect.fn(function* (candidates: ReadonlyArray<Candidate>, now: number) {
   const db = yield* Database;
   const sourceIds = candidates.map((candidate) => candidate.summary.id);
   const isrcs = candidates.flatMap((candidate) => candidate.isrc ?? []);
@@ -199,7 +199,7 @@ const loadPlays = Effect.fnUntraced(function* (candidates: ReadonlyArray<Candida
   return rows.map((row) => new Play(row));
 });
 
-const rankAnswers = Effect.fnUntraced(function* (query: string, answer: Answer) {
+const rankAnswers = Effect.fn(function* (query: string, answer: Answer) {
   const now = yield* Clock.currentTimeMillis;
 
   // A played provider source is also a local result. The local copy has the canonical fields,

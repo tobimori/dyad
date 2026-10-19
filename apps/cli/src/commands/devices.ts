@@ -19,7 +19,7 @@ const readTokens = Effect.gen(function* () {
   return yield* Schema.decodeEffect(DeviceTokens)(text);
 });
 
-const writeTokens = Effect.fnUntraced(function* (tokens: typeof DeviceTokens.Type) {
+const writeTokens = Effect.fn(function* (tokens: typeof DeviceTokens.Type) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = yield* tokenFile;

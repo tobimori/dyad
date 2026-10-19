@@ -63,7 +63,7 @@ export class MediaStream extends Data.Class<{
   readonly partial?: boolean;
 }> {}
 
-const openAudio = Effect.fnUntraced(function* (media: string | MediaStream) {
+const openAudio = Effect.fn(function* (media: string | MediaStream) {
   // FFmpeg writes its log to stderr directly. Its warnings, such as the FLAC header that cannot
   // be rewritten in a stream, are expected. Not at import: the CLI executable has no FFmpeg.
   Log.setLevel(AV_LOG_ERROR);
@@ -178,7 +178,7 @@ const writePackets = (
 
 // Finalizers run in reverse order: the producer stops, then the muxer closes, then the caller's
 // decoder and input close. `writePackets` does not close the muxer when a write fails.
-const muxStream = Effect.fnUntraced(function* (
+const muxStream = Effect.fn(function* (
   { name, bytes }: { readonly name: string; readonly bytes: Readable | undefined },
   muxer: { readonly format: string; readonly options?: Record<string, string> },
   run: (

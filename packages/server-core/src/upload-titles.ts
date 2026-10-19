@@ -7,7 +7,7 @@ import { musicbrainzArtistId } from "./ids.ts";
 import { parseVersionTitle } from "./version-titles.ts";
 
 // Artists with each name key, in the catalog and in the MusicBrainz searches of this replica
-const artistCounts = Effect.fnUntraced(function* (keys: ReadonlyArray<string>) {
+const artistCounts = Effect.fn(function* (keys: ReadonlyArray<string>) {
   const db = yield* Database;
   const catalog = yield* db
     .select({ id: artist.id, nameKey: artist.nameKey })

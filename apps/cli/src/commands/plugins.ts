@@ -15,7 +15,7 @@ const pluginsCommand = Command.make("plugins", {}, () =>
   }),
 ).pipe(Command.withDescription("List the plugins of this device"));
 
-const changePlugin = Effect.fnUntraced(function* (id: string, enable: boolean) {
+const changePlugin = Effect.fn(function* (id: string, enable: boolean) {
   const plugin = clientPlugins.find((candidate) => candidate.id === id);
   if (plugin === undefined) {
     return yield* fail(

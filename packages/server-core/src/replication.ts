@@ -171,7 +171,7 @@ const IsrcEvidence = Schema.Struct({ isrc: Schema.String });
  * matching; a receiver only follows the merges that arrive, so it never writes a decision that it
  * made from a part of the input.
  */
-const deriveCatalog = Effect.fnUntraced(function* (rows: ReadonlyArray<CatalogInputRow>) {
+const deriveCatalog = Effect.fn(function* (rows: ReadonlyArray<CatalogInputRow>) {
   const db = yield* Database;
   if (rows.length === 0) return;
 

@@ -57,7 +57,7 @@ class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: 
 class NotJoined extends Data.TaggedError("NotJoined")<{}> {}
 
 /** With `controller`, this device opens no audio and only controls the session */
-const player = Effect.fnUntraced(function* (controller: boolean) {
+const player = Effect.fn(function* (controller: boolean) {
   const logging = yield* fileLogging;
   const logServices = yield* Layer.build(logging);
   const run = Effect.runForkWith(logServices);

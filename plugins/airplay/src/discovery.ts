@@ -25,7 +25,7 @@ const searchSchedule = Schedule.min([
   Schedule.spaced("30 seconds"),
 ]);
 
-const open = Effect.fnUntraced(function* (port: number) {
+const open = Effect.fn(function* (port: number) {
   // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
   const socket = yield* NodeDatagramSocket.make({
     bind: { address: "0.0.0.0", port },

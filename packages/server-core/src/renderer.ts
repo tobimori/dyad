@@ -198,7 +198,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
   const publish = (event: RenderEvent) => PubSub.publish(events, event);
   const indexOf = (id: string | undefined) => queue.findIndex((entry) => String(entry.id) === id);
 
-  const lose = Effect.fnUntraced(function* (id: string, output: TimedOutput, error: OutputError) {
+  const lose = Effect.fn(function* (id: string, output: TimedOutput, error: OutputError) {
     if (outputs.get(id)?.output !== output) return;
     outputs.delete(id);
     yield* publish(new OutputLost({ outputId: id, error }));
@@ -237,7 +237,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
     return player.setQueue(entries);
   });
 
-  const load = Effect.fnUntraced(function* (entry: QueueEntry) {
+  const load = Effect.fn(function* (entry: QueueEntry) {
     const ready = yield* Deferred.make<Entry, E | F>();
     const loading = Effect.gen(function* () {
       const audio = yield* input(entry);
@@ -325,7 +325,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
   });
 
   // Publishes `started` and shows its entry when it becomes audible
-  const announce = Effect.fnUntraced(function* (started: EntryStarted) {
+  const announce = Effect.fn(function* (started: EntryStarted) {
     yield* sleepUntil(started.atUs);
     yield* publish(started);
     const entry = queue.find((each) => each.id === started.entryId);
@@ -348,7 +348,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
     );
   });
 
-  const runEpoch = Effect.fnUntraced(
+  const runEpoch = Effect.fn(
     function* (ready: Deferred.Deferred<Entry, E | F>, positionMs: number) {
       // The loader publishes the failure
       if (Exit.isFailure(yield* Effect.exit(Deferred.await(ready)))) return;
@@ -443,10 +443,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
       ),
   );
 
-  const play = Effect.fnUntraced(function* (
-    entries: ReadonlyArray<QueueEntry>,
-    positionMs: number,
-  ) {
+  const play = Effect.fn(function* (entries: ReadonlyArray<QueueEntry>, positionMs: number) {
     yield* stopEpoch;
     queue = entries;
     const [first] = entries;
@@ -461,7 +458,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
     fiber = yield* Effect.forkIn(runEpoch(ready, position), scope);
   });
 
-  const setQueue = Effect.fnUntraced(function* (entries: ReadonlyArray<QueueEntry>) {
+  const setQueue = Effect.fn(function* (entries: ReadonlyArray<QueueEntry>) {
     const now = yield* nowUs;
     const audible = positionAt(now);
     if (epoch === undefined || audible === undefined) {
@@ -497,17 +494,17 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
     return position;
   });
 
-  const setCrossfade = Effect.fnUntraced(function* (seconds: number) {
+  const setCrossfade = Effect.fn(function* (seconds: number) {
     crossfadeSeconds = seconds;
     if (player !== undefined) yield* player.setCrossfade(seconds);
   });
 
-  const setDj = Effect.fnUntraced(function* (style: DjStyle | undefined) {
+  const setDj = Effect.fn(function* (style: DjStyle | undefined) {
     djStyle = style;
     if (player !== undefined) yield* player.setDj(style);
   });
 
-  const removeOutput = Effect.fnUntraced(function* (id: string) {
+  const removeOutput = Effect.fn(function* (id: string) {
     const removed = outputs.get(id);
     if (removed === undefined) return;
     outputs.delete(id);
@@ -515,7 +512,7 @@ export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E
     yield* removed.output.flush.pipe(Effect.ignore);
   });
 
-  const addOutput = Effect.fnUntraced(function* (id: string, output: TimedOutput) {
+  const addOutput = Effect.fn(function* (id: string, output: TimedOutput) {
     yield* removeOutput(id);
     const watch = yield* output.closed.pipe(
       Effect.as(new OutputError({ reason: "The device closed the connection" })),

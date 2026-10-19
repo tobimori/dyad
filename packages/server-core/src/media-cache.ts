@@ -153,7 +153,7 @@ const makeMediaCache = Effect.gen(function* () {
   yield* evict;
 
   /** The complete file of the variant. It becomes the newest file for eviction. */
-  const find = Effect.fnUntraced(function* (variantId: string) {
+  const find = Effect.fn(function* (variantId: string) {
     const file = files.get(variantId);
     if (file === undefined) return Option.none<CachedAudio>();
 
@@ -237,7 +237,7 @@ const makeMediaCache = Effect.gen(function* () {
         });
         yield* Effect.addFinalizer(() => (state.open ? discard : Effect.void));
 
-        const write = Effect.fnUntraced(function* (chunk: Uint8Array) {
+        const write = Effect.fn(function* (chunk: Uint8Array) {
           if (!state.open) return;
 
           state.size += chunk.length;
@@ -377,7 +377,7 @@ const makeMediaCache = Effect.gen(function* () {
     );
 
   /** Replaces the hint of `session`. An empty list removes it. */
-  const hint = Effect.fnUntraced(function* (session: string, items: ReadonlyArray<PrefetchItem>) {
+  const hint = Effect.fn(function* (session: string, items: ReadonlyArray<PrefetchItem>) {
     if (items.length === 0) hints.delete(session);
     else hints.set(session, items);
 

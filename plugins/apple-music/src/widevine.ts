@@ -8,7 +8,7 @@ import { wvd } from "./wvd.ts";
 
 const widevineSystem = "edef8ba979d64acea3c827dcd51d21ed";
 
-const keyUri = Effect.fnUntraced(function* (playlist: string) {
+const keyUri = Effect.fn(function* (playlist: string) {
   // Only the DRM URI is needed here. `@dyad/plugin/hls` reads the media segments.
   const uris = playlist.split(/\r?\n/).flatMap((line) => {
     if (!line.startsWith("#EXT-X-KEY:")) return [];

@@ -144,14 +144,14 @@ export const collectBeatAudio = () => {
   };
 
   /** Analyzes the collected audio. Gives `undefined` for less than 8 s of sound. */
-  const analyze = Effect.fnUntraced(function* (start: number, end: number) {
+  const analyze = Effect.fn(function* (start: number, end: number) {
     if (end - start < 8) return undefined;
     const module = yield* Effect.promise(loadEssentia);
     const algorithms = new module.EssentiaJS(false);
     const seconds = levels.slice(Math.floor(start), Math.floor(end)).map(decibels);
     const main = seconds.toSorted((a, b) => a - b)[Math.floor(seconds.length * 0.75)] ?? 0;
 
-    const analyzeWindow = Effect.fnUntraced(function* (
+    const analyzeWindow = Effect.fn(function* (
       from: number,
       to: number,
       contextFrom: number,

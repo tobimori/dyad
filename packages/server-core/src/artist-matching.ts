@@ -329,7 +329,7 @@ export const linkFoundArtists = Effect.fn("linkFoundArtists")(function* (
   if (found.length === 0) return false;
   yield* projectArtistRows([member, ...found]);
 
-  const rootOf = Effect.fnUntraced(function* (key: {
+  const rootOf = Effect.fn(function* (key: {
     readonly scheme: string;
     readonly externalId: string;
   }) {
