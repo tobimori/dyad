@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type { Command } from "./keymap.ts";
 import type { ScreenApp } from "./screen-app.ts";
 
-/** A section's data on each render, for the sidebar, the reload and its screen */
+/** A section's data on each render, for the sidebar and its screen */
 export class SectionView extends Data.Class<{
   /** The sidebar shows it */
   readonly count: number;

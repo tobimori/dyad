@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Action } from "../component/dialog-actions.tsx";
-import { useItemCommands } from "../component/list-screen.tsx";
+import { pageStep, useItemCommands } from "../component/list-screen.tsx";
 import { scrollOffset, useRowClick } from "../component/track-list.tsx";
 import { SegmentItem, SongItem } from "../context/action-items.ts";
 import { commands } from "../context/keymap.ts";
@@ -23,7 +23,6 @@ export const segmentLine = (segment: SourceSegment) =>
   segment.artist === null ? segment.title : `${segment.artist} – ${segment.title}`;
 
 const upNextRows = 20;
-const pageStep = 10;
 
 /** The entries after the one that plays */
 export const upNextOf = (player: ReturnType<typeof usePlayer>) => {

@@ -15,7 +15,8 @@ import type { SelectableRow } from "./row-list.tsx";
 import { ListItem, UnavailableItem } from "./track-list.tsx";
 import type { TrackItem } from "./track-list.tsx";
 
-const pageStep = 10;
+/** The rows that `pgup` and `pgdn` move */
+export const pageStep = 10;
 
 /** The item actions that have a key of their own */
 const actionKeys = [

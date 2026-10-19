@@ -378,7 +378,6 @@ export function App(props: {
     playlistActions,
     libraryMarks,
     backdrop,
-    showNowPlaying,
     artwork,
     cover,
     width: screen.width,

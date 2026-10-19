@@ -43,7 +43,6 @@ export class ScreenApp extends Data.Class<{
   readonly playlistActions: ReturnType<typeof usePlaylistActions>;
   readonly libraryMarks: ReturnType<typeof useLibraryMarks>;
   readonly backdrop: ReturnType<typeof useBackdrop>;
-  readonly showNowPlaying: () => void;
   readonly artwork: Artwork | null;
   readonly cover: ReturnType<typeof useCoverVideo>;
   readonly width: number;
