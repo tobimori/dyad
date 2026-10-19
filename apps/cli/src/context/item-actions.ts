@@ -1,4 +1,5 @@
-import type { ArtistRef } from "@dyad/domain";
+import type { ArtistRef, SearchResults } from "@dyad/domain";
+import { Effect } from "effect";
 
 import { Action } from "../component/dialog-actions.tsx";
 import { useDownloadActions } from "../component/dialog-downloads.tsx";
@@ -41,7 +42,30 @@ const videoActions = (app: ActionApp) => (item: ActionItem) =>
       ]
     : [];
 
-// No "Go to" for the page that shows now; a source without a ref falls back to a search
+// The catalog of this device answers fast and also offline. Without that exact name, the search
+// screen shows the candidates: a name alone never decides.
+const findPage = (app: ActionApp, name: string, open: (results: SearchResults) => boolean) => {
+  const client = app.client;
+  if (client === null) {
+    app.searchFor(name);
+    return;
+  }
+  app.run(
+    client.searchCatalog({ query: name }).pipe(
+      Effect.match({
+        onFailure: () => app.searchFor(name),
+        onSuccess: (results) => {
+          if (!open(results)) app.searchFor(name);
+        },
+      }),
+    ),
+  );
+};
+
+const sameName = (a: string | null, b: string | null) =>
+  a !== null && b !== null && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+// No "Go to" for the page that shows now; a source without a ref finds its page by name
 const navigationActions = (app: ActionApp) => {
   const route = app.route;
   const goToArtist = (ref: ArtistRef | null, name: string | null) =>
@@ -94,9 +118,14 @@ const navigationActions = (app: ActionApp) => {
     if (artistRef === null && artist !== null) {
       list.push(
         new Action({
-          command: commands.searchArtist,
-          label: `Search the artist: ${artist}`,
-          run: () => app.searchFor(artist),
+          command: commands.goToArtist,
+          label: `Go to artist: ${artist}`,
+          run: () =>
+            findPage(app, artist, (results) => {
+              const found = results.artists.find((card) => sameName(card.name, artist));
+              if (found !== undefined) app.openArtist(found.ref, found.name);
+              return found !== undefined;
+            }),
         }),
       );
     }
@@ -113,9 +142,17 @@ const navigationActions = (app: ActionApp) => {
     if (albumRef === null && album !== null) {
       list.push(
         new Action({
-          command: commands.searchAlbum,
-          label: `Search the album: ${album}`,
-          run: () => app.searchFor(album),
+          command: commands.goToAlbum,
+          label: `Go to album: ${album}`,
+          run: () =>
+            findPage(app, `${artist ?? ""} ${album}`.trim(), (results) => {
+              const found = results.albums.find(
+                (card) =>
+                  sameName(card.title, album) && (artist === null || sameName(card.artist, artist)),
+              );
+              if (found !== undefined) app.openAlbum(found.ref, found.title, found.artistRef);
+              return found !== undefined;
+            }),
         }),
       );
     }

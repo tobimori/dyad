@@ -79,8 +79,6 @@ export const commands = {
 
   playNext: command("track.playNext", "Play next", "Track", ["shift+n"]),
   addToQueue: command("track.addToQueue", "Add to queue", "Track", ["shift+a"]),
-  searchArtist: command("track.searchArtist", "Search the artist", "Track", []),
-  searchAlbum: command("track.searchAlbum", "Search the album", "Track", []),
   searchTrack: command("track.searchTrack", "Search the track", "Track", []),
   goToArtist: command("track.goToArtist", "Go to the artist", "Track", []),
   goToAlbum: command("track.goToAlbum", "Go to the album", "Track", []),
