@@ -1,4 +1,4 @@
-import { source, sourceVariant } from "@dyad/db";
+import { artist, providerItem, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
   RecordingId,
@@ -7,22 +7,88 @@ import {
   compareCopies,
   compareSources,
 } from "@dyad/domain";
-import type { ProviderSource } from "@dyad/plugin";
-import { and, eq, inArray, ne } from "drizzle-orm";
-import { Clock, Context, Effect, Layer, Option } from "effect";
+import { ProviderSource } from "@dyad/plugin";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 
+import { artistIdOf } from "./artists.ts";
 import { isrcRecordingId } from "./ids.ts";
+import { fitsDuration, rootRank, songCandidates, songFacts, songTitleKey } from "./matching.ts";
 import { MediaCache } from "./media-cache.ts";
 import { normalizeArtist, normalizeTitle } from "./normalize.ts";
-import { cacheProviderSources, cachedProviderSource, cachedSummary } from "./provider-cache.ts";
+import {
+  cacheProviderSources,
+  cachedArtistId,
+  cachedProviderSource,
+  cachedSummary,
+  toCachedSource,
+} from "./provider-cache.ts";
+import type { CachedSource } from "./provider-cache.ts";
 import { Providers, linkedProviders, usableProviders } from "./providers.ts";
 import { recordingGroup } from "./sets.ts";
 import { providerOrder } from "./source-preference.ts";
 import { versionWordsOf } from "./ranking.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 
-// The recordings of the canonical recording of the source. A search result that is not in the
-// catalog finds the recordings of its ISRC.
+// The root of an artist ID of a provider
+const artistRoot = (provider: string, externalId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const id = yield* artistIdOf(provider, externalId);
+    const [row] = yield* db
+      .select({ mergedIntoId: artist.mergedIntoId })
+      .from(artist)
+      .where(eq(artist.id, id));
+    return row?.mergedIntoId ?? id;
+  });
+
+// The song of a cached result for the `artist_title` rule
+const cachedSongFacts = (item: CachedSource) =>
+  Effect.gen(function* () {
+    const artistId = cachedArtistId(item);
+    const title = cachedSummary(item, item.provider).title;
+    const { durationMs } = item.source;
+    if (artistId === null || title === null || durationMs === null) return null;
+    const titleKey = songTitleKey(title);
+    if (titleKey === "") return null;
+    return { title, titleKey, durationMs, artistRoot: yield* artistRoot(item.provider, artistId) };
+  });
+
+// The cached results of the song by the `artist_title` rule
+const cachedCopies = (facts: NonNullable<Effect.Success<ReturnType<typeof cachedSongFacts>>>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    // The title before its brackets narrows the scan; the rule decides
+    const base = facts.title.split(/[([]/u)[0]?.trim() ?? "";
+    if (base === "") return [];
+    const pattern = `%${base.replaceAll(/[\\%_]/g, "\\$&")}%`;
+    const rows = yield* db
+      .select({ provider: providerItem.provider, data: providerItem.data })
+      .from(providerItem)
+      .where(sql`json_extract(${providerItem.data}, '$.title') like ${pattern} escape '\\'`);
+    const items = yield* Effect.forEach(rows, (row) =>
+      Option.match(Schema.decodeUnknownOption(ProviderSource)(row.data), {
+        onNone: () => Effect.succeed([]),
+        onSome: (decoded) =>
+          toCachedSource(row.provider, decoded).pipe(Effect.map((item) => [item])),
+      }),
+    );
+    return yield* Effect.filter(items.flat(), (item) =>
+      cachedSongFacts(item).pipe(
+        Effect.map(
+          (found) =>
+            found !== null &&
+            found.artistRoot === facts.artistRoot &&
+            found.titleKey === facts.titleKey &&
+            fitsDuration(found.durationMs, facts.durationMs),
+        ),
+      ),
+    );
+  });
+
+// The recordings of the canonical recording of the source, and the cached results of the same
+// song. A search result that is not in the catalog finds its group through its ISRC, else through
+// the `artist_title` rule.
 const groupOf = (sourceId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -31,14 +97,26 @@ const groupOf = (sourceId: string) =>
       .from(source)
       .where(eq(source.id, sourceId));
     const cached = own === undefined ? yield* cachedProviderSource(sourceId) : Option.none();
+    const facts =
+      own?.recordingId == null
+        ? yield* Option.match(cached, {
+            onNone: () => Effect.succeed(null),
+            onSome: cachedSongFacts,
+          })
+        : yield* songFacts(own.recordingId);
+    const isrc = Option.getOrNull(cached)?.isrc ?? null;
+    const byRule =
+      facts === null || Option.isNone(cached)
+        ? undefined
+        : (yield* songCandidates(cached.value.recordingId, facts)).toSorted(
+            (a, b) =>
+              rootRank(a.rootOrigin) - rootRank(b.rootOrigin) || a.root.localeCompare(b.root),
+          )[0]?.root;
     const starts =
-      own?.recordingId ??
-      (yield* Option.match(cached, {
-        onNone: () => Effect.succeed(null),
-        onSome: (item) => (item.isrc === null ? Effect.succeed(null) : isrcRecordingId(item.isrc)),
-      }));
+      own?.recordingId ?? (isrc === null ? (byRule ?? null) : yield* isrcRecordingId(isrc));
     const group = starts === null ? [] : yield* recordingGroup(starts);
-    return { group, cached };
+    const sameSong = facts === null ? [] : yield* cachedCopies(facts);
+    return { group, cached, sameSong };
   });
 
 /**
@@ -77,7 +155,7 @@ export const sourceCopies = (sourceId: string) =>
     const db = yield* Database;
     const providers = yield* Providers;
     const linked = yield* linkedProviders;
-    const { group, cached } = yield* groupOf(sourceId);
+    const { group, cached, sameSong } = yield* groupOf(sourceId);
 
     const playable = yield* playableSources(inArray(source.recordingId, group));
     const playableIds = new Set(playable.map((row) => row.source.id));
@@ -132,7 +210,16 @@ export const sourceCopies = (sourceId: string) =>
                 : "unavailable",
           }),
       ),
-      ...Option.toArray(cached).flatMap((item) => {
+      ...[
+        ...Option.toArray(cached),
+        // Results of the same song that no copy of the group already is
+        ...sameSong.filter(
+          (item) =>
+            item.sourceId !== sourceId &&
+            !playableIds.has(item.sourceId) &&
+            !others.some((row) => row.source.id === item.sourceId),
+        ),
+      ].flatMap((item) => {
         const provider = linked.get(item.provider);
         if (provider === undefined) return [];
         return [

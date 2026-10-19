@@ -30,23 +30,36 @@ export class CachedSource extends Data.Class<{
 }> {}
 
 /** The artist ref follows the same rule as `playableSources` */
+// Only providers with `uploads` report an uploader. The same parse as `writeSource`.
+const parseCached = (item: CachedSource) => {
+  const { uploader } = item.source;
+  return uploader === null
+    ? null
+    : parseVersionTitle({
+        title: item.source.title,
+        uploader: uploader.name,
+        artists:
+          item.source.artist === null || item.source.artist === uploader.name
+            ? []
+            : [item.source.artist],
+        durationMs: item.source.durationMs,
+      });
+};
+
+/**
+ * The artist ID that the result credits, as in `writeSource`: the first artist, or the uploader
+ * when the title names it as the artist. `null` for a reupload.
+ */
+export const cachedArtistId = (item: CachedSource) => {
+  const { uploader } = item.source;
+  if (uploader === null) return item.source.artists[0]?.id ?? null;
+  return parseCached(item)?.uploaderRole === "artist" ? uploader.id : null;
+};
+
 export const cachedSummary = (item: CachedSource, providerName: string) => {
   const artist = item.source.artists[0] ?? item.source.uploader;
   const albumId = item.source.albumId;
-  const { uploader } = item.source;
-  // Only providers with `uploads` report an uploader. The same parse as `writeSource`.
-  const parsed =
-    uploader === null
-      ? null
-      : parseVersionTitle({
-          title: item.source.title,
-          uploader: uploader.name,
-          artists:
-            item.source.artist === null || item.source.artist === uploader.name
-              ? []
-              : [item.source.artist],
-          durationMs: item.source.durationMs,
-        });
+  const parsed = parseCached(item);
 
   return new SourceSummary({
     id: item.sourceId,
