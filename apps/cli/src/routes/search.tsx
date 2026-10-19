@@ -1,13 +1,27 @@
+import { providerName } from "@dyad/client-runtime";
+import { PageTrack } from "@dyad/domain";
+import type { SearchResults } from "@dyad/domain";
+import { useAtomValue } from "@effect/atom-react";
 import type { InputRenderable } from "@opentui/core";
+import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 import { useListScreen } from "../component/list-screen.tsx";
-import { TrackList, listItems, playsSource } from "../component/track-list.tsx";
-import type { TrackItem } from "../component/track-list.tsx";
+import {
+  PlaylistRow,
+  RowList,
+  albumRows,
+  artistRows,
+  headed,
+  selectableRows,
+  trackRows,
+} from "../component/row-list.tsx";
+import type { Row } from "../component/row-list.tsx";
 import { commands, useCommands } from "../context/keymap.ts";
 import { Section, SectionView } from "../context/routes.ts";
 import type { ScreenApp } from "../context/screen-app.ts";
+import { useLibraryStatus } from "./library/library-notice.tsx";
 import { useTheme } from "../theme/theme.ts";
 
 /** It has its own keys, so that all letters stay text while it has focus */
@@ -62,14 +76,40 @@ function SearchField(props: {
 }
 
 const title = "Search";
+const topSongs = 8;
+
+// An artist with exactly the name of the query comes first, else the songs
+const resultRows = (
+  query: string,
+  results: SearchResults,
+  playlists: ReadonlyArray<PlaylistRow>,
+) => {
+  const tracks = results.sources.map(
+    (source) => new PageTrack({ source, disc: null, number: null, playable: true }),
+  );
+  const songs = trackRows("song", tracks, "search");
+  const wanted = query.trim().toLowerCase();
+  const artistFirst = results.artists[0]?.name.toLowerCase() === wanted;
+  const sections = [
+    ...(artistFirst ? [["artists", "Artists", artistRows(results.artists)] as const] : []),
+    ["songs", "Songs", songs.slice(0, topSongs)] as const,
+    ...(artistFirst ? [] : [["artists", "Artists", artistRows(results.artists)] as const]),
+    ["albums", "Albums", albumRows(results.albums)] as const,
+    ["playlists", "Your playlists", playlists] as const,
+    ["more", "More songs", songs.slice(topSongs)] as const,
+  ].filter(([, , rows]) => rows.length > 0);
+  return sections.flatMap(([key, label, rows], index) => headed(key, label, index === 0, rows));
+};
 
 function SearchScreen(props: {
   readonly app: ScreenApp;
-  readonly items: ReadonlyArray<TrackItem>;
+  readonly rows: ReadonlyArray<Row>;
   readonly input: RefObject<InputRenderable | null>;
 }) {
   const { app, input } = props;
-  const list = useListScreen(app, { title, items: props.items });
+  const theme = useTheme();
+  const items = useMemo(() => selectableRows(props.rows), [props.rows]);
+  const list = useListScreen(app, { title, items });
 
   const { status, query } = app.search;
   return (
@@ -80,15 +120,20 @@ function SearchScreen(props: {
         onInput={app.search.search}
         onLeave={() => app.main.current?.focus()}
       />
-      <TrackList
-        title={status === null ? title : `${title}  ·  ${status}`}
-        items={props.items}
-        selected={list.selected}
-        playing={playsSource(app.player.current?.source.id)}
-        historyRows={0}
-        empty={query.trim() === "" ? "Type to search the library and the providers" : ""}
-        onSelect={list.select}
-        onActivate={list.activate}
+      {status !== null && (
+        <text fg={theme.muted} paddingX={1} marginBottom={1} flexShrink={0}>
+          {status}
+        </text>
+      )}
+      <RowList
+        rows={props.rows}
+        selected={list.selectedKey}
+        playingId={app.player.current?.source.id ?? null}
+        empty={
+          query.trim() === "" ? "Type to search songs, artists, albums and your playlists" : ""
+        }
+        onSelect={list.selectRow}
+        onActivate={list.activateRow}
       />
     </>
   );
@@ -102,8 +147,27 @@ export const search = new Section({
   useView: (app) => {
     const input = useRef<InputRenderable | null>(null);
     const [focus, setFocus] = useState(false);
-    const results = app.search.results;
-    const items = useMemo(() => listItems(results, "search"), [results]);
+    const { results, query } = app.search;
+    const playlistResult = useAtomValue(app.atoms.playlists);
+    const { names } = useLibraryStatus(app.atoms);
+    // Playlists are on the device, so they show at once, also offline
+    const playlists = useMemo(() => {
+      const wanted = query.trim().toLowerCase();
+      if (wanted === "" || !AsyncResult.isSuccess(playlistResult)) return [];
+      return playlistResult.value.flatMap((playlist) =>
+        playlist.name.toLowerCase().includes(wanted)
+          ? [
+              new PlaylistRow({
+                key: `playlist:${playlist.id}`,
+                playlist,
+                providerName:
+                  playlist.link === null ? null : providerName(names, playlist.link.provider),
+              }),
+            ]
+          : [],
+      );
+    }, [query, playlistResult, names]);
+    const rows = useMemo(() => resultRows(query, results, playlists), [query, results, playlists]);
 
     // The search field exists only after the render that shows the search section
     useEffect(() => {
@@ -113,9 +177,9 @@ export const search = new Section({
     }, [focus]);
 
     return new SectionView({
-      count: items.length,
+      count: results.sources.length,
       focus: () => setFocus(true),
-      render: () => <SearchScreen app={app} items={items} input={input} />,
+      render: () => <SearchScreen app={app} rows={rows} input={input} />,
     });
   },
 });

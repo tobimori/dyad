@@ -1,6 +1,7 @@
 import { formatDuration, titleOf } from "@dyad/client-runtime";
 import { catalogArtistId } from "@dyad/domain";
 import type {
+  PlayContext,
   AlbumCard,
   ArtistCard,
   PageTrack,
@@ -31,7 +32,7 @@ export class TrackRow extends Data.Class<{
   readonly track: PageTrack;
   /** `return` plays these from this track */
   readonly section: ReadonlyArray<SourceSummary>;
-  readonly context: "album" | "artist" | "home";
+  readonly context: typeof PlayContext.Type;
 }> {}
 
 export class AlbumRow extends Data.Class<{
@@ -79,7 +80,7 @@ export const albumRows = (albums: ReadonlyArray<AlbumCard>) =>
 export const trackRows = (
   keyPrefix: string,
   tracks: ReadonlyArray<PageTrack>,
-  context: "album" | "artist" | "home",
+  context: typeof PlayContext.Type,
 ) => {
   const section = tracks.flatMap((track) => (track.playable ? [track.source] : []));
   return tracks.map(

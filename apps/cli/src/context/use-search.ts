@@ -1,9 +1,11 @@
 import type { ServerConnection } from "@dyad/client-runtime";
-import type { SourceSummary } from "@dyad/domain";
+import { SearchResults } from "@dyad/domain";
 import { Cause, Effect, Fiber, Option, Stream } from "effect";
 import { useRef, useState } from "react";
 
 import { describeFailure } from "../log.ts";
+
+const empty = new SearchResults({ sources: [], artists: [], albums: [], unavailable: [] });
 
 /** A new query cancels the search before it */
 export function useSearch(props: {
@@ -13,7 +15,7 @@ export function useSearch(props: {
   readonly onFailure: (message: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<ReadonlyArray<SourceSummary>>([]);
+  const [results, setResults] = useState(empty);
   const [status, setStatus] = useState<string | null>(null);
   const fiber = useRef<Fiber.Fiber<void> | null>(null);
 
@@ -36,7 +38,7 @@ export function useSearch(props: {
     const trimmed = value.trim();
     const connection = props.connection;
     if (trimmed === "" || connection === null) {
-      setResults([]);
+      setResults(empty);
       setStatus(null);
       return;
     }
@@ -49,12 +51,19 @@ export function useSearch(props: {
 
         // Each list replaces the previous one; the last list is final
         const last = yield* connection.search({ query: trimmed }).pipe(
-          Stream.tap((list) => Effect.sync(() => setResults(list.sources))),
+          Stream.tap((list) => Effect.sync(() => setResults(list))),
           Stream.runLast,
         );
 
-        const found = Option.isSome(last) && last.value.sources.length > 0;
-        setStatus(found ? null : "No results");
+        const final = Option.getOrElse(last, () => empty);
+        const found =
+          final.sources.length > 0 || final.artists.length > 0 || final.albums.length > 0;
+        const missing = final.unavailable.join(", ");
+        setStatus(
+          [found ? "" : "No results", missing === "" ? "" : `No answer from ${missing}`]
+            .filter((part) => part !== "")
+            .join(" · ") || null,
+        );
       }).pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause) ? Effect.void : failed(cause),
