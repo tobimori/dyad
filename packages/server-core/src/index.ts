@@ -21,7 +21,13 @@ import { forwardEffect, forwardStream } from "./home-server.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
-import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
+import {
+  albumPage,
+  artistPage,
+  artistSearchesLayer,
+  listLibraryAlbums,
+  listLibraryArtists,
+} from "./pages.ts";
 import { mediaCacheLayer } from "./media-cache.ts";
 import { liveRoute } from "./live-output.ts";
 import { outputsLayer } from "./outputs.ts";
@@ -89,6 +95,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       copyAttemptsLayer,
       copySearchesLayer,
       copyDiscoveriesLayer,
+      artistSearchesLayer,
       outputsLayer,
       receiversLayer,
       syncHubLayer,

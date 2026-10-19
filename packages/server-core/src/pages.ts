@@ -41,7 +41,7 @@ import { artistNameKey } from "@dyad/plugin/tracklist";
 import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
-import { Clock, Data, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Clock, Context, Data, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 import {
   albumEditions,
@@ -782,6 +782,16 @@ const groupPage = (group: ArtistGroup) =>
 // Two songs, so that one song with a common title does not link two artists of the same name
 const minSharedSongs = 2;
 
+/** When each group root was last searched by name on each provider, by `<root>:<provider>` */
+export class ArtistSearches extends Context.Service<ArtistSearches, Map<string, number>>()(
+  "@dyad/server-core/ArtistSearches",
+) {}
+
+export const artistSearchesLayer = Layer.sync(ArtistSearches, () => new Map());
+
+// An artist without a match on a provider is searched again after a day, not on each page open
+const artistSearchLifetimeMs = 24 * 60 * 60 * 1000;
+
 // Searches the curated providers that the group lacks for the name of the page. A found artist
 // joins the group when it is the only one of its provider with the name and at least
 // `minSharedSongs` songs of the page. A name alone never links.
@@ -795,6 +805,10 @@ const linkByName = (group: ArtistGroup, page: ArtistPage) =>
     if (name === null || member === undefined || songs.length < minSharedSongs) return false;
 
     const usable = yield* usableProviders;
+    const searches = yield* ArtistSearches;
+    const now = yield* Clock.currentTimeMillis;
+    const searchedRecently = (provider: string) =>
+      now - (searches.get(`${group.root}:${provider}`) ?? -Infinity) < artistSearchLifetimeMs;
     const known = new Set(group.members.map((entry) => entry.provider));
     const key = artistNameKey(name);
     const upload = (provider: string) => usable.get(provider)?.provider.uploads === true;
@@ -807,10 +821,12 @@ const linkByName = (group: ArtistGroup, page: ArtistPage) =>
             search === undefined ||
             entry.provider.artist === undefined ||
             upload(provider) ||
-            known.has(provider)
+            known.has(provider) ||
+            searchedRecently(provider)
           ) {
             return [];
           }
+          searches.set(`${group.root}:${provider}`, now);
           const results = yield* search(name, entry.credentials).pipe(
             Effect.timeout("8 seconds"),
             Effect.catchTags({
