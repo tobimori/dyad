@@ -700,14 +700,20 @@ const albumTracks = (page: PageInput<ProviderAlbum>, externalId: string, data: P
         const name = plugins.get(parts.provider)?.name ?? parts.provider;
         return yield* providerTracks(parts.provider, name, album.value.tracks);
       });
-    const lists = yield* Effect.forEach(editions, (edition, index) =>
+    const found = yield* Effect.forEach(editions, (edition) =>
       Effect.gen(function* () {
         const tracks = edition.hasPage ? own : yield* firstNonEmpty(edition.albums.map(cached));
-        return tracks.map((track) =>
-          index === 0 ? track : new PageTrack({ ...track, edition: edition.words }),
-        );
+        return { words: edition.words, tracks };
       }),
     );
+    // The first edition with tracks is the base, also when the original has no cached page
+    const lists = found
+      .filter((edition) => edition.tracks.length > 0)
+      .map((edition, index) =>
+        edition.tracks.map((track) =>
+          index === 0 ? track : new PageTrack({ ...track, edition: edition.words }),
+        ),
+      );
 
     const ids = [...new Set(lists.flat().flatMap((track) => track.source.recordingId ?? []))];
     const roots = new Map(
