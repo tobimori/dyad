@@ -1,11 +1,12 @@
-import { libraryItem, playEvent, recording, source, sourceSegment } from "@dyad/db";
+import { playEvent, recording, source, sourceSegment } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { HeardInSet, RecordingId, SetSummary, SourceSummary } from "@dyad/domain";
-import { and, asc, eq, inArray, max, or } from "drizzle-orm";
+import { asc, eq, inArray, max, or } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { fields, resolvedValues } from "./assertions.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
+import { inLibrary, recordingMarks } from "./user-library.ts";
 
 /** The recording, its root and the other recordings merged into the root */
 export const recordingGroup = (recordingId: string) =>
@@ -74,10 +75,10 @@ export const listSets = Effect.gen(function* () {
     .groupBy(playEvent.sourceId);
   const playedAt = new Map(plays.map((play) => [play.sourceId, play.lastPlayedAt]));
 
-  const saved = yield* db
-    .select({ recordingId: libraryItem.entityId })
-    .from(libraryItem)
-    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
+  const marks = yield* recordingMarks;
+  const savedRoots = new Set(
+    [...marks].flatMap(([root, group]) => (inLibrary(group.mark) ? [root] : [])),
+  );
   const bound = yield* db
     .select({ id: source.id, recordingId: source.recordingId })
     .from(source)
@@ -86,14 +87,13 @@ export const listSets = Effect.gen(function* () {
     .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
     .from(recording)
     .where(
-      inArray(recording.id, [
-        ...saved.map((item) => item.recordingId),
-        ...bound.flatMap((row) => row.recordingId ?? []),
-      ]),
+      inArray(
+        recording.id,
+        bound.flatMap((row) => row.recordingId ?? []),
+      ),
     );
   const roots = new Map(recordings.map((row) => [row.id, row.mergedIntoId ?? row.id]));
   const rootOf = (id: string) => roots.get(id) ?? id;
-  const savedRoots = new Set(saved.map((item) => rootOf(item.recordingId)));
   const setRoot = new Map(bound.map((row) => [row.id, rootOf(row.recordingId ?? row.id)]));
 
   const wanted = setIds.filter((id) => playedAt.has(id) || savedRoots.has(setRoot.get(id) ?? id));

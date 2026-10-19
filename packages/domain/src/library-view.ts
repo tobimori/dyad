@@ -171,16 +171,24 @@ export const libraryView = (rows: {
   return {
     /** An item from several origins, or two saved versions of one recording, gives one entry */
     libraryEntries: (
-      items: ReadonlyArray<{ readonly entityId: string; readonly addedAt: number }>,
+      items: ReadonlyArray<{
+        readonly entityId: string;
+        readonly addedAt: number;
+        readonly favorite?: boolean;
+      }>,
     ) => {
-      const addedAtByRoot = new Map<string, number>();
+      const byRoot = new Map<string, { addedAt: number; favorite: boolean }>();
       for (const item of items) {
         const root = rootOf(item.entityId);
-        addedAtByRoot.set(root, Math.min(addedAtByRoot.get(root) ?? item.addedAt, item.addedAt));
+        const known = byRoot.get(root);
+        byRoot.set(root, {
+          addedAt: Math.min(known?.addedAt ?? item.addedAt, item.addedAt),
+          favorite: (known?.favorite ?? false) || item.favorite === true,
+        });
       }
 
-      return [...addedAtByRoot]
-        .map(([root, addedAt]) => new LibraryEntry({ ...describe(root), addedAt }))
+      return [...byRoot]
+        .map(([root, item]) => new LibraryEntry({ ...describe(root), ...item }))
         .toSorted(
           (a, b) =>
             (a.artist ?? "").localeCompare(b.artist ?? "") ||

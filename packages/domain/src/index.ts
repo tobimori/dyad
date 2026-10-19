@@ -7,6 +7,8 @@ import {
   PeerPullRequest,
   PeerPullResponse,
   PeerPushRequest,
+  LibraryEntityType,
+  LibraryMark,
   PeerRedeemRequest,
   PlaylistLink,
   PlaylistLinkState,
@@ -240,6 +242,10 @@ export class LibraryEntry extends Schema.Class<LibraryEntry>("LibraryEntry")({
   source: Schema.NullOr(SourceSummary),
   sourceCount: Schema.Int,
   unavailable: Schema.NullOr(LibraryEntryUnavailable),
+  favorite: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
 }) {}
 
 export class PlaylistEntry extends LibraryEntry.extend<PlaylistEntry>("PlaylistEntry")({
@@ -937,6 +943,14 @@ const OwnerRpc = RpcGroup.make(
     error: PlaylistNotFound,
   }),
   Rpc.make("removePlaylistEntry", { payload: { entryId: Schema.String } }),
+  /** `null` takes the entity out of the library */
+  Rpc.make("setLibraryMark", {
+    payload: {
+      entityType: LibraryEntityType,
+      entityId: Schema.String.check(Schema.isUUID()),
+      mark: Schema.NullOr(LibraryMark),
+    },
+  }),
   // One place up or down
   Rpc.make("movePlaylistEntry", {
     payload: {

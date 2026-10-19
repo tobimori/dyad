@@ -1,4 +1,6 @@
 import {
+  album,
+  artist,
   libraryItem,
   libraryRemoteTrack,
   playlist,
@@ -8,13 +10,14 @@ import {
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
+  LibraryItemRow,
   PlaylistEntryRow,
   PlaylistNotFound,
   PlaylistRow,
   RecordingId,
   libraryView,
 } from "@dyad/domain";
-import type { PlaylistLink, PlaylistLinkState } from "@dyad/domain";
+import type { LibraryEntityType, LibraryMark, PlaylistLink, PlaylistLinkState } from "@dyad/domain";
 import { HlcClock, libraryItemId, patchRow } from "@dyad/sync";
 import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
@@ -28,14 +31,13 @@ import { readRow, writeRow } from "./replication.ts";
 
 /**
  * The server's own writes of library items and playlists go through this module, so that each
- * changed row gets an HLC and a `change_seq`. With `complete`, the other items of `origin` are
- * removed. A removed item in `removedInDyad` stays removed: the removal in Dyad wins.
+ * changed row gets an HLC and a `change_seq`. The rows of an import origin mirror the provider;
+ * with `complete`, the other items of `origin` are removed. A `user` row decides over them.
  */
 export const setMembership = (
   origin: string,
   recordingIds: ReadonlySet<string>,
   complete: boolean,
-  removedInDyad: ReadonlySet<string> = new Set(),
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -48,9 +50,7 @@ export const setMembership = (
     const removedRows = new Map(
       rows.filter((row) => row.deleted).map((row) => [row.entityId, row.id]),
     );
-    const added = [...recordingIds].filter(
-      (id) => !live.has(id) && !(removedRows.has(id) && removedInDyad.has(id)),
-    );
+    const added = [...recordingIds].filter((id) => !live.has(id));
     const removed = complete
       ? rows.filter((row) => !row.deleted && !recordingIds.has(row.entityId))
       : [];
@@ -65,7 +65,13 @@ export const setMembership = (
           const id =
             removedRows.get(entityId) ??
             (yield* libraryItemId({ entityType: "recording", entityId, origin }));
-          const change = { addedAt: now, hlc: yield* clock.next, deleted: false, changeSeq };
+          const change = {
+            addedAt: now,
+            mark: "saved" as const,
+            hlc: yield* clock.next,
+            deleted: false,
+            changeSeq,
+          };
 
           yield* db
             .insert(libraryItem)
@@ -84,6 +90,135 @@ export const setMembership = (
     }
 
     return { added: added.length, removed: removed.length };
+  });
+
+const markTables = { recording, album, artist };
+
+// The entity IDs of the merge group of an entity
+const groupOf = (entityType: LibraryEntityType, entityId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const table = markTables[entityType];
+    const [row] = yield* db
+      .select({ mergedIntoId: table.mergedIntoId })
+      .from(table)
+      .where(eq(table.id, entityId));
+    const root = row?.mergedIntoId ?? entityId;
+    const members = yield* db
+      .select({ id: table.id })
+      .from(table)
+      .where(or(eq(table.id, root), eq(table.mergedIntoId, root)));
+    return [...new Set([entityId, root, ...members.map((member) => member.id)])];
+  });
+
+// The newest user row decides. Else an import decides: favorite if one is, else saved.
+const effectiveMark = (
+  rows: ReadonlyArray<{
+    readonly origin: string;
+    readonly mark: LibraryMark;
+    readonly hlc: string;
+  }>,
+) => {
+  const own = rows
+    .filter((row) => row.origin === "user")
+    .reduce<(typeof rows)[number] | undefined>(
+      (newest, row) => (newest === undefined || row.hlc > newest.hlc ? row : newest),
+      undefined,
+    );
+  if (own !== undefined) return own.mark;
+  return rows.some((row) => row.mark === "favorite") ? "favorite" : "saved";
+};
+
+/** The effective mark of each marked song, by merge root, with the marked recording IDs */
+export const recordingMarks = Effect.gen(function* () {
+  const db = yield* Database;
+  const rows = yield* db
+    .select({
+      entityId: libraryItem.entityId,
+      origin: libraryItem.origin,
+      mark: libraryItem.mark,
+      hlc: libraryItem.hlc,
+      addedAt: libraryItem.addedAt,
+    })
+    .from(libraryItem)
+    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
+  const ids = [...new Set(rows.map((row) => row.entityId))];
+  const bound =
+    ids.length === 0
+      ? []
+      : yield* db
+          .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
+          .from(recording)
+          .where(inArray(recording.id, ids));
+  const rootOf = new Map(bound.map((row) => [row.id, row.mergedIntoId ?? row.id]));
+  const groups = Arr.groupBy(rows, (row) => rootOf.get(row.entityId) ?? row.entityId);
+  return new Map(
+    Object.entries(groups).map(([root, group]) => [
+      root,
+      {
+        mark: effectiveMark(group),
+        addedAt: Math.min(...group.map((row) => row.addedAt)),
+        entityIds: [...new Set(group.map((row) => row.entityId))],
+      },
+    ]),
+  );
+});
+
+/** Whether a mark puts the entity in the library */
+export const inLibrary = (mark: LibraryMark) => mark === "saved" || mark === "favorite";
+
+/**
+ * Sets the owner's mark of an entity. `null` takes it out of the library: a `removed` row when an
+ * import has the entity, so that the next import does not add it again, else no user row.
+ */
+export const setLibraryMark = (
+  entityType: LibraryEntityType,
+  entityId: string,
+  mark: LibraryMark | null,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const clock = yield* HlcClock;
+    const members = yield* groupOf(entityType, entityId);
+    const rows = yield* db
+      .select()
+      .from(libraryItem)
+      .where(and(eq(libraryItem.entityType, entityType), inArray(libraryItem.entityId, members)));
+    const ownRows = rows.filter((row) => row.origin === "user");
+    const changeSeq = yield* nextChangeSeq;
+
+    if (mark === null && !rows.some((row) => row.origin !== "user" && !row.deleted)) {
+      yield* Effect.forEach(
+        ownRows.filter((row) => !row.deleted),
+        (row) =>
+          Effect.gen(function* () {
+            const { changeSeq: _seq, ...values } = row;
+            const hlc = yield* clock.next;
+            yield* writeRow(
+              new LibraryItemRow({ table: "library_item", ...values, hlc, deleted: true }),
+              changeSeq,
+            );
+          }),
+        { discard: true },
+      );
+      return;
+    }
+
+    const own = ownRows.find((row) => row.entityId === entityId);
+    yield* writeRow(
+      new LibraryItemRow({
+        table: "library_item",
+        id: own?.id ?? (yield* libraryItemId({ entityType, entityId, origin: "user" })),
+        entityType,
+        entityId,
+        origin: "user",
+        mark: mark ?? "removed",
+        addedAt: own === undefined || own.deleted ? yield* Clock.currentTimeMillis : own.addedAt,
+        hlc: yield* clock.next,
+        deleted: false,
+      }),
+      changeSeq,
+    );
   });
 
 /** Adds a playlist of a remote playlist, linked to it */
@@ -375,13 +510,17 @@ export const songEntries = (recordingIds: ReadonlyArray<string>) =>
         ),
       );
 
-/** The saved songs */
+/** The saved and favorite songs */
 export const listLibrary = Effect.gen(function* () {
-  const db = yield* Database;
-  const items = yield* db
-    .select({ entityId: libraryItem.entityId, addedAt: libraryItem.addedAt })
-    .from(libraryItem)
-    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
-  const view = yield* loadLibraryView(items.map((item) => item.entityId));
-  return view.libraryEntries(items);
+  const marks = [...(yield* recordingMarks).values()].filter((group) => inLibrary(group.mark));
+  const view = yield* loadLibraryView(marks.flatMap((group) => group.entityIds));
+  return view.libraryEntries(
+    marks.flatMap((group) =>
+      group.entityIds.map((entityId) => ({
+        entityId,
+        addedAt: group.addedAt,
+        favorite: group.mark === "favorite",
+      })),
+    ),
+  );
 });

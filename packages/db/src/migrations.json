@@ -571,5 +571,19 @@
     "hash": "b79e4041c93cf9b64c8fb70d6e1551f3a5980f86ad542cd6e206b6ed55ba5a03",
     "bps": true,
     "sql": ["ALTER TABLE `recording` ADD `album_id` text;"]
+  },
+  {
+    "name": "20261019165559_add_library_mark",
+    "folderMillis": 1792428959000,
+    "hash": "026cb769b285afa7ae526ba9748f92e82197540f50f60280e86aee780c620564",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `library_item` ADD `mark` text DEFAULT 'saved' NOT NULL;",
+      "\nDROP INDEX IF EXISTS `rating_favorite_idx`;",
+      "\nDROP INDEX IF EXISTS `rating_seq_idx`;",
+      "\nDROP TABLE `rating`;",
+      "\nALTER TABLE `library_remote_track` DROP COLUMN `seen_at`;",
+      "\nDELETE FROM `library_item` WHERE `entity_type` = 'release';\n"
+    ]
   }
 ]

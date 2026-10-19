@@ -15,13 +15,16 @@ export const libraryItem = sqliteTable(
     // UUIDv5 of `library_item:<entity_type>:<entity_id>:<origin>`. Rows from before single user
     // keep their old ID, so writers reuse the ID of an existing row.
     id: text("id").primaryKey(),
-    entityType: text("entity_type", { enum: ["recording", "release", "artist"] }).notNull(),
-    // The bound recording of what the user saved, not the canonical recording. Views resolve
-    // `coalesce(merged_into_id, entity_id)`, so that merges and splits follow what the user saved.
-    // A release is the provider's release (`<provider>:release:<id>`), an artist the catalog artist.
+    entityType: text("entity_type", { enum: ["recording", "album", "artist"] }).notNull(),
+    // The bound recording, album or artist of what the user marked, not its merge root. Views
+    // resolve the root, so that merges and splits follow what the user marked.
     entityId: text("entity_id").notNull(),
     // `user` for a save in Dyad, `account:<provider>` for an import from the user's linked account
     origin: text("origin").notNull(),
+    // `favorite` includes saved. A `removed` user row keeps an import from adding the entity again.
+    mark: text("mark", { enum: ["saved", "favorite", "disliked", "removed"] })
+      .notNull()
+      .default("saved"),
     // When this replica first saw the item. Apple Music does not give the time that the user saved it.
     addedAt: integer("added_at").notNull(),
     hlc: text("hlc").notNull(),
@@ -106,20 +109,3 @@ export const sourcePreference = sqliteTable(
 );
 
 /** The owner loves an entity. LWW per row: each write sets all fields. */
-export const rating = sqliteTable(
-  "rating",
-  {
-    // UUIDv5 of `rating:<entity_type>:<entity_id>`
-    id: text("id").primaryKey(),
-    entityType: text("entity_type", { enum: ["recording", "release", "artist"] }).notNull(),
-    // As in `library_item`
-    entityId: text("entity_id").notNull(),
-    favorite: integer("favorite", { mode: "boolean" }).notNull(),
-    hlc: text("hlc").notNull(),
-    changeSeq,
-  },
-  (table) => [
-    index("rating_favorite_idx").on(table.favorite),
-    index("rating_seq_idx").on(table.changeSeq),
-  ],
-);

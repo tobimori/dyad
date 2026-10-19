@@ -69,13 +69,9 @@ export const mergeRow = (current: SyncRow | undefined, incoming: SyncRow) =>
             current.table === "play_event" && row.scrobbled && !current.scrobbled
               ? Option.some<SyncRow>(new PlayEventRow({ ...current, scrobbled: true }))
               : Option.none<SyncRow>(),
-          // Each write of a library item or a rating sets all fields
+          // Each write of a library item sets all fields
           library_item: (row) =>
             current.table === "library_item" && row.hlc > current.hlc
-              ? Option.some<SyncRow>(row)
-              : Option.none<SyncRow>(),
-          rating: (row) =>
-            current.table === "rating" && row.hlc > current.hlc
               ? Option.some<SyncRow>(row)
               : Option.none<SyncRow>(),
           playlist: (row) =>

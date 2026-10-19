@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 12;
+export const syncProtocolVersion = 13;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -17,7 +17,7 @@ export type HybridLogicalClock = typeof HybridLogicalClock.Type;
 const Uuid = Schema.String.check(Schema.isUUID());
 
 /** What the owner can add to the library: a song, an album (provider release) or an artist */
-export const LibraryEntityType = Schema.Literals(["recording", "release", "artist"]);
+export const LibraryEntityType = Schema.Literals(["recording", "album", "artist"]);
 export type LibraryEntityType = typeof LibraryEntityType.Type;
 
 /** `user` for a save in Dyad, `account:<provider>` for an import from a linked account */
@@ -26,15 +26,23 @@ export const LibraryOrigin = Schema.String.check(
   Schema.isMaxLength(200),
 );
 
-/** One library membership. Each write sets all fields. */
+/**
+ * `favorite` includes saved; `disliked` and `removed` are not in the library. A `removed` user row
+ * keeps an import from adding the entity again.
+ */
+export const LibraryMark = Schema.Literals(["saved", "favorite", "disliked", "removed"]);
+export type LibraryMark = typeof LibraryMark.Type;
+
+/** One library mark of one origin. Each write sets all fields. */
 export class LibraryItemRow extends Schema.Class<LibraryItemRow>("LibraryItemRow")({
   table: Schema.Literal("library_item"),
   /** UUIDv5 of `library_item:<entity_type>:<entity_id>:<origin>` */
   id: Uuid,
   entityType: LibraryEntityType,
-  /** The bound recording, the provider release or the catalog artist that the owner saved */
+  /** The bound recording, album or artist that the owner marked, not its merge root */
   entityId: Uuid,
   origin: LibraryOrigin,
+  mark: LibraryMark,
   addedAt: Schema.Int,
   hlc: HybridLogicalClock,
   deleted: Schema.Boolean,
@@ -123,18 +131,6 @@ export class SourcePreferenceRow extends Schema.Class<SourcePreferenceRow>("Sour
   hlc: HybridLogicalClock,
 }) {}
 
-/** The owner loves the entity. One row per entity; each write sets all fields. */
-export class RatingRow extends Schema.Class<RatingRow>("RatingRow")({
-  table: Schema.Literal("rating"),
-  /** UUIDv5 of `rating:<entity_type>:<entity_id>` */
-  id: Uuid,
-  entityType: LibraryEntityType,
-  /** As in `LibraryItemRow` */
-  entityId: Uuid,
-  favorite: Schema.Boolean,
-  hlc: HybridLogicalClock,
-}) {}
-
 /** One row of a synced table, without the server's `change_seq` */
 export const SyncRow = Schema.Union([
   LibraryItemRow,
@@ -142,7 +138,6 @@ export const SyncRow = Schema.Union([
   PlaylistEntryRow,
   PlayEventRow,
   SourcePreferenceRow,
-  RatingRow,
 ]);
 export type SyncRow = typeof SyncRow.Type;
 
@@ -283,8 +278,6 @@ export class LibraryRemoteTrackRow extends Schema.Class<LibraryRemoteTrackRow>(
   rawArtist: Schema.NullOr(Schema.String),
   rawAlbum: Schema.NullOr(Schema.String),
   rawDurationMs: Schema.NullOr(Schema.Number),
-  /** Import state of the replica with the credential; it changes without a new `hlc` */
-  seenAt: Schema.Number,
   deleted: Schema.Boolean,
   hlc: HybridLogicalClock,
 }) {}

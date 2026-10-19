@@ -30,7 +30,7 @@ export const librarySyncState = sqliteTable("library_sync_state", {
 
 /**
  * The remote ID for later writes, and the fields to show while the song has no source. Replicated,
- * so that every replica shows the song; only `seen_at` changes without a new `change_seq`.
+ * so that every replica shows the song.
  */
 export const libraryRemoteTrack = sqliteTable(
   "library_remote_track",
@@ -46,8 +46,6 @@ export const libraryRemoteTrack = sqliteTable(
     rawArtist: text("raw_artist"),
     rawAlbum: text("raw_album"),
     rawDurationMs: integer("raw_duration_ms"),
-    // The time of the last read of the library songs that had it. 0: only playlist reads had it.
-    seenAt: integer("seen_at").notNull(),
     deleted: integer("deleted", { mode: "boolean" }).notNull().default(false),
     hlc: text("hlc").notNull(),
     changeSeq,

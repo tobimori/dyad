@@ -60,7 +60,7 @@ import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer 
 import { syncHubLayer, watchChanges } from "./sync.ts";
 import { timedRoute } from "./timed-route.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
-import { listLibrary, listPlaylistEntries } from "./user-library.ts";
+import { listLibrary, listPlaylistEntries, setLibraryMark } from "./user-library.ts";
 import { prepareVideo, videoRoute } from "./video.ts";
 import { webLinks } from "./web-links.ts";
 
@@ -171,6 +171,8 @@ export const serverRoutes = Layer.unwrap(
         editPlaylist(playlistId, edit).pipe(orDieOnDatabaseError("editPlaylist")),
       removePlaylistEntry: ({ entryId }) =>
         removePlaylistEntry(entryId).pipe(orDieOnDatabaseError("removePlaylistEntry")),
+      setLibraryMark: ({ entityType, entityId, mark }) =>
+        setLibraryMark(entityType, entityId, mark).pipe(orDieOnDatabaseError("setLibraryMark")),
       movePlaylistEntry: ({ playlistId, entryId, direction }) =>
         movePlaylistEntry(playlistId, entryId, direction).pipe(
           orDieOnDatabaseError("movePlaylistEntry"),
