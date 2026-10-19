@@ -1,6 +1,6 @@
 import { playbackSession, providerItem, providerPage, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { RecordingId, SourceSummary } from "@dyad/domain";
+import { CreditedArtistRef, RecordingId, SourceSummary } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
 import { and, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
@@ -84,6 +84,13 @@ export const cachedSummary = Effect.fn("cachedSummary")(function* (
     recordingId: item.recordingId,
     video: item.source.video,
     series: parsed?.series?.name ?? null,
+    artists: item.source.artists.map(
+      (credited) =>
+        new CreditedArtistRef({
+          name: credited.name,
+          ref: providerArtistRef(item.provider, credited.id),
+        }),
+    ),
   });
 });
 

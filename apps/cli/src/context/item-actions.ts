@@ -85,7 +85,12 @@ const navigationActions = (app: ActionApp) => {
     if (!(item instanceof SongItem)) return [];
 
     const { artist, artistRef, album, albumRef } = item.source;
-    const list = [...goToArtist(artistRef, artist)];
+    // A joint credit, for example `Madonna & Charli xcx`, opens each artist
+    const linked = item.source.artists.filter((credited) => credited.ref !== null);
+    const list =
+      linked.length > 1
+        ? linked.flatMap((credited) => goToArtist(credited.ref, credited.name))
+        : [...goToArtist(artistRef, artist)];
     if (artistRef === null && artist !== null) {
       list.push(
         new Action({

@@ -56,6 +56,12 @@ export type ArtistRef = typeof ArtistRef.Type;
 export const AlbumRef = Schema.String.pipe(Schema.brand("AlbumRef"));
 export type AlbumRef = typeof AlbumRef.Type;
 
+/** One artist of a credit, with the page to open. `ref` is `null` when no page is known. */
+export class CreditedArtistRef extends Schema.Class<CreditedArtistRef>("CreditedArtistRef")({
+  name: Schema.String,
+  ref: Schema.NullOr(ArtistRef),
+}) {}
+
 export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")({
   id: Schema.String,
   /** `local` for a file on the server, else the provider ID, for example `apple_music` */
@@ -89,6 +95,11 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
   series: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
     Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
+  /** The credited artists in order. Empty when only `artist` is known. */
+  artists: Schema.Array(CreditedArtistRef).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+    Schema.withConstructorDefault(Effect.succeed([])),
   ),
 }) {}
 

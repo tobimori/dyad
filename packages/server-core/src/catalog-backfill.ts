@@ -12,7 +12,7 @@ import { tagAlbumType, tagReleaseDate } from "./editions.ts";
 import { assertionId, boundRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { matchingLayer, resolveRoots } from "./matching.ts";
-import { editionsLayer } from "./albums.ts";
+import { editionsLayer, repairJointCredits } from "./albums.ts";
 import { copyDiscoveryLayer } from "./source-copies.ts";
 import { Tags, tagIdentifiers, writeProviderSource, writeSource } from "./sources.ts";
 import { assertSegmentMatches } from "./tracklists.ts";
@@ -136,6 +136,7 @@ const runBackfill = Effect.fn(function* ({ after }: typeof BackfillPayload.Type)
   if (rows.length < batchSize || last === undefined) {
     // Recordings without a source, for example of matched tracklist entries, are in no batch
     yield* projectRecordings(yield* uncreditedRecordings);
+    yield* repairJointCredits;
     return yield* Effect.logInfo("Catalog backfill finished");
   }
   yield* jobs.enqueue(backfillKind, backfillKind, { after: last.source.id }, { priority: -1 });

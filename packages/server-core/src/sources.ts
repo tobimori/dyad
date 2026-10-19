@@ -1,6 +1,6 @@
 import { localFile, policyVersion, providerItem, recording, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
+import { CreditedArtistRef, RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
 import { HlcClock } from "@dyad/sync";
@@ -301,6 +301,18 @@ export const tagIdentifiers = (tags: typeof Tags.Type) => {
 const bound = alias(recording, "bound");
 const canonical = alias(recording, "canonical");
 
+const decodeCredits = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        position: Schema.Int,
+        name: Schema.String,
+        root: Schema.NullOr(Schema.String),
+      }),
+    ),
+  ),
+);
+
 /**
  * The sources that the owner can play, one row per source: a file on this replica, or a source of
  * a linked provider
@@ -347,6 +359,21 @@ export const playableSources = Effect.fn("playableSources")(function* (
                 AND m.origin = 'provider'
             )
         )`,
+      // With the same page rule as `artistRoot`. The position orders them, because SQLite does not
+      // promise the order of `json_group_array`.
+      credits: sql<string | null>`(
+          SELECT json_group_array(json_object(
+            'position', n.position,
+            'name', n.name,
+            'root', CASE WHEN EXISTS (
+              SELECT 1 FROM artist AS m
+              WHERE coalesce(m.merged_into_id, m.id) = coalesce(a.merged_into_id, a.id)
+                AND m.origin = 'provider'
+            ) THEN coalesce(a.merged_into_id, a.id) END
+          ))
+          FROM song_artist AS n LEFT JOIN artist AS a ON a.id = n.artist_id
+          WHERE n.recording_id = ${canonical.id}
+        )`,
       video: sql<number | null>`json_extract(${providerItem.data}, '$.video')`,
     })
     .from(source)
@@ -389,6 +416,7 @@ export const sourceSummary = (row: {
   readonly artistRoot: string | null;
   readonly providerName: string | null;
   readonly video: number | null;
+  readonly credits: string | null;
 }) => {
   const catalogArtist = row.artistRoot === null ? null : catalogArtistRef(row.artistRoot);
   const providerArtist =
@@ -418,6 +446,19 @@ export const sourceSummary = (row: {
     providerName: row.providerName,
     recordingId: row.source.recordingId === null ? null : RecordingId.make(row.source.recordingId),
     video: row.video === 1,
+    artists: Option.match(decodeCredits(row.credits ?? "[]"), {
+      onNone: () => [],
+      onSome: (credits) =>
+        credits
+          .toSorted((a, b) => a.position - b.position)
+          .map(
+            (credit) =>
+              new CreditedArtistRef({
+                name: credit.name,
+                ref: credit.root === null ? null : catalogArtistRef(credit.root),
+              }),
+          ),
+    }),
   });
 };
 

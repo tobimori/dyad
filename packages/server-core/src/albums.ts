@@ -8,6 +8,7 @@ import {
   entityMerge,
   job,
   policyVersion,
+  providerPage,
   recording,
 } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
@@ -593,6 +594,37 @@ export const matchAlbumsOf = Effect.fn("matchAlbumsOf")(function* (recordingIds:
  * Asserts the edition of a provider album and its tracks, then matches it by UPC and by the
  * edition rule. A track without a number has no position, so it is not a track of the edition.
  */
+const separator = /^\s*(?:,|&|\+|×|\/|x|and|und|feat\.?|ft\.?|with|vs\.?)\s*$/iu;
+
+// `text` is `names` in this order with separators between them, for example `A, B & C`
+const joins = (text: string, names: ReadonlyArray<string>) => {
+  const end = names.reduce((from, name, index) => {
+    if (from === -1) return -1;
+    const start = text.indexOf(name, from);
+    if (start === -1 || (index === 0 ? start !== 0 : !separator.test(text.slice(from, start)))) {
+      return -1;
+    }
+    return start + name.length;
+  }, 0);
+  return end === text.length;
+};
+
+// A provider can give one artist ID for a joint name, for example Apple Music for `Madonna & Charli
+// xcx`. A track of the album whose artists make up that name gives the artists.
+const albumArtists = (data: ProviderAlbum, artist: string) => {
+  const joint = data.tracks.find(
+    (track) =>
+      track.source.artists.length > 1 &&
+      joins(
+        artist,
+        track.source.artists.map((credited) => credited.name),
+      ),
+  );
+  return joint === undefined
+    ? [{ id: data.release.artistId, name: artist }]
+    : joint.source.artists.map((credited) => ({ id: credited.id, name: credited.name }));
+};
+
 export const assertEdition = Effect.fn("assertEdition")(function* (
   provider: string,
   data: ProviderAlbum,
@@ -633,7 +665,7 @@ export const assertEdition = Effect.fn("assertEdition")(function* (
               ? null
               : {
                   name: release.artist,
-                  artists: [{ id: release.artistId, name: release.artist }],
+                  artists: albumArtists(data, release.artist),
                 },
           date: release.releaseDate,
           // Only a stated type counts
@@ -655,6 +687,44 @@ export const assertEdition = Effect.fn("assertEdition")(function* (
       const albumMerges = (yield* Effect.forEach(albums, matchAlbum)).flat();
       yield* deriveAlbums({ editions: [], albumMerges, editionMerges });
     }),
+  );
+});
+
+/**
+ * Asserts again the editions whose credit has one artist for a name that looks joint, from the
+ * cached album pages. Pages from before `albumArtists` gave one artist for `A & B`.
+ */
+export const repairJointCredits = Effect.gen(function* () {
+  const db = yield* Database;
+  const name = sql`json_extract(${catalogAssertion.value}, '$.name')`;
+  const rows = yield* db
+    .select({ provider: providerPage.provider, data: providerPage.data })
+    .from(catalogAssertion)
+    .innerJoin(
+      providerPage,
+      and(
+        eq(providerPage.kind, "album"),
+        sql`${catalogAssertion.originRef} = ${providerPage.provider} || ':' || ${providerPage.externalId}`,
+      ),
+    )
+    .where(
+      and(
+        eq(catalogAssertion.entityType, "edition"),
+        eq(catalogAssertion.field, "artist_credit"),
+        eq(catalogAssertion.origin, "plugin"),
+        eq(catalogAssertion.retracted, false),
+        sql`json_array_length(${catalogAssertion.value}, '$.artists') = 1`,
+        sql`(${name} like '%&%' or ${name} like '%,%' or ${name} like '% x %' or ${name} like '%feat%')`,
+      ),
+    );
+  yield* Effect.forEach(
+    rows,
+    (row) =>
+      Schema.decodeUnknownEffect(ProviderAlbum)(row.data).pipe(
+        Effect.flatMap((data) => assertEdition(row.provider, data)),
+        Effect.catchTag("SchemaError", () => Effect.void),
+      ),
+    { discard: true },
   );
 });
 
