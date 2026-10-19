@@ -19,10 +19,6 @@ import {
   FF_ENCODER_FLAC,
 } from "node-av/constants";
 
-// FFmpeg writes its log to stderr directly. Its warnings, such as the FLAC header that cannot be
-// rewritten in a stream, are expected.
-Log.setLevel(AV_LOG_ERROR);
-
 export class MediaError extends Schema.TaggedError<MediaError>()("MediaError", {
   /** A file path or the `name` of a `MediaStream` */
   input: Schema.String,
@@ -69,6 +65,9 @@ export class MediaStream extends Data.Class<{
 
 const openAudio = (media: string | MediaStream) =>
   Effect.gen(function* () {
+    // FFmpeg writes its log to stderr directly. Its warnings, such as the FLAC header that cannot
+    // be rewritten in a stream, are expected. Not at import: the CLI executable has no FFmpeg.
+    Log.setLevel(AV_LOG_ERROR);
     const name = media instanceof MediaStream ? media.name : media;
     const { bytes, open } =
       media instanceof MediaStream

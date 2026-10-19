@@ -1,5 +1,5 @@
 diff --git a/dist/api/audio-frame-buffer.d.ts b/dist/api/audio-frame-buffer.d.ts
-index 98efb714ad90e63897fce1a2d66dbb2ef9781d77..1f8d46bb8927e56e938984364b0795f4c63b1ae1 100644
+index 98efb71..1f8d46b 100644
 --- a/dist/api/audio-frame-buffer.d.ts
 +++ b/dist/api/audio-frame-buffer.d.ts
 @@ -160,7 +160,7 @@ export declare class AudioFrameBuffer implements Disposable {
@@ -21,7 +21,7 @@ index 98efb714ad90e63897fce1a2d66dbb2ef9781d77..1f8d46bb8927e56e938984364b0795f4
       * Reset the buffer, discarding all buffered samples.
       *
 diff --git a/dist/api/audio-frame-buffer.js b/dist/api/audio-frame-buffer.js
-index 2f4fbe0fbc8ddca9141af91db5247a9c5815d418..9c460a21304d13f0e38936749813e6e192b4484c 100644
+index 2f4fbe0..9c460a2 100644
 --- a/dist/api/audio-frame-buffer.js
 +++ b/dist/api/audio-frame-buffer.js
 @@ -202,16 +202,18 @@ export class AudioFrameBuffer {
@@ -71,7 +71,7 @@ index 2f4fbe0fbc8ddca9141af91db5247a9c5815d418..9c460a21304d13f0e38936749813e6e1
          const cloned = this.frame.clone();
          if (!cloned) {
 diff --git a/dist/api/demuxer.js b/dist/api/demuxer.js
-index 8acd8d054d6882777c537343008f0d90a749c7f5..7ae56bb07decb0ac577fe2b6dced886c37e06117 100644
+index 8acd8d0..7ae56bb 100644
 --- a/dist/api/demuxer.js
 +++ b/dist/api/demuxer.js
 @@ -123,6 +123,7 @@ export class Demuxer {
@@ -164,7 +164,7 @@ index 8acd8d054d6882777c537343008f0d90a749c7f5..7ae56bb07decb0ac577fe2b6dced886c
          // NOW we can safely free the IOContext
          if (this.ioContext) {
 diff --git a/dist/api/encoder.js b/dist/api/encoder.js
-index f3694e22bb5a7d9f8cc3bc61f7f84f130778abd4..a47da042970dfeb3160094ef95a56f0180636643 100644
+index f3694e2..a47da04 100644
 --- a/dist/api/encoder.js
 +++ b/dist/api/encoder.js
 @@ -1247,7 +1247,7 @@ export class Encoder {
@@ -185,3 +185,44 @@ index f3694e22bb5a7d9f8cc3bc61f7f84f130778abd4..a47da042970dfeb3160094ef95a56f01
                  const env_6 = { stack: [], error: void 0, hasError: false };
                  try {
                      const bufferedFrame = __addDisposableResource(env_6, _bufferedFrame, false);
+diff --git a/dist/lib/binding.js b/dist/lib/binding.js
+index 5c25f1f..7d8f664 100644
+--- a/dist/lib/binding.js
++++ b/dist/lib/binding.js
+@@ -83,7 +83,14 @@ function loadBinding() {
+     throw new Error(`Could not load the node-av native binding for ${platformArch}.\n` +
+         `Errors:\n  ${errorMessages}\n\n`);
+ }
+-// Load the native binding with fallback logic
+-const bindings = loadBinding();
++// Dyad: load the native binding at first use, so that an executable without FFmpeg can import
++// node-av and fails only when it uses FFmpeg
++let loaded;
++const bindings = new Proxy({}, {
++    get(_, key) {
++        loaded ??= loadBinding();
++        return loaded[key];
++    },
++});
+ export { bindings };
+ //# sourceMappingURL=binding.js.map
+\ No newline at end of file
+diff --git a/dist/lib/error.js b/dist/lib/error.js
+index 204ca3b..d149103 100644
+--- a/dist/lib/error.js
++++ b/dist/lib/error.js
+@@ -45,7 +45,13 @@ const errorCache = {};
+  */
+ function getCachedError(name) {
+     if (!(name in errorCache)) {
+-        errorCache[name] = bindings.FFmpegError.getAverror(name);
++        // Dyad: without the native binding, FFmpeg cannot run, so the codes stay unused
++        try {
++            errorCache[name] = bindings.FFmpegError.getAverror(name);
++        }
++        catch {
++            return undefined;
++        }
+     }
+     return errorCache[name];
+ }
