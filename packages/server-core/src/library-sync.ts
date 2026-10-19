@@ -64,6 +64,8 @@ class AccountChanged extends Data.TaggedError("AccountChanged")<{}> {}
 
 class LinkedAccount extends Data.Class<{
   readonly id: string;
+  // Changes with each link, so that a read can tell a new link of the same provider
+  readonly hlc: string;
   readonly userId: string;
   readonly provider: string;
   readonly credentials: Credentials;
@@ -73,14 +75,20 @@ const loadAccount = (userId: string, provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const [row] = yield* db
-      .select({ id: providerAccount.id, values: credential.values })
+      .select({ id: providerAccount.id, hlc: providerAccount.hlc, values: credential.values })
       .from(providerAccount)
       .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id))
       .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, provider)));
     if (row === undefined) return Option.none();
 
     return Option.some(
-      new LinkedAccount({ id: row.id, userId, provider, credentials: toCredentials(row.values) }),
+      new LinkedAccount({
+        id: row.id,
+        hlc: row.hlc,
+        userId,
+        provider,
+        credentials: toCredentials(row.values),
+      }),
     );
   });
 
@@ -93,7 +101,7 @@ const writeIfLinked = <A, E, R>(account: LinkedAccount, write: Effect.Effect<A, 
     return yield* db.transaction(() =>
       Effect.gen(function* () {
         const [current] = yield* db
-          .select({ id: providerAccount.id })
+          .select({ hlc: providerAccount.hlc })
           .from(providerAccount)
           .where(
             and(
@@ -101,7 +109,7 @@ const writeIfLinked = <A, E, R>(account: LinkedAccount, write: Effect.Effect<A, 
               eq(providerAccount.provider, account.provider),
             ),
           );
-        if (current?.id !== account.id) return yield* new AccountChanged();
+        if (current?.hlc !== account.hlc) return yield* new AccountChanged();
 
         return yield* write;
       }),
@@ -859,7 +867,7 @@ export const getLibrarySyncStatus = Effect.gen(function* () {
   const accounts = yield* db
     .select({ provider: providerAccount.provider })
     .from(providerAccount)
-    .where(eq(providerAccount.userId, userId));
+    .where(and(eq(providerAccount.userId, userId), eq(providerAccount.deleted, false)));
   const linked = accounts.filter(({ provider }) => providers.get(provider)?.library !== undefined);
 
   return yield* Effect.forEach(linked, ({ provider }) =>
@@ -919,7 +927,9 @@ export const librarySyncLayer = Layer.effectDiscard(
 
     const accounts = yield* db
       .select({ userId: providerAccount.userId, provider: providerAccount.provider })
-      .from(providerAccount);
+      .from(providerAccount)
+      // Only the replica with the credential reads the library
+      .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id));
     yield* Effect.forEach(
       accounts,
       (account) => queueLibrarySync(account.userId, account.provider),

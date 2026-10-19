@@ -404,5 +404,19 @@
       "\nCREATE INDEX `rating_change_idx` ON `rating` (`user_id`,`change_seq`);",
       "\nCREATE INDEX `rating_seq_idx` ON `rating` (`change_seq`);"
     ]
+  },
+  {
+    "name": "20261019104249_replicate_provider_account",
+    "folderMillis": 1792406569000,
+    "hash": "a6c692f968d25b3d70dc145a1f50926a59882aed9e829e8dcf59492eca86aab9",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `provider_account` ADD `deleted` integer DEFAULT false NOT NULL;",
+      "\n-- Existing rows get an HLC from their link time, so that the default never stays\nALTER TABLE `provider_account` ADD `hlc` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `provider_account` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nCREATE INDEX `provider_account_seq_idx` ON `provider_account` (`change_seq`);",
+      "\n-- A new `change_seq`, so that paired replicas pull the existing accounts\nUPDATE `replica_identity` SET `change_seq` = `change_seq` + 1 WHERE EXISTS (SELECT 1 FROM `provider_account`);",
+      "\nUPDATE `provider_account` SET\n  `hlc` = printf('%015d-0000-%s', `created_at`, (SELECT `replica_id` FROM `replica_identity`)),\n  `change_seq` = (SELECT `change_seq` FROM `replica_identity`);\n"
+    ]
   }
 ]

@@ -10,7 +10,7 @@ import {
 } from "./primitives.ts";
 
 /** A client and a server sync only when they have the same version */
-export const syncProtocolVersion = 6;
+export const syncProtocolVersion = 7;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -585,8 +585,20 @@ export const CatalogInputRow = Schema.Union([
 ]);
 export type CatalogInputRow = typeof CatalogInputRow.Type;
 
+/** A linked provider account, without its credential. Each write sets all fields. */
+export class ProviderAccountRow extends Schema.Class<ProviderAccountRow>("ProviderAccountRow")({
+  table: Schema.Literal("provider_account"),
+  id: Uuid,
+  userId: UserId,
+  provider: Schema.String,
+  displayName: Schema.String,
+  createdAt: Schema.Int,
+  deleted: Schema.Boolean,
+  hlc: HybridLogicalClock,
+}) {}
+
 /** One row that a server replica sends to another, without its `change_seq` */
-export const PeerRow = Schema.Union([SyncRow, CatalogInputRow]);
+export const PeerRow = Schema.Union([SyncRow, CatalogInputRow, ProviderAccountRow]);
 export type PeerRow = typeof PeerRow.Type;
 
 /** A position in the rows of a server, in `(change_seq, table, id)` order */

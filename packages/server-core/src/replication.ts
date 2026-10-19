@@ -5,6 +5,7 @@ import {
   playEvent,
   playlist,
   playlistEntry,
+  providerAccount,
   rating,
   recording,
   source,
@@ -46,6 +47,7 @@ const peerTables = {
   play_event: peerTable("play_event", playEvent),
   playlist: peerTable("playlist", playlist),
   playlist_entry: peerTable("playlist_entry", playlistEntry),
+  provider_account: peerTable("provider_account", providerAccount),
   rating: peerTable("rating", rating),
   source: peerTable("source", source),
   source_preference: peerTable("source_preference", sourcePreference),
@@ -139,6 +141,25 @@ const isSyncRow = (row: PeerRow): row is SyncRow =>
   row.table === "playlist_entry" ||
   row.table === "rating" ||
   row.table === "source_preference";
+
+// RETURN TYPE: the predicate narrows the union for `mergeCatalogRow`
+const isCatalogRow = (row: PeerRow): row is CatalogInputRow =>
+  !isSyncRow(row) && row.table !== "provider_account";
+
+// RETURN TYPE: the branches return different row unions
+const mergePeerRow = (current: PeerRow | undefined, row: PeerRow): Option.Option<PeerRow> => {
+  if (isSyncRow(row)) {
+    return mergeRow(current !== undefined && isSyncRow(current) ? current : undefined, row);
+  }
+  if (isCatalogRow(row)) {
+    return mergeCatalogRow(
+      current !== undefined && isCatalogRow(current) ? current : undefined,
+      row,
+    );
+  }
+  if (current?.table !== "provider_account") return Option.some(row);
+  return row.hlc > current.hlc ? Option.some(row) : Option.none();
+};
 
 const IsrcEvidence = Schema.Struct({ isrc: Schema.String });
 
@@ -246,9 +267,7 @@ export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
       if (row.table !== "play_event" && row.hlc !== "") yield* clock.receive(row.hlc);
 
       const current = yield* readPeerRow(row.table, row.id);
-      const merged: Option.Option<PeerRow> = isSyncRow(row)
-        ? mergeRow(current !== undefined && isSyncRow(current) ? current : undefined, row)
-        : mergeCatalogRow(current !== undefined && !isSyncRow(current) ? current : undefined, row);
+      const merged = mergePeerRow(current, row);
       if (Option.isNone(merged)) continue;
 
       const same = Equal.equals(merged.value, row);
@@ -257,6 +276,6 @@ export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
       if (same) adopted.push(row);
     }
 
-    yield* deriveCatalog(changed.flatMap((row) => (isSyncRow(row) ? [] : [row])));
+    yield* deriveCatalog(changed.filter(isCatalogRow));
     return adopted.length > 0 ? yield* adoptedSeq : undefined;
   });

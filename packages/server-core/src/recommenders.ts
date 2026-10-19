@@ -217,7 +217,9 @@ export const recommendationsLayer = Layer.effectDiscard(
 
     const accounts = yield* db
       .select({ userId: providerAccount.userId, provider: providerAccount.provider })
-      .from(providerAccount);
+      .from(providerAccount)
+      // Only the replica with the credential scrobbles
+      .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id));
     yield* Effect.forEach(accounts, (account) => queueScrobbles(account.userId, account.provider), {
       discard: true,
     });
