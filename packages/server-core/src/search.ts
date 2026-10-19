@@ -1,15 +1,15 @@
 import { catalogAssertion, playEvent, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { SearchResults } from "@dyad/domain";
-import { PopularityHit } from "@dyad/plugin";
+import { PopularityHit, ProviderSource } from "@dyad/plugin";
 import type { Credentials, Provider, ProviderError } from "@dyad/plugin";
-import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import type { Column, SQL } from "drizzle-orm";
-import { Array as Arr, Clock, Data, Effect, Option, Stream } from "effect";
+import { Array as Arr, Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
 import { normalizeIsrc } from "./normalize.ts";
-import { cacheProviderSources, cachedSummary } from "./provider-cache.ts";
-import { Popularities, usableProviders } from "./providers.ts";
+import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
+import { Popularities, Providers, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { withSeries } from "./sets.ts";
 import { providerOrder } from "./source-preference.ts";
@@ -59,11 +59,51 @@ const searchLocalSources = (query: string) =>
       });
     });
     const summaries = yield* withSeries(candidates.map((candidate) => candidate.summary));
-    return Arr.zipWith(
+    const catalog = Arr.zipWith(
       candidates,
       summaries,
       (candidate, summary) => new Candidate({ ...candidate, summary }),
     );
+
+    // Cached provider results, so that search finds the songs of opened pages, also offline
+    const field = (path: string) => sql`json_extract(${providerItem.data}, ${path})`;
+    const known = new Set(rows.map((row) => row.source.id));
+    const cachedRows = yield* db
+      .select({
+        sourceId: providerItem.sourceId,
+        provider: providerItem.provider,
+        data: providerItem.data,
+      })
+      .from(providerItem)
+      .where(
+        or(contains(field("$.title")), contains(field("$.artist")), contains(field("$.album"))),
+      )
+      .orderBy(desc(providerItem.fetchedAt))
+      .limit(localResultLimit);
+    const providers = yield* Providers;
+    const cached = yield* Effect.forEach(
+      cachedRows.filter((row) => !known.has(row.sourceId)),
+      (row) =>
+        Option.match(Schema.decodeUnknownOption(ProviderSource)(row.data), {
+          onNone: () => Effect.succeed([]),
+          onSome: (decoded) =>
+            toCachedSource(row.provider, decoded).pipe(Effect.map((item) => [item])),
+        }),
+    );
+    return [
+      ...catalog,
+      ...cached.flat().map((item, index) => {
+        const provider = providers.get(item.provider);
+        return new Candidate({
+          summary: cachedSummary(item, provider?.name ?? item.provider),
+          isrc: item.isrc,
+          position: catalog.length + index,
+          local: false,
+          lossless: item.source.lossless,
+          upload: provider?.uploads === true,
+        });
+      }),
+    ];
   });
 
 class Answer extends Data.Class<{

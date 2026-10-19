@@ -223,8 +223,8 @@ const sameRecording = (a: Candidate, b: Candidate) =>
 
 /**
  * One result per recording, best first. A group shows and plays its best source: the user's
- * provider order, then a local file, then a source that the user played, then lossless, then the
- * position in the provider's results.
+ * provider order, then a local file, then lossless, then a curated provider over uploads, then a
+ * source that the user played, then the position in the provider's results.
  */
 export const rank = (
   query: string,
@@ -261,8 +261,10 @@ export const rank = (
         { provider: b.summary.provider, lossless: false },
       ) ||
       Number(b.local) - Number(a.local) ||
-      Number(played(b)) - Number(played(a)) ||
       Number(b.lossless) - Number(a.lossless) ||
+      // A curated copy over an upload, which can be a reupload or have an intro
+      Number(a.upload) - Number(b.upload) ||
+      Number(played(b)) - Number(played(a)) ||
       a.position - b.position;
     const best = members.reduce((current, next) => (compare(next, current) < 0 ? next : current));
 
