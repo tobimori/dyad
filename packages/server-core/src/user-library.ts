@@ -25,7 +25,7 @@ import { generateKeyBetween } from "fractional-indexing";
 
 import { uuidV5 } from "./ids.ts";
 import { providerOrder } from "./source-preference.ts";
-import { playableSources, sourceSummary } from "./sources.ts";
+import { addReferencedSources, playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 import { readRow, writeRow } from "./replication.ts";
 
@@ -175,9 +175,12 @@ export const setLibraryMark = (
   entityType: LibraryEntityType,
   entityId: string,
   mark: LibraryMark | null,
+  sourceId: string | null,
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
+    if (entityType === "recording")
+      yield* addReferencedSources([{ sourceId, recordingId: entityId }]);
     const clock = yield* HlcClock;
     const members = yield* groupOf(entityType, entityId);
     const rows = yield* db

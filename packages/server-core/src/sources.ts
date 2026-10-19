@@ -15,6 +15,7 @@ import { AlbumType } from "./editions.ts";
 import { boundRecordingId, sourceId, variantId } from "./ids.ts";
 import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
+import { cachedProviderSource } from "./provider-cache.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { Providers, linkedProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
@@ -254,6 +255,33 @@ export const writeProviderSource = (provider: string, item: ProviderSource) =>
 
 export const addProviderSource = (cached: CachedSource) =>
   writeProviderSource(cached.provider, cached.source);
+
+/**
+ * A search result enters the catalog when the owner refers to it, like when it plays: in a
+ * playlist or a library mark
+ */
+export const addReferencedSources = (
+  entries: ReadonlyArray<{ readonly sourceId: string | null; readonly recordingId: string }>,
+) =>
+  Effect.forEach(
+    entries,
+    ({ sourceId, recordingId }) =>
+      Effect.gen(function* () {
+        if (sourceId === null) return;
+        const db = yield* Database;
+        const [known] = yield* db
+          .select({ id: source.id })
+          .from(source)
+          .where(eq(source.id, sourceId));
+        if (known !== undefined) return;
+
+        const cached = yield* cachedProviderSource(sourceId);
+        if (Option.isSome(cached) && cached.value.recordingId === recordingId) {
+          yield* addProviderSource(cached.value);
+        }
+      }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot add a saved source", cause))),
+    { discard: true },
+  );
 
 export const Tags = Schema.Record(Schema.String, Schema.String);
 

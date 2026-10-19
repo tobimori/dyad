@@ -171,8 +171,10 @@ export const serverRoutes = Layer.unwrap(
         editPlaylist(playlistId, edit).pipe(orDieOnDatabaseError("editPlaylist")),
       removePlaylistEntry: ({ entryId }) =>
         removePlaylistEntry(entryId).pipe(orDieOnDatabaseError("removePlaylistEntry")),
-      setLibraryMark: ({ entityType, entityId, mark }) =>
-        setLibraryMark(entityType, entityId, mark).pipe(orDieOnDatabaseError("setLibraryMark")),
+      setLibraryMark: ({ entityType, entityId, mark, sourceId }) =>
+        setLibraryMark(entityType, entityId, mark, sourceId).pipe(
+          orDieOnDatabaseError("setLibraryMark"),
+        ),
       movePlaylistEntry: ({ playlistId, entryId, direction }) =>
         movePlaylistEntry(playlistId, entryId, direction).pipe(
           orDieOnDatabaseError("movePlaylistEntry"),

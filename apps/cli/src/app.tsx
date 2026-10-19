@@ -31,6 +31,7 @@ import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
 import { usePlaylistActions } from "./component/dialog-playlists.tsx";
+import { useLibraryMarks } from "./component/library-marks.ts";
 import { useHeardInSets } from "./component/dialog-sets.tsx";
 import { usePlayFrom } from "./component/dialog-play-from.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
@@ -154,6 +155,11 @@ export function App(props: {
   const heardInSets = useHeardInSets({ atoms: props.atoms, player });
   const webLinks = useWebLinks({ connection: client, run: props.run });
   const playFrom = usePlayFrom(props.atoms);
+  const libraryMarks = useLibraryMarks({
+    atoms: props.atoms,
+    replica: props.replica,
+    run: props.run,
+  });
   const playlistSummaries = useAtomValue(props.atoms.playlists);
   const shownPlaylist =
     route instanceof PlaylistRoute && AsyncResult.isSuccess(playlistSummaries)
@@ -551,6 +557,7 @@ export function App(props: {
       ...(recordingId === null
         ? []
         : [playlistActions.add([{ recordingId, sourceId: source.id }])]),
+      ...libraryMarks(source),
       ...(playingSet && identified.length > 0 && !savesSet
         ? [playlistActions.saveSet(titleOf(source), identified)]
         : []),
@@ -831,6 +838,8 @@ export function App(props: {
     [commands.playNext, () => runAction(commands.playNext)],
     [commands.addToQueue, () => runAction(commands.addToQueue)],
     [commands.addToPlaylist, () => runAction(commands.addToPlaylist)],
+    [commands.saveToLibrary, () => runAction(commands.saveToLibrary)],
+    [commands.favorite, () => runAction(commands.favorite)],
     [
       commands.watchVideo,
       () => {

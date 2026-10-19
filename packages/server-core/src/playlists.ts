@@ -1,4 +1,4 @@
-import { playlist, playlistEntry, source } from "@dyad/db";
+import { playlist, playlistEntry } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
   PlaylistEntryRow,
@@ -14,9 +14,8 @@ import { Crypto, Effect, Option, Random } from "effect";
 import { generateKeyBetween } from "fractional-indexing";
 
 import { pushIfHeld } from "./playlist-push.ts";
-import { cachedProviderSource } from "./provider-cache.ts";
 import { readRow, writeRow } from "./replication.ts";
-import { addProviderSource } from "./sources.ts";
+import { addReferencedSources } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 import { patchPlaylist } from "./user-library.ts";
 
@@ -71,34 +70,12 @@ const ownedPlaylist = (playlistId: string) =>
     return row;
   });
 
-// A search result enters the catalog when a playlist refers to it, like when it plays
-const addEntrySources = (entries: ReadonlyArray<typeof EntryInput.Type>) =>
-  Effect.forEach(
-    entries,
-    ({ sourceId, recordingId }) =>
-      Effect.gen(function* () {
-        if (sourceId === null) return;
-        const db = yield* Database;
-        const [known] = yield* db
-          .select({ id: source.id })
-          .from(source)
-          .where(eq(source.id, sourceId));
-        if (known !== undefined) return;
-
-        const cached = yield* cachedProviderSource(sourceId);
-        if (Option.isSome(cached) && cached.value.recordingId === recordingId) {
-          yield* addProviderSource(cached.value);
-        }
-      }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot add a saved source", cause))),
-    { discard: true },
-  );
-
 const appendEntries = (playlistId: string, entries: ReadonlyArray<typeof EntryInput.Type>) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
     const clock = yield* HlcClock;
-    yield* addEntrySources(entries);
+    yield* addReferencedSources(entries);
 
     let last = (yield* liveEntries(playlistId)).at(-1)?.position ?? null;
     const rows: Array<PlaylistEntryRow> = [];

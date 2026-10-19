@@ -943,12 +943,16 @@ const OwnerRpc = RpcGroup.make(
     error: PlaylistNotFound,
   }),
   Rpc.make("removePlaylistEntry", { payload: { entryId: Schema.String } }),
-  /** `null` takes the entity out of the library */
+  /**
+   * `null` takes the entity out of the library. `sourceId`: the copy that the owner marked, so that
+   * a search result enters the catalog.
+   */
   Rpc.make("setLibraryMark", {
     payload: {
       entityType: LibraryEntityType,
       entityId: Schema.String.check(Schema.isUUID()),
       mark: Schema.NullOr(LibraryMark),
+      sourceId: Schema.NullOr(Schema.String),
     },
   }),
   // One place up or down
