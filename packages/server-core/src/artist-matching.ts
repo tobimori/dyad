@@ -262,8 +262,13 @@ export const decideArtists = (artistIds: Iterable<string>) =>
               eq(entityMerge.decision, "merge"),
             ),
           );
+        // Only the merges of this rule. A `name_search` merge has other evidence.
         const rejected = yield* Effect.forEach(
-          earlier.filter((row) => row.intoId !== target),
+          earlier.filter(
+            (row) =>
+              row.intoId !== target &&
+              (row.method === "url_rel" || row.method === "shared_recording"),
+          ),
           (row) =>
             writeSystemMerge({
               entityType: "artist",
@@ -291,6 +296,82 @@ export const decideArtists = (artistIds: Iterable<string>) =>
       }),
     );
     yield* resolveArtistRoots(changed.flat());
+  });
+
+// The artists of a `name_search` merge, so that peers know their IDs without a request
+const NameSearchEvidence = Schema.Struct({
+  fromScheme: Schema.String,
+  fromExternalId: Schema.String,
+  intoScheme: Schema.String,
+  intoExternalId: Schema.String,
+});
+
+/**
+ * Links each provider artist that a search by the name of the group of `member` found, and that
+ * shares songs with the group, to that group. A MusicBrainz root stays the root; two groups with
+ * MusicBrainz roots never join. Returns `true` when a group changed.
+ */
+export const linkFoundArtists = (
+  member: { readonly scheme: string; readonly externalId: string },
+  found: ReadonlyArray<{
+    readonly scheme: string;
+    readonly externalId: string;
+    readonly shared: number;
+  }>,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    if (found.length === 0) return false;
+    yield* projectArtistRows([member, ...found]);
+
+    const rootOf = (key: { readonly scheme: string; readonly externalId: string }) =>
+      Effect.gen(function* () {
+        const id = yield* artistIdOf(key.scheme, key.externalId);
+        const [row] = yield* db
+          .select({ mergedIntoId: artist.mergedIntoId })
+          .from(artist)
+          .where(eq(artist.id, id));
+        const root = row?.mergedIntoId ?? id;
+        const [named] = yield* db
+          .select({ scheme: identifier.scheme, externalId: identifier.value })
+          .from(identifier)
+          .where(and(eq(identifier.entityType, "artist"), eq(identifier.entityId, root)));
+        return {
+          id: root,
+          scheme: named?.scheme ?? key.scheme,
+          externalId: named?.externalId ?? key.externalId,
+        };
+      });
+
+    const changed: Array<string> = [];
+    for (const candidate of found) {
+      const group = yield* rootOf(member);
+      const other = yield* rootOf(candidate);
+      if (other.id === group.id) continue;
+      const [groupMb, otherMb] = [group.scheme === mbidScheme, other.scheme === mbidScheme];
+      if (groupMb && otherMb) continue;
+
+      const [from, into] = groupMb ? [other, group] : [group, other];
+      const written = yield* writeSystemMerge({
+        entityType: "artist",
+        fromId: from.id,
+        intoId: into.id,
+        decision: "merge",
+        method: "name_search",
+        confidence: 0.85,
+        evidence: {
+          fromScheme: from.scheme,
+          fromExternalId: from.externalId,
+          intoScheme: into.scheme,
+          intoExternalId: into.externalId,
+          sharedSongs: String(candidate.shared),
+        },
+      });
+      if (!written) continue;
+      changed.push(from.id);
+      yield* resolveArtistRoots([from.id]);
+    }
+    return changed.length > 0;
   });
 
 /** Decides the provider artists that the credits in the merge groups of the recordings name */
@@ -355,6 +436,14 @@ export const deriveArtists = (rows: ReadonlyArray<CatalogInputRow>) =>
   Effect.gen(function* () {
     yield* projectArtistRows(
       rows.flatMap((row) => {
+        if (row.table === "entity_merge" && row.method === "name_search") {
+          return Option.toArray(
+            Schema.decodeUnknownOption(NameSearchEvidence)(row.evidence),
+          ).flatMap((link) => [
+            { scheme: link.fromScheme, externalId: link.fromExternalId },
+            { scheme: link.intoScheme, externalId: link.intoExternalId },
+          ]);
+        }
         if (row.table !== "catalog_assertion" || row.entityType !== "artist") return [];
         if (row.field === "links") return [{ scheme: mbidScheme, externalId: row.originRef }];
         return Option.toArray(Schema.decodeUnknownOption(ArtistLinkEvidence)(row.evidence)).map(

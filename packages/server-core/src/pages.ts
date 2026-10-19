@@ -6,6 +6,7 @@ import {
   editionTrack,
   identifier,
   localFile,
+  providerItem,
   providerPage,
   recording,
   songArtist,
@@ -28,7 +29,7 @@ import {
   compareSources,
 } from "@dyad/domain";
 import { AlbumRef } from "@dyad/domain";
-import { ProviderAlbum, ProviderArtist } from "@dyad/plugin";
+import { ProviderAlbum, ProviderArtist, ProviderSource } from "@dyad/plugin";
 import type {
   Credentials,
   Provider,
@@ -36,12 +37,14 @@ import type {
   ProviderRelease,
   ProviderTrack,
 } from "@dyad/plugin";
+import { artistNameKey } from "@dyad/plugin/tracklist";
 import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
-import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
+import { Clock, Data, Effect, Option, Ref, Schema, Stream } from "effect";
 
 import { albumEditions, albumPageRefs, assertEdition, splitEdition } from "./albums.ts";
+import { linkFoundArtists } from "./artist-matching.ts";
 import { artistIdOf } from "./artists.ts";
 import { uuidV5 } from "./ids.ts";
 import { normV1, simplifyText } from "./normalize.ts";
@@ -622,89 +625,255 @@ export const providerPageStream = <A, E, Page, R>(
 /**
  * The Dyad artist page: the catalog albums and songs of the artist and the provider pages of all
  * provider artists in its merge group, as one discography and one song list. A library ref gives
- * the page of the local files.
+ * the page of the local files. After the first page, a search by name can link more provider
+ * artists, and then the page shows them too.
  */
 export const artistPage = (ref: ArtistRef) =>
   Option.isSome(libraryArtistKey(ref))
     ? Stream.fromEffect(localArtistPage(ref).pipe(orDieOnDatabaseError("artistPage")))
     : Stream.unwrap(
         Effect.gen(function* () {
-          const db = yield* Database;
-          const usable = yield* usableProviders;
-          const parts = Option.getOrNull(providerRefParts(ref));
-          const requested =
-            parts === null
-              ? Option.getOrNull(catalogArtistId(ref))
-              : yield* artistIdOf(parts.provider, parts.externalId);
-          if (requested === null) return Stream.fail(new PageNotFound());
+          const group = yield* groupOf(ref);
+          if (group === null) return Stream.fail(new PageNotFound());
 
-          const [row] = yield* db
-            .select({ mergedIntoId: artist.mergedIntoId })
-            .from(artist)
-            .where(eq(artist.id, requested));
-          if (row === undefined && parts === null) return Stream.fail(new PageNotFound());
-          const root = row?.mergedIntoId ?? requested;
-          const members = yield* db
-            .select({ provider: identifier.scheme, externalId: identifier.value })
-            .from(artist)
-            .innerJoin(
-              identifier,
-              and(eq(identifier.entityType, "artist"), eq(identifier.entityId, artist.id)),
-            )
-            .where(sql`coalesce(${artist.mergedIntoId}, ${artist.id}) = ${root}`);
-
-          // The provider with the highest metadata priority first
-          const providers = yield* Providers;
-          const priority = (provider: string) => providers.get(provider)?.metadataPriority ?? 0;
-          const pages = [
-            ...new Map(
-              [...(parts === null ? [] : [parts]), ...members].flatMap((member) =>
-                usable.get(member.provider)?.provider.artist === undefined
-                  ? []
-                  : [[`${member.provider}:${member.externalId}`, member] as const],
-              ),
-            ).values(),
-          ]
-            .toSorted(
-              (a, b) =>
-                priority(b.provider) - priority(a.provider) ||
-                a.provider.localeCompare(b.provider) ||
-                a.externalId.localeCompare(b.externalId),
-            )
-            .map((member) =>
-              providerPageStream("artist", member, ProviderArtist, {
-                fetch: (plugin) => plugin.artist,
-                tracks: (data) => [...data.topTracks, ...data.tracks],
-                build: Effect.succeed,
-              }),
-            );
-
-          const catalog = yield* catalogArtist(root);
-          const uploads = new Set(
-            [...usable].flatMap(([id, entry]) => (entry.provider.uploads === true ? [id] : [])),
+          const last = yield* Ref.make(Option.none<ArtistPage>());
+          const linked = Stream.unwrap(
+            Effect.gen(function* () {
+              const page = yield* Ref.get(last);
+              if (Option.isNone(page) || !(yield* linkByName(group, page.value))) {
+                return Stream.empty;
+              }
+              const joined = yield* groupOf(ref);
+              return joined === null ? Stream.empty : groupPage(joined);
+            }).pipe(orDieOnDatabaseError("artistPage")),
           );
-          const latest = pages.length === 0 ? Stream.succeed([]) : Stream.zipLatestAll(...pages);
-          return latest.pipe(
-            Stream.mapEffect((found) =>
-              mixedArtistPage(
-                // A provider artist without a catalog row keeps its own ref
-                row === undefined ? ref : catalogArtistRef(root),
-                root,
-                catalog,
-                found,
-                uploads,
-                priority,
-              ).pipe(orDieOnDatabaseError("artistPage")),
-            ),
+          return Stream.concat(
+            groupPage(group).pipe(Stream.tap((page) => Ref.set(last, Option.some(page)))),
+            linked,
           );
         }).pipe(orDieOnDatabaseError("artistPage")),
       );
 
-// The albums with the artist as first album artist, and the songs that credit the artist
-const catalogArtist = (root: string) =>
+// The merge group of an artist ref. A provider artist without a catalog row is a group of one.
+const groupOf = (ref: ArtistRef) =>
   Effect.gen(function* () {
     const db = yield* Database;
+    const parts = Option.getOrNull(providerRefParts(ref));
+    const requested =
+      parts === null
+        ? Option.getOrNull(catalogArtistId(ref))
+        : yield* artistIdOf(parts.provider, parts.externalId);
+    if (requested === null) return null;
+
+    const [row] = yield* db
+      .select({ mergedIntoId: artist.mergedIntoId })
+      .from(artist)
+      .where(eq(artist.id, requested));
+    if (row === undefined && parts === null) return null;
+    const root = row?.mergedIntoId ?? requested;
+    const identified = yield* db
+      .select({ provider: identifier.scheme, externalId: identifier.value })
+      .from(artist)
+      .innerJoin(
+        identifier,
+        and(eq(identifier.entityType, "artist"), eq(identifier.entityId, artist.id)),
+      )
+      .where(sql`coalesce(${artist.mergedIntoId}, ${artist.id}) = ${root}`);
+    const members = [
+      ...new Map(
+        [...(parts === null ? [] : [parts]), ...identified].map((member) => [
+          `${member.provider}:${member.externalId}`,
+          member,
+        ]),
+      ).values(),
+    ];
+    // A provider artist without a catalog row keeps its own ref
+    return { ref: row === undefined ? ref : catalogArtistRef(root), root, members };
+  });
+
+type ArtistGroup = NonNullable<Effect.Success<ReturnType<typeof groupOf>>>;
+
+const groupPage = (group: ArtistGroup) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const usable = yield* usableProviders;
+      const providers = yield* Providers;
+      // The provider with the highest metadata priority first
+      const priority = (provider: string) => providers.get(provider)?.metadataPriority ?? 0;
+      const hasPage = (provider: string) => usable.get(provider)?.provider.artist !== undefined;
+      const pages = group.members
+        .filter((member) => hasPage(member.provider))
+        .toSorted(
+          (a, b) =>
+            priority(b.provider) - priority(a.provider) ||
+            a.provider.localeCompare(b.provider) ||
+            a.externalId.localeCompare(b.externalId),
+        )
+        .map((member) =>
+          providerPageStream("artist", member, ProviderArtist, {
+            fetch: (plugin) => plugin.artist,
+            tracks: (data) => [...data.topTracks, ...data.tracks],
+            build: Effect.succeed,
+          }),
+        );
+
+      const catalog = yield* catalogArtist(
+        group.root,
+        group.members.filter((member) => usable.has(member.provider) && !hasPage(member.provider)),
+      );
+      const uploads = new Set(
+        [...usable].flatMap(([id, entry]) => (entry.provider.uploads === true ? [id] : [])),
+      );
+      const latest = pages.length === 0 ? Stream.succeed([]) : Stream.zipLatestAll(...pages);
+      return latest.pipe(
+        Stream.mapEffect((found) =>
+          mixedArtistPage(group.ref, group.root, catalog, found, uploads, priority).pipe(
+            orDieOnDatabaseError("artistPage"),
+          ),
+        ),
+      );
+    }).pipe(orDieOnDatabaseError("artistPage")),
+  );
+
+// Two songs, so that one song with a common title does not link two artists of the same name
+const minSharedSongs = 2;
+
+// Searches the curated providers that the group lacks for the name of the page. A found artist
+// joins the group when it is the only one of its provider with the name and at least
+// `minSharedSongs` songs of the page. A name alone never links.
+const linkByName = (group: ArtistGroup, page: ArtistPage) =>
+  Effect.gen(function* () {
+    const songs = page.sections.flatMap((section) =>
+      Schema.is(TrackSection)(section) ? section.tracks.map((track) => track.source) : [],
+    );
+    const [member] = group.members;
+    const name = page.name;
+    if (name === null || member === undefined || songs.length < minSharedSongs) return false;
+
+    const usable = yield* usableProviders;
+    const known = new Set(group.members.map((entry) => entry.provider));
+    const key = artistNameKey(name);
+    const upload = (provider: string) => usable.get(provider)?.provider.uploads === true;
+    const found = yield* Effect.forEach(
+      [...usable],
+      ([provider, entry]) =>
+        Effect.gen(function* () {
+          const { search } = entry.provider;
+          if (
+            search === undefined ||
+            entry.provider.artist === undefined ||
+            upload(provider) ||
+            known.has(provider)
+          ) {
+            return [];
+          }
+          const results = yield* search(name, entry.credentials).pipe(
+            Effect.timeout("8 seconds"),
+            Effect.catchTags({
+              ProviderError: (error) =>
+                Effect.logWarning("Artist search failed", error.reason).pipe(Effect.as([])),
+              TimeoutError: () => Effect.logWarning("Artist search timed out").pipe(Effect.as([])),
+            }),
+            Effect.catchDefect((defect) =>
+              Effect.logError("Artist search crashed", defect).pipe(Effect.as([])),
+            ),
+          );
+          const candidates = [
+            ...new Set(
+              results.flatMap((result) =>
+                result.artists.flatMap((named) =>
+                  artistNameKey(named.name) === key ? [named.id] : [],
+                ),
+              ),
+            ),
+          ].slice(0, 3);
+          const scored = yield* Effect.forEach(candidates, (externalId) =>
+            Effect.gen(function* () {
+              const fetched = yield* Stream.runLast(
+                providerPageStream("artist", { provider, externalId }, ProviderArtist, {
+                  fetch: (plugin) => plugin.artist,
+                  tracks: (data) => [...data.topTracks, ...data.tracks],
+                  build: Effect.succeed,
+                }),
+              );
+              const data = Option.getOrNull(fetched)?.data;
+              const tracks = yield* providerTracks(provider, entry.provider.name, [
+                ...(data?.topTracks ?? []),
+                ...(data?.tracks ?? []),
+              ]);
+              const shared = songs.filter((song) =>
+                tracks.some((track) =>
+                  sameNamedSong(
+                    { summary: song, upload: upload(song.provider) },
+                    { summary: track.source, upload: false },
+                  ),
+                ),
+              ).length;
+              return { scheme: provider, externalId, shared };
+            }),
+          );
+          const proven = scored.filter((candidate) => candidate.shared >= minSharedSongs);
+          return proven.length === 1 ? proven : [];
+        }).pipe(Effect.annotateLogs("provider", provider)),
+      { concurrency: "unbounded" },
+    );
+    return yield* linkFoundArtists(
+      { scheme: member.provider, externalId: member.externalId },
+      found.flat(),
+    );
+  });
+
+// The albums with the artist as first album artist, the songs that credit the artist, and the
+// cached results of the provider artists without a page, for example a YouTube channel
+const catalogArtist = (
+  root: string,
+  pageless: ReadonlyArray<{ readonly provider: string; readonly externalId: string }>,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const providers = yield* Providers;
     const [named] = yield* db.select({ name: artist.name }).from(artist).where(eq(artist.id, root));
+
+    const cachedRows =
+      pageless.length === 0
+        ? []
+        : yield* db
+            .select({ provider: providerItem.provider, data: providerItem.data })
+            .from(providerItem)
+            .where(
+              or(
+                ...pageless.map((member) =>
+                  and(
+                    eq(providerItem.provider, member.provider),
+                    sql`(json_extract(${providerItem.data}, '$.uploader.id') = ${member.externalId}
+                      OR exists (SELECT 1 FROM json_each(${providerItem.data}, '$.artists')
+                        WHERE json_extract(value, '$.id') = ${member.externalId}))`,
+                  ),
+                ),
+              ),
+            );
+    const cached = yield* Effect.forEach(cachedRows, (row) =>
+      Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(
+        Effect.orDie,
+        Effect.flatMap((source) => toCachedSource(row.provider, source)),
+      ),
+    );
+    const ids = new Set(pageless.map((member) => member.externalId));
+    const cachedName = cached
+      .flatMap(({ source }) => [
+        ...source.artists.filter((credited) => ids.has(credited.id)),
+        ...(source.uploader !== null && ids.has(source.uploader.id) ? [source.uploader] : []),
+      ])
+      .at(0)?.name;
+    const cachedSongs = cached.map(
+      (item) =>
+        new PageTrack({
+          source: cachedSummary(item, providers.get(item.provider)?.name ?? item.provider),
+          disc: null,
+          number: null,
+          playable: true,
+        }),
+    );
 
     const credited = alias(artist, "credited");
     const albums = yield* db
@@ -786,9 +955,9 @@ const catalogArtist = (root: string) =>
     );
 
     return {
-      name: named?.name ?? null,
+      name: named?.name ?? cachedName ?? null,
       albums: shown.map((entry) => ({ id: entry.id, card: entry.card })),
-      songs,
+      songs: [...songs, ...cachedSongs],
     };
   });
 

@@ -203,7 +203,8 @@ export const entityMerge = sqliteTable(
     decision: text("decision", { enum: ["merge", "reject"] }).notNull(),
     origin: text("origin", { enum: ["system", "admin"] }).notNull(),
     // Artists: `shared_recording` (a provider credit and a MusicBrainz credit of one merge group)
-    // and `url_rel` (a MusicBrainz URL relation)
+    // and `url_rel` (a MusicBrainz URL relation), `name_search` (a search by name, confirmed by
+    // shared songs)
     // Editions: `upc`. Albums: `edition_rule` (same artist, title and most songs).
     method: text("method", {
       enum: [
@@ -215,6 +216,7 @@ export const entityMerge = sqliteTable(
         "url_rel",
         "upc",
         "edition_rule",
+        "name_search",
       ],
     }).notNull(),
     confidence: real("confidence").notNull(),
