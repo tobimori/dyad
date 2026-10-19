@@ -31,7 +31,7 @@ const isGenBody = (node: ESTree.Node) => {
 
 /**
  * Inline anonymous generators may use Effect.gen. A named function whose whole body is Effect.gen
- * uses Effect.fn, or Effect.fnUntraced when a span would cost more than it tells.
+ * uses Effect.fn, which keeps the call site in error stack traces.
  */
 export const preferEffectFnRule = defineRule({
   meta: {
@@ -44,7 +44,7 @@ export const preferEffectFnRule = defineRule({
       preferEffectFn:
         "Use an inline anonymous generator with Effect.gen, or use Effect.fn for a reusable generator function.",
       preferEffectFnDeclaration:
-        'Write `{{name}}` with `Effect.fn("{{name}}")(function* (...) {...})`, or with `Effect.fnUntraced` when it is cheap or internal, instead of a function that returns Effect.gen.',
+        'Write `{{name}}` with `Effect.fn(function* (...) {...})`, named `Effect.fn("{{name}}")` when it is exported, instead of a function that returns Effect.gen.',
     },
   },
   createOnce(context) {
