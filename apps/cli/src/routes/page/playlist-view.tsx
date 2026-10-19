@@ -10,8 +10,7 @@ import { useMemo } from "react";
 import { useLibraryStatus } from "../../component/library-notice.tsx";
 import { TrackList, entryItems } from "../../component/track-list.tsx";
 import type { TrackItem } from "../../component/track-list.tsx";
-import { PlaylistRoute } from "../../context/routes.ts";
-import type { PageRoute, SectionRoute } from "../../context/routes.ts";
+import { Route } from "../../context/router.ts";
 import { useTheme } from "../../theme/theme.ts";
 
 const noEntries = Atom.make(AsyncResult.initial());
@@ -19,12 +18,12 @@ const noEntries = Atom.make(AsyncResult.initial());
 // RETURN TYPE: the atoms have different types, and `useAtomValue` needs one atom type
 const entriesAtom = (
   atoms: ServerAtoms,
-  route: SectionRoute | PageRoute,
+  route: Route,
 ): Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<PlaylistEntry>, unknown>> =>
-  route instanceof PlaylistRoute ? atoms.playlistEntries(route.id) : noEntries;
+  Route.guards.Playlist(route) ? atoms.playlistEntries(route.id) : noEntries;
 
 /** Other routes get no items. A playlist can have a song twice, so the keys are entry IDs. */
-export function usePlaylist(atoms: ServerAtoms, route: SectionRoute | PageRoute) {
+export function usePlaylist(atoms: ServerAtoms, route: Route) {
   const atom = entriesAtom(atoms, route);
   const result = useAtomValue(atom);
   const refresh = useAtomRefresh(atom);
@@ -44,7 +43,7 @@ export function usePlaylist(atoms: ServerAtoms, route: SectionRoute | PageRoute)
 
 function PlaylistHeader(props: {
   readonly atoms: ServerAtoms;
-  readonly route: PlaylistRoute;
+  readonly route: typeof Route.cases.Playlist.Type;
   readonly entries: ReadonlyArray<PlaylistEntry>;
 }) {
   const theme = useTheme();
@@ -96,7 +95,7 @@ const isNotFound = (result: AsyncResult.AsyncResult<unknown, unknown>) =>
 
 export function PlaylistView(props: {
   readonly atoms: ServerAtoms;
-  readonly route: PlaylistRoute;
+  readonly route: typeof Route.cases.Playlist.Type;
   readonly breadcrumb: string;
   readonly result: AsyncResult.AsyncResult<ReadonlyArray<PlaylistEntry>, unknown>;
   readonly items: ReadonlyArray<TrackItem>;

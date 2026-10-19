@@ -10,8 +10,7 @@ import { RowList } from "../../component/row-list.tsx";
 import type { Row, SelectableRow } from "../../component/row-list.tsx";
 import { ListTitle } from "../../component/track-list.tsx";
 import { useArtwork } from "../../component/use-artwork.ts";
-import { AlbumRoute, ArtistRoute } from "../../context/routes.ts";
-import type { PageRoute, SectionRoute } from "../../context/routes.ts";
+import { Route } from "../../context/router.ts";
 import { useTheme } from "../../theme/theme.ts";
 import { albumHeader, albumPageRows } from "./album.ts";
 import { artistHeader, artistPageRows } from "./artist.ts";
@@ -24,15 +23,15 @@ const noPage = Atom.make(AsyncResult.initial());
 // RETURN TYPE: the atoms have different page types, and `useAtomValue` needs one atom type
 const pageAtom = (
   atoms: ServerAtoms,
-  route: SectionRoute | PageRoute,
+  route: Route,
 ): Atom.Atom<AsyncResult.AsyncResult<ArtistPage | AlbumPage, unknown>> => {
-  if (route instanceof ArtistRoute) return atoms.artistPage(route.ref);
-  if (route instanceof AlbumRoute) return atoms.albumPage(route.ref);
+  if (Route.guards.Artist(route)) return atoms.artistPage(route.ref);
+  if (Route.guards.Album(route)) return atoms.albumPage(route.ref);
   return noPage;
 };
 
-/** A sidebar section has no page and gets an initial result */
-export function usePage(atoms: ServerAtoms, route: SectionRoute | PageRoute) {
+/** Other routes have no page and get an initial result */
+export function usePage(atoms: ServerAtoms, route: Route) {
   const atom = pageAtom(atoms, route);
   return { result: useAtomValue(atom), refresh: useAtomRefresh(atom) };
 }

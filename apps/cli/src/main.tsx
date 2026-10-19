@@ -40,6 +40,7 @@ import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
 import { loadDeviceToken } from "./commands/devices.ts";
 import { startLocalReplica } from "./context/replica.ts";
+import type { Place } from "./context/router.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
 import { MarksProvider } from "./context/marks.tsx";
 import { ThemeProvider } from "./context/theme-provider.tsx";
@@ -90,6 +91,14 @@ const player = Effect.fn(function* (controller: boolean) {
     );
 
   const volume = settings.volume ?? 1;
+
+  const savePlace = (place: Place) =>
+    updateSettings((current) => new Settings({ ...current, place })).pipe(
+      Effect.provideContext(services),
+      Effect.tapCause((cause) => Effect.logWarning("Cannot save the screen", cause)),
+      Effect.provideContext(logServices),
+      Effect.ignore,
+    );
 
   const saveDownloadQuality = (quality: typeof DownloadQuality.Type) =>
     updateSettings((current) => new Settings({ ...current, downloadQuality: quality })).pipe(
@@ -233,6 +242,8 @@ const player = Effect.fn(function* (controller: boolean) {
                       downloadQuality={settings.downloadQuality ?? "high"}
                       saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
                       replica={replica}
+                      place={settings.place}
+                      savePlace={(place) => run(savePlace(place))}
                     />
                   </MarksProvider>
                 </DialogProvider>

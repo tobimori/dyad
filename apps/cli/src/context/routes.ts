@@ -1,7 +1,5 @@
 import type { ServerAtoms } from "@dyad/client-runtime";
-import type { AlbumRef, ArtistRef } from "@dyad/domain";
 import { Data } from "effect";
-import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import type { Action } from "../component/dialog-actions.tsx";
@@ -50,86 +48,3 @@ export class Section extends Data.Class<{
     readonly playlistActions: ReturnType<typeof usePlaylistActions>;
   }) => SectionView;
 }> {}
-
-export class SectionRoute extends Data.TaggedClass("Section")<{
-  readonly section: Section;
-}> {}
-
-export class ArtistRoute extends Data.TaggedClass("Artist")<{
-  readonly ref: ArtistRef;
-  /** Shown until the page loads */
-  readonly hint: string;
-}> {}
-
-export class AlbumRoute extends Data.TaggedClass("Album")<{
-  readonly ref: AlbumRef;
-  /** Shown until the page loads */
-  readonly hint: string;
-}> {}
-
-export class PlaylistRoute extends Data.TaggedClass("Playlist")<{
-  readonly id: string;
-  readonly hint: string;
-}> {}
-
-export type PageRoute = ArtistRoute | AlbumRoute | PlaylistRoute;
-
-class Navigation extends Data.Class<{
-  readonly stack: readonly [SectionRoute, ...Array<PageRoute>];
-  /** Keeps the cursor on its item after back navigation and list changes */
-  readonly selections: ReadonlyMap<string, string>;
-}> {}
-
-// Refs and IDs of different kinds can have the same text, so the key names the kind
-const routeKey = (route: SectionRoute | PageRoute) => {
-  if (route instanceof SectionRoute) return route.section.id;
-  if (route instanceof ArtistRoute) return `artist:${route.ref}`;
-  if (route instanceof AlbumRoute) return `album:${route.ref}`;
-  return `playlist:${route.id}`;
-};
-
-export function useRoutes(initial: Section) {
-  const [navigation, setNavigation] = useState(
-    () =>
-      new Navigation({ stack: [new SectionRoute({ section: initial })], selections: new Map() }),
-  );
-  // Keys that repeat fast can come before the next render, so key handlers read the newest state
-  const latest = useRef(navigation);
-
-  const update = (next: Navigation) => {
-    latest.current = next;
-    setNavigation(next);
-  };
-
-  const stack = navigation.stack;
-  const [root] = stack;
-  const route = stack.at(-1) ?? root;
-
-  return {
-    route,
-    section: root.section,
-    canGoBack: stack.length > 1,
-    breadcrumb: stack
-      .map((entry) => (entry instanceof SectionRoute ? entry.section.title : entry.hint))
-      .join("  ›  "),
-    selected: () => {
-      const current = latest.current.stack.at(-1) ?? latest.current.stack[0];
-      return latest.current.selections.get(routeKey(current)) ?? null;
-    },
-    select: (key: string) => {
-      const current = latest.current.stack.at(-1) ?? latest.current.stack[0];
-      const selections = new Map(latest.current.selections).set(routeKey(current), key);
-      update(new Navigation({ ...latest.current, selections }));
-    },
-    open: (section: Section) =>
-      update(new Navigation({ ...latest.current, stack: [new SectionRoute({ section })] })),
-    push: (page: PageRoute) => {
-      const [first, ...pages] = latest.current.stack;
-      update(new Navigation({ ...latest.current, stack: [first, ...pages, page] }));
-    },
-    back: () => {
-      const [first, ...pages] = latest.current.stack;
-      update(new Navigation({ ...latest.current, stack: [first, ...pages.slice(0, -1)] }));
-    },
-  };
-}

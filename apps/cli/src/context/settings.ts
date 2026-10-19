@@ -4,6 +4,8 @@ import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import envPaths from "env-paths";
 import { useEffect, useState } from "react";
 
+import { Place } from "./router.ts";
+
 /** An effect behind the now playing view; the names are the keys of `backdrops` */
 export const BackdropEffect = Schema.Literals(["artwork", "aura", "pulse", "embers", "horizon"]);
 
@@ -33,6 +35,8 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   coverVideo: Schema.optionalKey(Schema.Boolean),
   backdrop: Schema.optionalKey(Backdrop),
   overlay: Schema.optionalKey(Overlay),
+  /** The screen at the last quit, which opens at start */
+  place: Schema.optionalKey(Place),
 }) {}
 
 export const defaultSettings = new Settings({ enabledPlugins: [], disabledPlugins: [] });
