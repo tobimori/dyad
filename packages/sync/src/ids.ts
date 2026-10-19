@@ -43,10 +43,6 @@ export const libraryItemId = (item: {
   readonly origin: string;
 }) => uuidV5(`library_item:${item.entityType}:${item.entityId}:${item.origin}`);
 
-/** The release of a provider album: the entity of a saved album until release groups exist */
-export const providerReleaseId = (provider: string, externalId: string) =>
-  uuidV5(`${provider}:release:${externalId}`);
-
 /** Equal to the server's `artistIdOf` for a provider scheme */
 export const providerArtistId = (provider: string, externalId: string) =>
   uuidV5(`${provider}:artist:${externalId}`);
