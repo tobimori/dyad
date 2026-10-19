@@ -21,20 +21,14 @@ import { forwardEffect, forwardStream } from "./home-server.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
-import {
-  albumPage,
-  artistPage,
-  artistSearchesLayer,
-  listLibraryAlbums,
-  listLibraryArtists,
-} from "./pages.ts";
+import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./pages.ts";
 import { mediaCacheLayer } from "./media-cache.ts";
 import { liveRoute } from "./live-output.ts";
 import { outputsLayer } from "./outputs.ts";
 import { copyAttemptsLayer, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { receiversLayer } from "./receivers.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
-import { popularitiesLayer, providersLayer } from "./providers.ts";
+import { popularitiesLayer, providerSearchesLayer, providersLayer } from "./providers.ts";
 import { recommendersLayer } from "./recommenders.ts";
 import { radio } from "./radio.ts";
 import { search, searchCatalog } from "./search.ts";
@@ -49,12 +43,7 @@ import {
 } from "./playlists.ts";
 import { heardInSets, listSets } from "./sets.ts";
 import { listProviderChoices, setProviderOrder } from "./source-preference.ts";
-import {
-  copyDiscoveriesLayer,
-  copySearchesLayer,
-  sourceCopies,
-  sourceCopiesStream,
-} from "./source-copies.ts";
+import { copySearchesLayer, sourceCopies, sourceCopiesStream } from "./source-copies.ts";
 import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer } from "./peers.ts";
 import { syncHubLayer, watchChanges } from "./sync.ts";
 import { timedRoute } from "./timed-route.ts";
@@ -93,8 +82,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       musicbrainzLookupsLayer,
       copyAttemptsLayer,
       copySearchesLayer,
-      copyDiscoveriesLayer,
-      artistSearchesLayer,
+      providerSearchesLayer,
       outputsLayer,
       receiversLayer,
       syncHubLayer,

@@ -26,7 +26,14 @@ import {
   toCachedSource,
 } from "./provider-cache.ts";
 import type { CachedSource } from "./provider-cache.ts";
-import { Providers, callProvider, linkedProviders, usableProviders } from "./providers.ts";
+import {
+  Providers,
+  callProvider,
+  linkedProviders,
+  recordSearch,
+  searchedToday,
+  usableProviders,
+} from "./providers.ts";
 import { recordingGroup } from "./sets.ts";
 import { providerOrder } from "./source-preference.ts";
 import { versionWordsOf } from "./ranking.ts";
@@ -274,13 +281,6 @@ export const sourceCopies = Effect.fn("sourceCopies")(function* (sourceId: strin
   return copies.toSorted(compareCopies(yield* providerOrder));
 });
 
-/** When each provider was last searched for the copies of each source */
-export class CopyDiscoveries extends Context.Service<CopyDiscoveries, Map<string, number>>()(
-  "@dyad/server-core/CopyDiscoveries",
-) {}
-
-export const copyDiscoveriesLayer = Layer.sync(CopyDiscoveries, () => new Map());
-
 // The artist and title that a provider search for the song uses
 const songText = Effect.fn(function* (sourceId: string) {
   const db = yield* Database;
@@ -299,16 +299,17 @@ const songText = Effect.fn(function* (sourceId: string) {
 // The usable providers with search that were not searched for the song in the last day. In the
 // background, only providers that allow requests without a user action.
 const discoveryTargets = Effect.fn(function* (sourceId: string, background: boolean) {
-  const discoveries = yield* CopyDiscoveries;
-  const now = yield* Clock.currentTimeMillis;
-  return [...(yield* usableProviders)].flatMap(([id, usable]) => {
+  const targets = [...(yield* usableProviders)].flatMap(([id, usable]) => {
     const { search, userRequestsOnly } = usable.provider;
-    const at = discoveries.get(`${sourceId}:${id}`);
-    if (search === undefined || (at !== undefined && now - at < searchLifetimeMs)) return [];
-    if (background && userRequestsOnly === true) return [];
+    if (search === undefined || (background && userRequestsOnly === true)) return [];
     return [{ id, search, credentials: usable.credentials }];
   });
+  return yield* Effect.filter(targets, (target) =>
+    Effect.map(searchedToday(copiesSubject(sourceId), target.id), (searched) => !searched),
+  );
 });
+
+const copiesSubject = (sourceId: string) => `copies:${sourceId}`;
 
 // Searches each target for the song and keeps the results in the provider cache
 const discover = Effect.fn(function* (
@@ -316,8 +317,6 @@ const discover = Effect.fn(function* (
   query: string,
   targets: Effect.Success<ReturnType<typeof discoveryTargets>>,
 ) {
-  const discoveries = yield* CopyDiscoveries;
-  const now = yield* Clock.currentTimeMillis;
   yield* Effect.forEach(
     targets,
     ({ id, search, credentials }) =>
@@ -329,7 +328,7 @@ const discover = Effect.fn(function* (
         );
         if (Option.isNone(results)) return;
         yield* cacheProviderSources(id, results.value);
-        discoveries.set(`${sourceId}:${id}`, now);
+        yield* recordSearch(copiesSubject(sourceId), id);
       }).pipe(Effect.annotateLogs("provider", id)),
     { concurrency: "unbounded", discard: true },
   );

@@ -2,7 +2,7 @@ import { credential, providerAccount } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import type { Credentials, PopularityHit, Provider, ProviderError } from "@dyad/plugin";
 import { eq } from "drizzle-orm";
-import { Context, Data, Duration, Effect, Layer, Option, Redacted } from "effect";
+import { Clock, Context, Data, Duration, Effect, Layer, Option, Redacted } from "effect";
 
 /** Providers that plugins add, by provider ID */
 export class Providers extends Context.Service<Providers, Map<string, Provider>>()(
@@ -18,6 +18,26 @@ export class Popularities extends Context.Service<
 >()("@dyad/server-core/Popularities") {}
 
 export const popularitiesLayer = Layer.sync(Popularities, () => new Map());
+
+/** When each provider was last searched for each subject, by `<subject>:<provider>` */
+export class ProviderSearches extends Context.Service<ProviderSearches, Map<string, number>>()(
+  "@dyad/server-core/ProviderSearches",
+) {}
+
+export const providerSearchesLayer = Layer.sync(ProviderSearches, () => new Map());
+
+// A subject, for example the copies of a song, costs at most one search of each provider a day
+const searchLifetimeMs = 24 * 60 * 60 * 1000;
+
+/** Whether `provider` was searched for `subject` in the last day */
+export const searchedToday = Effect.fn(function* (subject: string, provider: string) {
+  const at = (yield* ProviderSearches).get(`${subject}:${provider}`);
+  return at !== undefined && (yield* Clock.currentTimeMillis) - at < searchLifetimeMs;
+});
+
+export const recordSearch = Effect.fn(function* (subject: string, provider: string) {
+  (yield* ProviderSearches).set(`${subject}:${provider}`, yield* Clock.currentTimeMillis);
+});
 
 /** Credentials as the plugins get them, from the values that `linkAccount` stores */
 export const toCredentials = (values: Readonly<Record<string, string>>) =>
