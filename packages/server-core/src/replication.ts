@@ -296,6 +296,7 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
  */
 export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
   Effect.gen(function* () {
+    const db = yield* Database;
     const clock = yield* HlcClock;
     // The peer has the rows that it sent, but not the rows that merged with local changes
     const adoptedSeq = yield* Effect.cached(nextChangeSeq);
@@ -317,6 +318,24 @@ export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
     }
 
     yield* deriveCatalog(changed.filter(isCatalogRow));
+    // As on the account replica, a library song without a copy has a recording, also after unlink
+    const librarySongs = changed.flatMap((row) =>
+      row.table === "library_remote_track" ? [row.recordingId] : [],
+    );
+    if (librarySongs.length > 0) {
+      yield* db
+        .insert(recording)
+        .values(
+          librarySongs.map((id) => ({
+            id,
+            origin: "provider" as const,
+            policyVersion: 1,
+            revision: 0,
+          })),
+        )
+        .onConflictDoNothing();
+      yield* projectRecordings(librarySongs);
+    }
     const playlistIds = new Set(
       changed.flatMap((row) => {
         if (row.table === "playlist") return [row.id];
