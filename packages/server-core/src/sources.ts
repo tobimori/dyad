@@ -344,8 +344,8 @@ export const playableSources = (match?: SQL, limit?: number) =>
         // The provider cache is local to each replica; the catalog artist is on every replica
         artistRoot: sql<string | null>`(
           SELECT coalesce(a.merged_into_id, a.id)
-          FROM artist_credit_name AS n JOIN artist AS a ON a.id = n.artist_id
-          WHERE n.artist_credit_id = ${canonical.artistCreditId} AND n.position = 0
+          FROM song_artist AS n JOIN artist AS a ON a.id = n.artist_id
+          WHERE n.recording_id = ${canonical.id} AND n.position = 0
             AND EXISTS (
               SELECT 1 FROM artist AS m
               WHERE coalesce(m.merged_into_id, m.id) = coalesce(a.merged_into_id, a.id)

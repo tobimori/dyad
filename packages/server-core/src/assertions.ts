@@ -356,7 +356,6 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
         const members = new Set(membersOf.get(row.id));
         return {
           id: row.id,
-          artistCreditId: row.artistCreditId,
           own: assertions.filter((assertion) => members.has(assertion.entityId)),
         };
       }),

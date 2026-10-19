@@ -1,5 +1,6 @@
 import {
   album,
+  albumArtist,
   artist,
   catalogAssertion,
   edition,
@@ -9,10 +10,10 @@ import {
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import type { ProviderAlbum } from "@dyad/plugin";
-import { providerArtistId } from "@dyad/sync";
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
-import { Effect, Schema } from "effect";
+import { Array as Arr, Effect, Schema } from "effect";
 
+import { creditNames, creditedArtists, projectArtistRows, sameNames } from "./artists.ts";
 import { ArtistCredit, assertFields, resolveField } from "./assertions.ts";
 import { AlbumType, ReleaseDate } from "./editions.ts";
 import { boundRecordingId, uuidV5 } from "./ids.ts";
@@ -161,20 +162,48 @@ const projectAlbums = (albumIds: Iterable<string>) =>
       .select()
       .from(edition)
       .where(and(inArray(edition.albumId, [...rootOf.keys()]), isNull(edition.mergedIntoId)));
-    const types = yield* db
+    // A root edition resolves over the editions merged into it
+    const editionRootOf = new Map([
+      ...editions.map((row) => [row.id, row.id] as const),
+      ...(yield* db
+        .select({ id: edition.id, root: edition.mergedIntoId })
+        .from(edition)
+        .where(
+          inArray(
+            edition.mergedIntoId,
+            editions.map((row) => row.id),
+          ),
+        )).map((row) => [row.id, row.root ?? row.id] as const),
+    ]);
+    const assertions = yield* db
       .select()
       .from(catalogAssertion)
       .where(
         and(
           eq(catalogAssertion.entityType, "edition"),
-          inArray(
-            catalogAssertion.entityId,
-            editions.map((row) => row.id),
-          ),
-          eq(catalogAssertion.field, "album_type"),
+          inArray(catalogAssertion.entityId, [...editionRootOf.keys()]),
+          inArray(catalogAssertion.field, ["album_type", "artist_credit"]),
           eq(catalogAssertion.retracted, false),
         ),
       );
+    const credits = new Map(
+      editions.map((row) => [
+        row.id,
+        assertions.filter(
+          (assertion) =>
+            assertion.field === "artist_credit" && editionRootOf.get(assertion.entityId) === row.id,
+        ),
+      ]),
+    );
+    yield* projectArtistRows([...credits.values()].flatMap(creditedArtists));
+    const existing = Arr.groupBy(
+      yield* db
+        .select()
+        .from(albumArtist)
+        .where(inArray(albumArtist.albumId, [...roots, ...merged]))
+        .orderBy(albumArtist.albumId, albumArtist.position),
+      (row) => row.albumId,
+    );
 
     yield* Effect.forEach(
       [...roots, ...merged],
@@ -194,16 +223,26 @@ const projectAlbums = (albumIds: Iterable<string>) =>
           const editionIds = new Set(own.map((row) => row.id));
           const type = resolveField(
             providers,
-            types.filter((assertion) => editionIds.has(assertion.entityId)),
+            assertions.filter(
+              (assertion) =>
+                assertion.field === "album_type" &&
+                editionIds.has(editionRootOf.get(assertion.entityId) ?? ""),
+            ),
             "album_type",
             AlbumType,
           );
+          const names = yield* creditNames(providers, credits.get(original?.id ?? "") ?? []);
+          if (!sameNames(existing[id] ?? [], names)) {
+            yield* db.delete(albumArtist).where(eq(albumArtist.albumId, id));
+            if (names.length > 0) {
+              yield* db.insert(albumArtist).values(names.map((name) => ({ albumId: id, ...name })));
+            }
+          }
           yield* db
             .update(album)
             .set({
               title: original?.title == null ? null : splitEdition(original.title).base,
               artistName: original?.artistName ?? null,
-              artistId: original?.artistId ?? null,
               type: albumTypeOf(type),
               year: original?.date == null ? null : Number(original.date.slice(0, 4)),
               artworkUrl: original?.artworkUrl ?? null,
@@ -269,7 +308,6 @@ const projectEditions = (editionIds: Iterable<string>) =>
             title,
             editionWords: title === null ? null : splitEdition(title).words,
             artistName: credit?.name ?? null,
-            artistId: credit?.artists[0]?.id ?? null,
             date: field("date"),
             label: field("label"),
             upc: field("upc"),
@@ -371,23 +409,29 @@ const matchAlbum = (albumId: string) =>
       known?.mergedIntoId == null
         ? [known]
         : yield* db.select().from(album).where(eq(album.id, known.mergedIntoId));
-    if (row?.title == null || row.artistId === null) return [];
+    if (row?.title == null) return [];
 
-    const artistRoot = sql<string>`coalesce(${artist.mergedIntoId}, ${artist.id})`;
+    // The first album artist, as its root
+    const artistRoot = sql<string>`coalesce(${artist.mergedIntoId}, ${albumArtist.artistId})`;
+    const firstArtist = and(eq(albumArtist.albumId, album.id), eq(albumArtist.position, 0));
     const [owner] = yield* db
       .select({ root: artistRoot })
-      .from(artist)
-      .where(eq(artist.id, row.artistId));
+      .from(album)
+      .innerJoin(albumArtist, firstArtist)
+      .leftJoin(artist, eq(artist.id, albumArtist.artistId))
+      .where(eq(album.id, row.id));
+    if (owner?.root == null) return [];
     const candidates = yield* db
       .select({ id: album.id, type: album.type })
       .from(album)
-      .innerJoin(artist, eq(artist.id, album.artistId))
+      .innerJoin(albumArtist, firstArtist)
+      .leftJoin(artist, eq(artist.id, albumArtist.artistId))
       .where(
         and(
           isNull(album.mergedIntoId),
           ne(album.id, row.id),
           sql`lower(${album.title}) = ${row.title.toLowerCase()}`,
-          sql`${artistRoot} = ${owner?.root ?? row.artistId}`,
+          sql`${artistRoot} = ${owner.root}`,
         ),
       );
     const fitting = candidates.filter(
@@ -423,8 +467,6 @@ export const assertEdition = (provider: string, data: ProviderAlbum) =>
   Effect.gen(function* () {
     const release = data.release;
     const id = yield* uuidV5(`${provider}:edition:${release.externalId}`);
-    const artistId =
-      release.artistId === null ? null : yield* providerArtistId(provider, release.artistId);
     const tracks = yield* Effect.forEach(
       data.tracks.filter((track) => track.number !== null),
       (track) =>
@@ -453,7 +495,7 @@ export const assertEdition = (provider: string, data: ProviderAlbum) =>
         artist_credit:
           release.artist === null
             ? null
-            : { name: release.artist, artists: [{ id: artistId, name: release.artist }] },
+            : { name: release.artist, artists: [{ id: release.artistId, name: release.artist }] },
         date: release.releaseDate,
         album_type: { primary: release.primaryType, secondary: release.secondaryTypes },
         artwork_url: release.artworkUrl,

@@ -47,24 +47,31 @@ export const artist = sqliteTable(
   ],
 );
 
-export const artistCredit = sqliteTable("artist_credit", {
-  id: text("id").primaryKey(),
-  ...projection,
-});
+const creditName = {
+  position: integer("position").notNull(),
+  // Null for a name that no evidence links to an artist
+  artistId: text("artist_id"),
+  name: text("name").notNull(),
+  joinPhrase: text("join_phrase").notNull().default(""),
+};
 
-export const artistCreditName = sqliteTable(
-  "artist_credit_name",
-  {
-    artistCreditId: text("artist_credit_id").notNull(),
-    position: integer("position").notNull(),
-    // Null for a name that no evidence links to an artist
-    artistId: text("artist_id"),
-    creditedAs: text("credited_as").notNull(),
-    joinPhrase: text("join_phrase").notNull().default(""),
-  },
+/** The credited names of a recording, from its resolved `artist_credit` */
+export const songArtist = sqliteTable(
+  "song_artist",
+  { recordingId: text("recording_id").notNull(), ...creditName },
   (table) => [
-    primaryKey({ columns: [table.artistCreditId, table.position] }),
-    index("artist_credit_name_artist_idx").on(table.artistId),
+    primaryKey({ columns: [table.recordingId, table.position] }),
+    index("song_artist_artist_idx").on(table.artistId),
+  ],
+);
+
+/** The credited names of an album, from the credit of its original edition */
+export const albumArtist = sqliteTable(
+  "album_artist",
+  { albumId: text("album_id").notNull(), ...creditName },
+  (table) => [
+    primaryKey({ columns: [table.albumId, table.position] }),
+    index("album_artist_artist_idx").on(table.artistId),
   ],
 );
 
@@ -73,7 +80,6 @@ export const recording = sqliteTable(
   {
     id: text("id").primaryKey(),
     title: text("title"),
-    artistCreditId: text("artist_credit_id"),
     durationMs: integer("duration_ms"),
     disambiguation: text("disambiguation"),
     // The credit as one text, for example `A feat. B`. Artist entities need corroborated identity.
@@ -87,7 +93,6 @@ export const recording = sqliteTable(
     ...entity,
   },
   (table) => [
-    index("recording_artist_credit_idx").on(table.artistCreditId),
     index("recording_merged_into_idx").on(table.mergedIntoId),
     index("recording_revision_idx").on(table.revision),
   ],
@@ -121,8 +126,6 @@ export const album = sqliteTable(
     // The title of the original edition without edition words
     title: text("title"),
     artistName: text("artist_name"),
-    // The album artist of the original edition. The edition rule compares its root.
-    artistId: text("artist_id"),
     // Null when no source states a type
     type: text("type", {
       enum: ["album", "ep", "single", "compilation", "live", "dj-mix", "broadcast"],
@@ -146,7 +149,6 @@ export const edition = sqliteTable(
     // The edition words of `title`, for example `Deluxe Edition`
     editionWords: text("edition_words"),
     artistName: text("artist_name"),
-    artistId: text("artist_id"),
     date: text("date"),
     label: text("label"),
     upc: text("upc"),

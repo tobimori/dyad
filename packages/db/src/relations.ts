@@ -40,32 +40,13 @@ export const schema = {
 
 export const relations = defineRelations(schema, (r) => ({
   artist: {
-    creditNames: r.many.artistCreditName(),
     identifiers: r.many.identifier({
       from: r.artist.id,
       to: r.identifier.entityId,
       where: { entityType: "artist" },
     }),
   },
-  artistCredit: {
-    names: r.many.artistCreditName(),
-    recordings: r.many.recording(),
-  },
-  artistCreditName: {
-    artistCredit: r.one.artistCredit({
-      from: r.artistCreditName.artistCreditId,
-      to: r.artistCredit.id,
-    }),
-    artist: r.one.artist({
-      from: r.artistCreditName.artistId,
-      to: r.artist.id,
-    }),
-  },
   recording: {
-    artistCredit: r.one.artistCredit({
-      from: r.recording.artistCreditId,
-      to: r.artistCredit.id,
-    }),
     sources: r.many.source(),
     segments: r.many.sourceSegment(),
     identifiers: r.many.identifier({

@@ -534,5 +534,25 @@
       "\nDROP TABLE `release_group`;",
       "\nDROP TABLE `track`;"
     ]
+  },
+  {
+    "name": "20261019130827_add_song_artist",
+    "folderMillis": 1792415307000,
+    "hash": "5cfdf0c1a4c3894ad32ae0f9120771b4336d0af4991c28e077902755868a5ba1",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `album_artist` (\n\t`album_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`artist_id` text,\n\t`name` text NOT NULL,\n\t`join_phrase` text DEFAULT '' NOT NULL,\n\tCONSTRAINT `album_artist_pk` PRIMARY KEY(`album_id`, `position`)\n);\n",
+      "\nCREATE TABLE `song_artist` (\n\t`recording_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`artist_id` text,\n\t`name` text NOT NULL,\n\t`join_phrase` text DEFAULT '' NOT NULL,\n\tCONSTRAINT `song_artist_pk` PRIMARY KEY(`recording_id`, `position`)\n);\n",
+      "\nINSERT INTO `song_artist` (`recording_id`, `position`, `artist_id`, `name`, `join_phrase`)\nSELECT `recording`.`id`, `n`.`position`, `n`.`artist_id`, `n`.`credited_as`, `n`.`join_phrase`\nFROM `recording` JOIN `artist_credit_name` AS `n` ON `n`.`artist_credit_id` = `recording`.`artist_credit_id`;",
+      "\nDROP INDEX IF EXISTS `artist_credit_name_artist_idx`;",
+      "\nDROP INDEX IF EXISTS `recording_artist_credit_idx`;",
+      "\nCREATE INDEX `album_artist_artist_idx` ON `album_artist` (`artist_id`);",
+      "\nCREATE INDEX `song_artist_artist_idx` ON `song_artist` (`artist_id`);",
+      "\nDROP TABLE `artist_credit`;",
+      "\nDROP TABLE `artist_credit_name`;",
+      "\nALTER TABLE `album` DROP COLUMN `artist_id`;",
+      "\nALTER TABLE `edition` DROP COLUMN `artist_id`;",
+      "\nALTER TABLE `recording` DROP COLUMN `artist_credit_id`;"
+    ]
   }
 ]

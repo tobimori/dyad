@@ -1,17 +1,10 @@
-import {
-  artist,
-  artistCredit,
-  artistCreditName,
-  catalogAssertion,
-  identifier,
-  recording,
-} from "@dyad/db";
+import { artist, catalogAssertion, identifier, recording, songArtist } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { PageNotFound } from "@dyad/domain";
 import type { ArtistRef } from "@dyad/domain";
 import type { Provider } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
-import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Option, Schema } from "effect";
 
 import { resolveArtistRoots } from "./artist-matching.ts";
@@ -19,7 +12,6 @@ import { resolveArtistRoots } from "./artist-matching.ts";
 import { compareAssertions, fields, providerOf, resolveAssertion } from "./assertions.ts";
 import type { Assertion } from "./assertions.ts";
 import { musicbrainzArtistId, uuidV5 } from "./ids.ts";
-import { normV1 } from "./normalize.ts";
 import { Providers, usableProviders } from "./providers.ts";
 import { catalogArtistId, providerArtistRef } from "./refs.ts";
 import { touchGroups } from "./sync-counter.ts";
@@ -44,8 +36,8 @@ const schemeOf = (assertion: Assertion) => {
   return null;
 };
 
-// Each credit with IDs names artists, also when another origin wins the credit
-const creditedArtists = (own: ReadonlyArray<Assertion>) =>
+/** Each credit with IDs names artists, also when another origin wins the credit */
+export const creditedArtists = (own: ReadonlyArray<Assertion>) =>
   own.flatMap((assertion) => {
     const scheme = schemeOf(assertion);
     if (assertion.field !== "artist_credit" || scheme === null) return [];
@@ -102,14 +94,16 @@ const joinPhrases = (text: string, names: ReadonlyArray<string>) => {
 };
 
 /**
- * Writes the resolved credit of a recording with its names and returns its ID. A name without an
- * ID links to an uploader with the same name that the parse calls the artist.
+ * The names of the resolved credit of a recording or an edition. A name without an ID links to an
+ * uploader with the same name that the parse calls the artist.
  */
-const writeCredit = (providers: ReadonlyMap<string, Provider>, own: ReadonlyArray<Assertion>) =>
+export const creditNames = (
+  providers: ReadonlyMap<string, Provider>,
+  own: ReadonlyArray<Assertion>,
+) =>
   Effect.gen(function* () {
-    const db = yield* Database;
     const resolved = resolveAssertion(providers, own, "artist_credit", fields.artist_credit);
-    if (resolved === null) return null;
+    if (resolved === null) return [];
 
     const scheme = schemeOf(resolved.assertion);
     const uploaders = uploaderArtists(own);
@@ -123,7 +117,7 @@ const writeCredit = (providers: ReadonlyMap<string, Provider>, own: ReadonlyArra
       parts.map((part) => part.name),
     );
 
-    const names = yield* Effect.forEach(parts, (part, position) =>
+    return yield* Effect.forEach(parts, (part, position) =>
       Effect.gen(function* () {
         const key = artistNameKey(part.name);
         const uploader = uploaders.find((found) => key !== "" && artistNameKey(found.name) === key);
@@ -134,27 +128,33 @@ const writeCredit = (providers: ReadonlyMap<string, Provider>, own: ReadonlyArra
         return {
           position,
           artistId: linked === null ? null : yield* artistIdOf(linked.scheme, linked.externalId),
-          creditedAs: part.name,
+          name: part.name,
           joinPhrase: part.joinPhrase ?? phrases[position] ?? "",
         };
       }),
     );
-
-    const id = yield* uuidV5(
-      `credit:${JSON.stringify(
-        names.map((name) => `${name.artistId ?? ""}|${normV1(name.creditedAs)}|${name.joinPhrase}`),
-      )}`,
-    );
-    yield* db
-      .insert(artistCredit)
-      .values({ id, policyVersion: 1, revision: 0 })
-      .onConflictDoNothing();
-    yield* db
-      .insert(artistCreditName)
-      .values(names.map((name) => ({ artistCreditId: id, ...name })))
-      .onConflictDoNothing();
-    return id;
   });
+
+/** Whether two lists of credited names are the same */
+export const sameNames = (
+  a: ReadonlyArray<{
+    readonly artistId: string | null;
+    readonly name: string;
+    readonly joinPhrase: string;
+  }>,
+  b: ReadonlyArray<{
+    readonly artistId: string | null;
+    readonly name: string;
+    readonly joinPhrase: string;
+  }>,
+) =>
+  a.length === b.length &&
+  a.every(
+    (name, index) =>
+      name.artistId === b[index]?.artistId &&
+      name.name === b[index]?.name &&
+      name.joinPhrase === b[index]?.joinPhrase,
+  );
 
 const NameMention = Schema.Struct({
   id: Schema.String,
@@ -176,7 +176,8 @@ const mentionsOf = (externalIds: ReadonlyArray<string>) =>
           SELECT a.id AS id, json_extract(j.value, '$.id') AS externalId,
             json_extract(j.value, '$.name') AS name
           FROM ${catalogAssertion} AS a, json_each(a.value, '$.artists') AS j
-          WHERE a.entity_type = 'recording' AND a.field = 'artist_credit' AND a.retracted = 0
+          WHERE a.entity_type IN ('recording', 'edition') AND a.field = 'artist_credit'
+            AND a.retracted = 0
             AND json_extract(j.value, '$.id') IN (${list})
         `);
         const uploaders = yield* db.all(sql`
@@ -300,23 +301,19 @@ export const touchArtistGroups = (artistIds: ReadonlyArray<string>) =>
       db
         .select({ id: recording.id })
         .from(recording)
-        .innerJoin(artistCreditName, eq(artistCreditName.artistCreditId, recording.artistCreditId))
-        .where(inArray(artistCreditName.artistId, [...chunk])),
+        .innerJoin(songArtist, eq(songArtist.recordingId, recording.id))
+        .where(inArray(songArtist.artistId, [...chunk])),
     );
     yield* touchGroups(recordings.flat().map((row) => row.id));
   });
 
 /**
- * Projects the artists of the credits and uploaders of each recording, and sets its
- * `artist_credit_id` from the resolved credit. `own` are the assertions of the recording and of
- * the recordings merged into it. Returns the recordings whose credit changed.
+ * Projects the artists of the credits and uploaders of each recording, and its `song_artist` rows
+ * from the resolved credit. `own` are the assertions of the recording and of the recordings merged
+ * into it. Returns the recordings whose credit changed.
  */
 export const projectArtists = (
-  recordings: ReadonlyArray<{
-    readonly id: string;
-    readonly artistCreditId: string | null;
-    readonly own: ReadonlyArray<Assertion>;
-  }>,
+  recordings: ReadonlyArray<{ readonly id: string; readonly own: ReadonlyArray<Assertion> }>,
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
@@ -325,15 +322,32 @@ export const projectArtists = (
       recordings.flatMap((row) => [...creditedArtists(row.own), ...uploaderArtists(row.own)]),
     );
 
+    const existing = Arr.groupBy(
+      (yield* Effect.forEach(Arr.chunksOf(recordings, chunkSize), (chunk) =>
+        db
+          .select()
+          .from(songArtist)
+          .where(
+            inArray(
+              songArtist.recordingId,
+              chunk.map((row) => row.id),
+            ),
+          )
+          .orderBy(songArtist.recordingId, songArtist.position),
+      )).flat(),
+      (row) => row.recordingId,
+    );
     const changed = yield* Effect.forEach(recordings, (row) =>
       Effect.gen(function* () {
-        const creditId = yield* writeCredit(providers, row.own);
-        if (creditId === row.artistCreditId) return [];
+        const names = yield* creditNames(providers, row.own);
+        if (sameNames(existing[row.id] ?? [], names)) return [];
 
-        yield* db
-          .update(recording)
-          .set({ artistCreditId: creditId })
-          .where(eq(recording.id, row.id));
+        yield* db.delete(songArtist).where(eq(songArtist.recordingId, row.id));
+        if (names.length > 0) {
+          yield* db
+            .insert(songArtist)
+            .values(names.map((name) => ({ recordingId: row.id, ...name })));
+        }
         return [row.id];
       }),
     );
@@ -386,7 +400,7 @@ export const uncreditedRecordings = Effect.gen(function* () {
         eq(catalogAssertion.field, "artist_credit"),
         eq(catalogAssertion.retracted, false),
         isNotNull(catalogAssertion.value),
-        isNull(recording.artistCreditId),
+        sql`NOT EXISTS (SELECT 1 FROM ${songArtist} WHERE ${songArtist.recordingId} = ${recording.id})`,
       ),
     );
   return rows.map((row) => row.id);
