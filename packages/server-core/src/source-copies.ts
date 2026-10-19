@@ -17,7 +17,7 @@ import { isrcRecordingId } from "./ids.ts";
 import { MediaCache } from "./media-cache.ts";
 import { normalizeArtist, normalizeTitle } from "./normalize.ts";
 import { cacheProviderSources, cachedProviderSource, cachedSummary } from "./provider-cache.ts";
-import { Providers, usableProviders } from "./providers.ts";
+import { Providers, linkedProviders, usableProviders } from "./providers.ts";
 import { recordingGroup } from "./sets.ts";
 import { providerOrder } from "./source-preference.ts";
 import { versionWordsOf } from "./ranking.ts";
@@ -80,7 +80,7 @@ export const sourceCopies = (sourceId: string) =>
     const db = yield* Database;
     const principal = yield* CurrentPrincipal;
     const providers = yield* Providers;
-    const usable = yield* usableProviders(principal.userId);
+    const linked = yield* linkedProviders(principal.userId);
     const { group, cached } = yield* groupOf(sourceId);
 
     const playable = yield* playableSources(principal.userId, inArray(source.recordingId, group));
@@ -137,7 +137,7 @@ export const sourceCopies = (sourceId: string) =>
           }),
       ),
       ...Option.toArray(cached).flatMap((item) => {
-        const provider = usable.get(item.provider)?.provider;
+        const provider = linked.get(item.provider);
         if (provider === undefined) return [];
         return [
           new SourceCopy({

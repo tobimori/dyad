@@ -1,14 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
-
-/** A client replica, bound to the device that used it first */
-export const replica = sqliteTable("replica", {
-  replicaId: text("replica_id").primaryKey(),
-  userId: text("user_id").notNull(),
-  deviceId: text("device_id").notNull(),
-  // The last mutation that this server admitted or rejected
-  lastMutationId: integer("last_mutation_id").notNull().default(0),
-  createdAt: integer("created_at").notNull(),
-});
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
  * A paired server replica. The server that redeemed the pairing code connects: it has `url` and
@@ -34,14 +24,3 @@ export const serverPeer = sqliteTable("server_peer", {
   // Only an error tag, never a response or a URL with a credential
   error: text("error"),
 });
-
-/** Kept until the client pushes a later mutation, so that a retry after a lost response gets it */
-export const syncRejection = sqliteTable(
-  "sync_rejection",
-  {
-    replicaId: text("replica_id").notNull(),
-    mutationId: integer("mutation_id").notNull(),
-    reason: text("reason", { enum: ["forbidden", "not_found"] }).notNull(),
-  },
-  (table) => [primaryKey({ columns: [table.replicaId, table.mutationId] })],
-);

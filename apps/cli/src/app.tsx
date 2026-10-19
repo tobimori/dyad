@@ -2,7 +2,7 @@ import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
 import type {
   Downloads,
   ListenFeed,
-  Replica,
+  ServerConnection,
   ServerAtoms,
   SessionClient,
 } from "@dyad/client-runtime";
@@ -101,8 +101,8 @@ export function App(props: {
   readonly downloads: typeof Downloads.Service | null;
   readonly downloadQuality: typeof DownloadQuality.Type;
   readonly saveDownloadQuality: (quality: typeof DownloadQuality.Type) => void;
-  readonly playlists: (typeof Replica.Service)["playlists"];
-  readonly setProviderOrder: (typeof Replica.Service)["setProviderOrder"];
+  /** The replica of this device, for edits */
+  readonly replica: typeof ServerConnection.Service;
 }) {
   const renderer = useRenderer();
   const screen = useTerminalDimensions();
@@ -148,7 +148,7 @@ export function App(props: {
   const playlist = usePlaylist(props.atoms, route);
   const playlistActions = usePlaylistActions({
     atoms: props.atoms,
-    edits: props.playlists,
+    replica: props.replica,
     run: props.run,
   });
   const heardInSets = useHeardInSets({ atoms: props.atoms, player });
@@ -763,7 +763,9 @@ export function App(props: {
         dialog.push(
           <ProviderOrderDialog
             atoms={props.atoms}
-            setOrder={(order) => props.run(props.setProviderOrder(order))}
+            setOrder={(order) =>
+              props.run(props.replica.setProviderOrder({ providerRanking: order }))
+            }
           />,
         ),
     ],
@@ -870,7 +872,7 @@ export function App(props: {
   const removeEntry = (entryId: string) => {
     const neighbor = items[selectedIndex + 1] ?? items[selectedIndex - 1];
     if (neighbor !== undefined) routes.select(neighbor.key);
-    props.run(props.playlists.removeEntry(entryId));
+    props.run(props.replica.removePlaylistEntry({ entryId }));
   };
   const entryCommands: ReadonlyArray<readonly [Command, () => void]> =
     route instanceof PlaylistRoute && shownPlaylist !== undefined
@@ -878,11 +880,29 @@ export function App(props: {
           [commands.removeEntry, () => editEntry(removeEntry)],
           [
             commands.moveEntryUp,
-            () => editEntry((id) => props.run(props.playlists.moveEntry(route.id, id, -1))),
+            () =>
+              editEntry((id) =>
+                props.run(
+                  props.replica.movePlaylistEntry({
+                    playlistId: route.id,
+                    entryId: id,
+                    direction: -1,
+                  }),
+                ),
+              ),
           ],
           [
             commands.moveEntryDown,
-            () => editEntry((id) => props.run(props.playlists.moveEntry(route.id, id, 1))),
+            () =>
+              editEntry((id) =>
+                props.run(
+                  props.replica.movePlaylistEntry({
+                    playlistId: route.id,
+                    entryId: id,
+                    direction: 1,
+                  }),
+                ),
+              ),
           ],
           [
             commands.renamePlaylist,

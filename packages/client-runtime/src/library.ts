@@ -7,7 +7,6 @@ const unavailableLabels = {
   library_only: "Library only",
   not_in_catalog: "Not in region",
   account_required: "Needs account",
-  not_synced: "Not synced yet",
 };
 
 export const unavailableLabel = (reason: typeof LibraryEntryUnavailable.Type) =>

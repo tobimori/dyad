@@ -8,7 +8,7 @@ import {
   sourceVariant,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, RecordingId, SourceSummary } from "@dyad/domain";
+import { CurrentPrincipal, RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { UserId } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
@@ -24,7 +24,7 @@ import { boundRecordingId, musicbrainzArtistId, sourceId, variantId } from "./id
 import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
-import { Providers, usableProviders } from "./providers.ts";
+import { Providers, linkedProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import {
@@ -311,12 +311,12 @@ const canonical = alias(recording, "canonical");
 
 /**
  * The sources that `userId` can play, one row per source: a file on this replica, or a source of
- * a usable provider
+ * a linked provider
  */
 export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const providers = yield* usableProviders(userId);
+    const providers = yield* linkedProviders(userId);
 
     const query = db
       .select({
@@ -342,6 +342,17 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
           string | null
         >`coalesce(json_extract(${providerItem.data}, '$.artists[0].id'), json_extract(${providerItem.data}, '$.uploader.id'))`,
         providerAlbumId: sql<string | null>`json_extract(${providerItem.data}, '$.albumId')`,
+        // The provider cache is local to each replica; the catalog artist is on every replica
+        artistRoot: sql<string | null>`(
+          SELECT coalesce(a.merged_into_id, a.id)
+          FROM artist_credit_name AS n JOIN artist AS a ON a.id = n.artist_id
+          WHERE n.artist_credit_id = ${canonical.artistCreditId} AND n.position = 0
+            AND EXISTS (
+              SELECT 1 FROM artist AS m
+              WHERE coalesce(m.merged_into_id, m.id) = coalesce(a.merged_into_id, a.id)
+                AND m.origin = 'provider'
+            )
+        )`,
         video: sql<number | null>`json_extract(${providerItem.data}, '$.video')`,
       })
       .from(source)
@@ -363,7 +374,7 @@ export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
         row.tags === null
           ? null
           : Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({})),
-      providerName: providers.get(row.source.provider)?.provider.name ?? null,
+      providerName: providers.get(row.source.provider)?.name ?? null,
     }));
   });
 
@@ -383,12 +394,14 @@ export const sourceSummary = (row: {
   readonly albumKey: string | null;
   readonly providerArtistId: string | null;
   readonly providerAlbumId: string | null;
+  readonly artistRoot: string | null;
   readonly providerName: string | null;
   readonly video: number | null;
 }) => {
+  const catalogArtist = row.artistRoot === null ? null : catalogArtistRef(row.artistRoot);
   const providerArtist =
     row.providerArtistId === null
-      ? null
+      ? catalogArtist
       : providerArtistRef(row.source.provider, row.providerArtistId);
   const providerAlbum =
     row.providerAlbumId === null

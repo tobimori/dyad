@@ -33,7 +33,7 @@ import { albumTypeOf, editionBase, tagReleaseDate, tagReleaseTypes } from "./edi
 import { albumArtistOf } from "./library.ts";
 import { normV1, normalizeArtist } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
-import { Providers, usableProviders } from "./providers.ts";
+import { Providers, linkedProviders, usableProviders } from "./providers.ts";
 import {
   libraryAlbumKeys,
   libraryArtistKey,
@@ -173,7 +173,7 @@ class LibrarySource extends Data.Class<{
 const librarySources = (userId: UserId) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const providers = yield* usableProviders(userId);
+    const providers = yield* linkedProviders(userId);
 
     const rows = yield* db
       .select({
@@ -199,7 +199,7 @@ const librarySources = (userId: UserId) =>
           Effect.orDie,
         );
         const item = yield* toCachedSource(row.provider, decoded);
-        const name = providers.get(row.provider)?.provider.name ?? row.provider;
+        const name = providers.get(row.provider)?.name ?? row.provider;
         return new LibrarySource({ summary: cachedSummary(item, name), source: decoded });
       }),
     );

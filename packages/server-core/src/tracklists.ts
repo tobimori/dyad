@@ -793,7 +793,7 @@ export const hideTracklist = (sourceId: string, hidden: boolean) =>
 export const tracklistsLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const jobs = yield* Jobs;
-    yield* jobs.register(readKind, ReadPayload, runRead);
-    yield* jobs.register(tracklistMatchKind, MatchPayload, runMatch);
+    yield* jobs.register(readKind, ReadPayload, runRead, { homeOnly: true });
+    yield* jobs.register(tracklistMatchKind, MatchPayload, runMatch, { homeOnly: true });
   }),
 );

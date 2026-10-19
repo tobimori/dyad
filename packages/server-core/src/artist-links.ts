@@ -173,8 +173,11 @@ const readLinks = (mbid: string) =>
 export const artistLinksLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const jobs = yield* Jobs;
-    yield* jobs.register(artistLinksKind, LinksPayload, ({ mbid }) =>
-      mbid === null ? sweep : readLinks(mbid),
+    yield* jobs.register(
+      artistLinksKind,
+      LinksPayload,
+      ({ mbid }) => (mbid === null ? sweep : readLinks(mbid)),
+      { homeOnly: true },
     );
     yield* jobs.enqueue(artistLinksKind, sweepKey, { mbid: null }, { priority });
   }),

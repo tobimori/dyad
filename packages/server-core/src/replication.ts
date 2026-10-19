@@ -24,6 +24,7 @@ import { projectRecordings } from "./assertions.ts";
 import { isrcRecordingId } from "./ids.ts";
 import { deriveArtists } from "./artist-matching.ts";
 import { resolveRoots } from "./matching.ts";
+import { pushIfHeld } from "./playlist-push.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { EntryText, deriveEntryMatches, deriveTracklists } from "./tracklists.ts";
 
@@ -113,7 +114,8 @@ export const readChanges = (cursor: PeerCursor, limit: number, skipped: Readonly
     };
   });
 
-const readPeerRow = (table: PeerRow["table"], id: string) =>
+/** The row of a replicated table, as peers exchange it */
+export const readRow = (table: PeerRow["table"], id: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const peer = peerTables[table];
@@ -122,7 +124,8 @@ const readPeerRow = (table: PeerRow["table"], id: string) =>
     return yield* Schema.decodeUnknownEffect(PeerRow)({ ...row, table }).pipe(Effect.orDie);
   });
 
-const writePeerRow = (row: PeerRow, changeSeq: number) =>
+/** Writes a replicated row with the `change_seq` of the transaction */
+export const writeRow = (row: PeerRow, changeSeq: number) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const peer = peerTables[row.table];
@@ -234,11 +237,31 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
     // A changed source or variant changes the group of its recording
     yield* touchGroups(boundIds);
 
-    const tracklists = rows.flatMap((row) =>
-      row.table === "catalog_assertion" && row.entityType === "source" && row.field === "tracklist"
-        ? [row.entityId]
-        : [],
-    );
+    // A page can bring the tracklist of a source before the source
+    const arrived = rows.flatMap((row) => (row.table === "source" ? [row.id] : []));
+    const waiting =
+      arrived.length === 0
+        ? []
+        : yield* db
+            .selectDistinct({ id: catalogAssertion.entityId })
+            .from(catalogAssertion)
+            .where(
+              and(
+                eq(catalogAssertion.entityType, "source"),
+                eq(catalogAssertion.field, "tracklist"),
+                inArray(catalogAssertion.entityId, arrived),
+              ),
+            );
+    const tracklists = [
+      ...rows.flatMap((row) =>
+        row.table === "catalog_assertion" &&
+        row.entityType === "source" &&
+        row.field === "tracklist"
+          ? [row.entityId]
+          : [],
+      ),
+      ...waiting.map((row) => row.id),
+    ];
     if (tracklists.length > 0) yield* deriveTracklists(tracklists);
     yield* deriveArtists(rows);
     yield* deriveEntryMatches(
@@ -266,16 +289,23 @@ export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
     for (const row of rows) {
       if (row.table !== "play_event" && row.hlc !== "") yield* clock.receive(row.hlc);
 
-      const current = yield* readPeerRow(row.table, row.id);
+      const current = yield* readRow(row.table, row.id);
       const merged = mergePeerRow(current, row);
       if (Option.isNone(merged)) continue;
 
       const same = Equal.equals(merged.value, row);
-      yield* writePeerRow(merged.value, yield* same ? adoptedSeq : mergedSeq);
+      yield* writeRow(merged.value, yield* same ? adoptedSeq : mergedSeq);
       changed.push(merged.value);
       if (same) adopted.push(row);
     }
 
     yield* deriveCatalog(changed.filter(isCatalogRow));
+    const playlistIds = new Set(
+      changed.flatMap((row) => {
+        if (row.table === "playlist") return [row.id];
+        return row.table === "playlist_entry" ? [row.playlistId] : [];
+      }),
+    );
+    yield* Effect.forEach(playlistIds, pushIfHeld, { discard: true });
     return adopted.length > 0 ? yield* adoptedSeq : undefined;
   });

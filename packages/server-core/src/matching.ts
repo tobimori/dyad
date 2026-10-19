@@ -600,6 +600,6 @@ const runLookup = ({ isrc }: typeof LookupPayload.Type) =>
 export const matchingLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const jobs = yield* Jobs;
-    yield* jobs.register(lookupKind, LookupPayload, runLookup);
+    yield* jobs.register(lookupKind, LookupPayload, runLookup, { homeOnly: true });
   }),
 );

@@ -2,7 +2,7 @@ import { credential, providerAccount } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import type { UserId } from "@dyad/domain";
 import type { Credentials, PopularityHit, Provider, ProviderError } from "@dyad/plugin";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Redacted } from "effect";
 
 /** Providers that plugins add, by provider ID */
@@ -23,6 +23,27 @@ export const popularitiesLayer = Layer.sync(Popularities, () => new Map());
 /** Credentials as the plugins get them, from the values that `linkAccount` stores */
 export const toCredentials = (values: Readonly<Record<string, string>>) =>
   new Map(Object.entries(values).map(([name, value]) => [name, Redacted.make(value)]));
+
+/**
+ * The providers whose copies the user sees: they need no account, or an account of them is linked
+ * on some replica. Playing a copy can still need the replica with the credential.
+ */
+export const linkedProviders = (userId: UserId) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const providers = yield* Providers;
+    const accounts = yield* db
+      .select({ provider: providerAccount.provider })
+      .from(providerAccount)
+      .where(and(eq(providerAccount.userId, userId), eq(providerAccount.deleted, false)));
+    const linked = new Set(accounts.map((account) => account.provider));
+    return new Map(
+      [...providers].filter(
+        ([id, provider]) =>
+          provider.account === undefined || linked.has(id) || provider.account.optional === true,
+      ),
+    );
+  });
 
 /** A provider that one user can search and play, with the user's credentials */
 class UsableProvider extends Data.Class<{

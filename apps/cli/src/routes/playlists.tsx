@@ -36,15 +36,11 @@ export const playlists = new Section({
       [result, names],
     );
 
-    const syncing = status.progress?.playlists ?? false;
     const empty = AsyncResult.match(result, {
       onInitial: () => "Loading the playlists",
       onFailure: () => "Cannot load the playlists. Press r to try again.",
       onSuccess: () =>
-        syncing
-          ? "Syncing the playlists…"
-          : (status.importing ??
-            "No playlists. Press c to make one, or link an account with dyad link."),
+        status.importing ?? "No playlists. Press c to make one, or link an account with dyad link.",
     });
 
     const rename = (selected: number) => {
@@ -69,7 +65,7 @@ export const playlists = new Section({
             title={title}
             detail={items.length === 0 ? "" : counted(items.length, "playlist")}
           />
-          <LibraryNotices notices={status.notices} syncing={syncing} />
+          <LibraryNotices notices={status.notices} />
           <RowList
             rows={items}
             selected={items[list.selected]?.key ?? null}

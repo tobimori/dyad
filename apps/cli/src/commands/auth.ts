@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 
-import { Replica, ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
+import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
 import type { DeviceSession } from "@dyad/domain";
 import {
   AccountLinkFailed,
@@ -9,22 +9,9 @@ import {
   HttpUrl,
   Unauthorized,
 } from "@dyad/domain";
-import {
-  Clock,
-  Config,
-  Console,
-  Context,
-  Data,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Redacted,
-  Schema,
-} from "effect";
+import { Clock, Config, Console, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
 import { Argument, Command, Prompt } from "effect/cli";
 
-import { cliReplicaLayer, replicaFile } from "../context/replica.ts";
 import { CookieImportError } from "./cookie-import.ts";
 import { deleteDeviceToken, loadDeviceToken, saveDeviceToken } from "./devices.ts";
 
@@ -175,39 +162,8 @@ const removeDeviceCommand = Command.make(
     }).pipe(Effect.provide(deviceConnection), reportFailures),
 ).pipe(Command.withDescription("Sign out another device"));
 
-// Pushes the mutation queue first. The plays that the server still does not have are lost with the
-// replica file, so the user confirms.
-const removeReplica = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const origin = yield* serverUrl;
-  const token = yield* deviceToken;
-
-  const pending = yield* Effect.scoped(
-    Effect.gen(function* () {
-      const replica = Context.get(yield* Layer.build(cliReplicaLayer(origin, token)), Replica);
-      yield* replica.push.pipe(Effect.ignore);
-      return yield* replica.pending;
-    }),
-  );
-  if (pending > 0) {
-    const lose = yield* Prompt.Confirm({
-      message:
-        pending === 1
-          ? "1 play has not reached the server. Sign out and lose it?"
-          : `${pending} plays have not reached the server. Sign out and lose them?`,
-    });
-    if (!lose) return false;
-  }
-
-  const file = yield* replicaFile(origin, token);
-  for (const suffix of ["", "-wal", "-shm"]) yield* fs.remove(`${file}${suffix}`, { force: true });
-  return true;
-});
-
 const logoutCommand = Command.make("logout", {}, () =>
   Effect.gen(function* () {
-    if (!(yield* removeReplica)) return yield* Console.log("Still signed in");
-
     const connection = yield* ServerConnection;
     // A device that the server already removed only deletes its local token
     const devices = yield* connection

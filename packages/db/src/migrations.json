@@ -418,5 +418,12 @@
       "\n-- A new `change_seq`, so that paired replicas pull the existing accounts\nUPDATE `replica_identity` SET `change_seq` = `change_seq` + 1 WHERE EXISTS (SELECT 1 FROM `provider_account`);",
       "\nUPDATE `provider_account` SET\n  `hlc` = printf('%015d-0000-%s', `created_at`, (SELECT `replica_id` FROM `replica_identity`)),\n  `change_seq` = (SELECT `change_seq` FROM `replica_identity`);\n"
     ]
+  },
+  {
+    "name": "20261019105728_drop_client_replicas",
+    "folderMillis": 1792407448000,
+    "hash": "5d20c773461c8f177d45e2032c9b2b084209594f4ddeec6fbe27a0956665c48e",
+    "bps": true,
+    "sql": ["DROP TABLE `replica`;", "\nDROP TABLE `sync_rejection`;"]
   }
 ]

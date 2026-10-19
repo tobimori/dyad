@@ -11,12 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
     "@dyad/plugin": "workspace:*",
-    "@dyad/sync": "workspace:*",
-    "drizzle-orm": "catalog:",
-    "effect": "catalog:",
-    "fractional-indexing": "catalog:"
+    "effect": "catalog:"
   }
 }

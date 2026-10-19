@@ -1,1 +1,0 @@
-ALTER TABLE `playlist` ADD `link_state` text;

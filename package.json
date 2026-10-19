@@ -15,7 +15,6 @@
     "check": "vp fmt --check && vp lint apps packages plugins scripts && vp exec tsc --noEmit && vp run -r typecheck",
     "format": "vp fmt",
     "db:generate": "vp run @dyad/db#generate",
-    "db:generate-client": "vp run @dyad/db#generate-client",
     "sandbox": "node --conditions=development scripts/sandbox.ts",
     "rpc": "node --conditions=development scripts/rpc.ts",
     "start": "vp run @dyad/server#start",

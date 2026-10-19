@@ -5,7 +5,6 @@ import type {
   HybridLogicalClock,
   PlaylistLink,
   PlaylistLinkState,
-  SyncChange,
   SyncRow,
 } from "@dyad/domain";
 import { Match, Option } from "effect";
@@ -98,11 +97,11 @@ export const mergeRow = (current: SyncRow | undefined, incoming: SyncRow) =>
 export const patchRow = (
   current: PlaylistRow | PlaylistEntryRow,
   patch: {
-    readonly name?: string;
-    readonly link?: PlaylistLink | null;
-    readonly linkState?: PlaylistLinkState | null;
-    readonly position?: string;
-    readonly deleted?: boolean;
+    readonly name?: string | undefined;
+    readonly link?: PlaylistLink | null | undefined;
+    readonly linkState?: PlaylistLinkState | null | undefined;
+    readonly position?: string | undefined;
+    readonly deleted?: boolean | undefined;
   },
   hlc: HybridLogicalClock,
 ) => {
@@ -139,42 +138,6 @@ export const patchRow = (
         }),
       );
 };
-
-/** The row that a change writes */
-export const changeTarget = (change: SyncChange) =>
-  Match.value(change).pipe(
-    Match.discriminatorsExhaustive("kind")({
-      "library_item.set": (set) => ({ table: set.row.table, id: set.row.id }),
-      "rating.set": (set) => ({ table: set.row.table, id: set.row.id }),
-      "play_event.append": (append) => ({ table: append.row.table, id: append.row.id }),
-      "playlist.create": (create) => ({ table: create.row.table, id: create.row.id }),
-      "playlist_entry.add": (add) => ({ table: add.row.table, id: add.row.id }),
-      "playlist.patch": (patch) => ({ table: "playlist" as const, id: patch.id }),
-      "playlist_entry.patch": (patch) => ({ table: "playlist_entry" as const, id: patch.id }),
-      "source_preference.set": (set) => ({ table: set.row.table, id: set.row.id }),
-    }),
-  );
-
-/** The row after `change`. `None`: nothing changes, also when a patch finds no row. */
-export const applyChange = (current: SyncRow | undefined, change: SyncChange) =>
-  Match.value(change).pipe(
-    Match.discriminatorsExhaustive("kind")({
-      "library_item.set": (set) => mergeRow(current, set.row),
-      "rating.set": (set) => mergeRow(current, set.row),
-      "play_event.append": (append) => mergeRow(current, append.row),
-      "playlist.create": (create) => mergeRow(current, create.row),
-      "playlist_entry.add": (add) => mergeRow(current, add.row),
-      "playlist.patch": (patch) =>
-        current?.table === "playlist"
-          ? patchRow(current, patch, patch.hlc)
-          : Option.none<SyncRow>(),
-      "playlist_entry.patch": (patch) =>
-        current?.table === "playlist_entry"
-          ? patchRow(current, patch, patch.hlc)
-          : Option.none<SyncRow>(),
-      "source_preference.set": (set) => mergeRow(current, set.row),
-    }),
-  );
 
 const parseVersion = (revision: string | null) => Number(revision?.replace("parse:v", "") ?? 0);
 

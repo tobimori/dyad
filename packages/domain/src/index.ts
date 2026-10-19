@@ -17,14 +17,11 @@ import {
   PeerRedeemRequest,
   PlaylistLink,
   PlaylistLinkState,
-  ReplicaMismatch,
+  PlaylistName,
+  ProviderRanking,
   ServerPairingFailed,
   ServerPeer,
   SyncHint,
-  SyncPullRequest,
-  SyncPullResponse,
-  SyncPushRequest,
-  SyncPushResponse,
   UpgradeRequired,
 } from "./sync.ts";
 
@@ -232,13 +229,12 @@ export const RadioStart = Schema.TaggedUnion({
  * Why the user cannot play a library entry. `library_only`: the song is only in the user's
  * provider library, for example an upload. `not_in_catalog`: the provider's catalog for the
  * user's country does not have the song. `account_required`: the user has no linked account for
- * its sources. `not_synced`: a client replica does not have the song's catalog rows yet.
+ * its sources.
  */
 export const LibraryEntryUnavailable = Schema.Literals([
   "library_only",
   "not_in_catalog",
   "account_required",
-  "not_synced",
 ]);
 
 export class LibraryEntry extends Schema.Class<LibraryEntry>("LibraryEntry")({
@@ -301,6 +297,33 @@ export class SourceSegment extends Schema.Class<SourceSegment>("SourceSegment")(
     Schema.withConstructorDefault(Effect.succeed(null)),
   ),
 }) {}
+
+/** A DJ set with a tracklist that the user played or saved */
+export class SetSummary extends Schema.Class<SetSummary>("SetSummary")({
+  source: SourceSummary,
+  tracks: Schema.Int,
+  /** The matched recordings in tracklist order, each once */
+  identified: Schema.Array(RecordingId),
+  lastPlayedAt: Schema.NullOr(Schema.Number),
+}) {}
+
+/** A provider that the user can put in the provider order. `local` is for files. */
+export class ProviderChoice extends Schema.Class<ProviderChoice>("ProviderChoice")({
+  provider: Schema.String,
+  name: Schema.String,
+}) {}
+
+export class ProviderChoices extends Schema.Class<ProviderChoices>("ProviderChoices")({
+  /** `false` until the user sets an order */
+  custom: Schema.Boolean,
+  providers: Schema.Array(ProviderChoice),
+}) {}
+
+/** A recording to add to a playlist. `sourceId` lets a search result enter the catalog. */
+export const PlaylistEntryInput = Schema.Struct({
+  recordingId: RecordingId,
+  sourceId: Schema.NullOr(Schema.String),
+});
 
 /** A DJ set whose tracklist has a recording */
 export class HeardInSet extends Schema.Class<HeardInSet>("HeardInSet")({
@@ -911,18 +934,60 @@ const UserRpc = RpcGroup.make(
     },
   }),
   // The changed rows after the cursors of the client replica. Pull again while `more` is true.
-  Rpc.make("syncPull", {
-    payload: SyncPullRequest,
-    success: SyncPullResponse,
-    error: Schema.Union([UpgradeRequired, ReplicaMismatch]),
+  Rpc.make("listLibrary", { success: Schema.Array(LibraryEntry) }),
+  Rpc.make("listPlaylists", { success: Schema.Array(PlaylistSummary) }),
+  // Newest play first, one entry per source
+  Rpc.make("listRecentPlays", { success: Schema.Array(SourceSummary) }),
+  // The last played first. Copies of one recording on several providers give one set.
+  Rpc.make("listSets", { success: Schema.Array(SetSummary) }),
+  // The order first, then local files, then the other providers of the known sources by name
+  Rpc.make("listProviderChoices", { success: ProviderChoices }),
+  Rpc.make("setProviderOrder", { payload: { providerRanking: ProviderRanking } }),
+  // With `twoWayProvider`, the replica with its account creates a playlist of that provider
+  Rpc.make("createPlaylist", {
+    payload: {
+      name: PlaylistName,
+      entries: Schema.Array(PlaylistEntryInput),
+      twoWayProvider: Schema.NullOr(Schema.String),
+    },
+    success: Schema.String,
   }),
-  Rpc.make("syncPush", {
-    payload: SyncPushRequest,
-    success: SyncPushResponse,
-    error: Schema.Union([UpgradeRequired, ReplicaMismatch]),
+  // Adds at the end. A playlist can have a recording more than once.
+  Rpc.make("addPlaylistEntries", {
+    payload: { playlistId: Schema.String, entries: Schema.Array(PlaylistEntryInput) },
+    error: PlaylistNotFound,
   }),
-  // Subscribe, then pull after each hint. The first hint comes when the subscription is ready.
-  Rpc.make("syncWatch", { success: SyncHint, stream: true }),
+  // `unlink` keeps the playlist and stops its sync with the provider
+  Rpc.make("editPlaylist", {
+    payload: {
+      playlistId: Schema.String,
+      name: Schema.optionalKey(PlaylistName),
+      unlink: Schema.optionalKey(Schema.Literal(true)),
+      deleted: Schema.optionalKey(Schema.Literal(true)),
+    },
+    error: PlaylistNotFound,
+  }),
+  Rpc.make("removePlaylistEntry", { payload: { entryId: Schema.String } }),
+  // One place up or down
+  Rpc.make("movePlaylistEntry", {
+    payload: {
+      playlistId: Schema.String,
+      entryId: Schema.String,
+      direction: Schema.Literals([1, -1]),
+    },
+  }),
+  // A play of this device while it played without its room
+  Rpc.make("appendPlay", {
+    payload: {
+      sourceId: Schema.String,
+      context: PlayContext,
+      startedAt: Schema.Number,
+      playedMs: Schema.Number,
+      completed: Schema.Boolean,
+    },
+  }),
+  // A hint after the subscription, then at most one per 250 ms after a commit that replicates
+  Rpc.make("watchChanges", { success: SyncHint, stream: true }),
   // A file that this device keeps, in one of the `capabilities` formats. The server records it
   // for the device until a check-in leaves it out.
   Rpc.make("prepareDownload", {

@@ -340,27 +340,15 @@ importers:
 
   packages/client-runtime:
     dependencies:
-      '@dyad/db':
-        specifier: workspace:*
-        version: link:../db
       '@dyad/domain':
         specifier: workspace:*
         version: link:../domain
       '@dyad/plugin':
         specifier: workspace:*
         version: link:../plugin
-      '@dyad/sync':
-        specifier: workspace:*
-        version: link:../sync
-      drizzle-orm:
-        specifier: 'catalog:'
-        version: 1.0.0-rc.5-5935859(patch_hash=bfff9df9913bbbf1647bc8a85e43bf69b2316c928c5eaa85c242656e9f6a5a56)(@effect/sql-sqlite-node@4.0.5(effect@4.0.5))(effect@4.0.5)(zod@4.6.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.5
-      fractional-indexing:
-        specifier: 'catalog:'
-        version: 3.2.0
 
   packages/db:
     dependencies:
@@ -386,6 +374,9 @@ importers:
 
   packages/host:
     dependencies:
+      '@dyad/client-runtime':
+        specifier: workspace:*
+        version: link:../client-runtime
       '@dyad/db':
         specifier: workspace:*
         version: link:../db
@@ -434,6 +425,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.2.1)
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 1.0.0-rc.5-5935859(patch_hash=bfff9df9913bbbf1647bc8a85e43bf69b2316c928c5eaa85c242656e9f6a5a56)(@effect/sql-sqlite-node@4.0.5(effect@4.0.5))(effect@4.0.5)(zod@4.6.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.5

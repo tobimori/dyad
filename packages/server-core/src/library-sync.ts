@@ -38,7 +38,7 @@ import { cacheProviderSources } from "./provider-cache.ts";
 import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
 import { touchGroups } from "./sync-counter.ts";
-import { readRow } from "./sync.ts";
+import { readRow } from "./replication.ts";
 import {
   addLinkedPlaylist,
   mergeRemoteEntries,

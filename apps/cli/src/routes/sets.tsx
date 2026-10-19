@@ -1,5 +1,5 @@
 import { titleOf } from "@dyad/client-runtime";
-import type { LocalSet } from "@dyad/client-runtime";
+import type { SetSummary } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
@@ -9,7 +9,7 @@ import { Section, SectionView } from "../context/routes.ts";
 
 const title = "Sets";
 
-const tracklistLine = (set: LocalSet) => `${set.identified.length}/${set.tracks} identified`;
+const tracklistLine = (set: SetSummary) => `${set.identified.length}/${set.tracks} identified`;
 
 export const sets = new Section({
   id: "sets",

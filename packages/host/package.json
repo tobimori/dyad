@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dyad/client-runtime": "workspace:*",
     "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
     "@dyad/plugin": "workspace:*",
@@ -28,6 +29,7 @@
     "@dyad/plugin-youtube": "workspace:*",
     "@dyad/server-core": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "drizzle-orm": "catalog:",
     "effect": "catalog:",
     "env-paths": "catalog:"
   }

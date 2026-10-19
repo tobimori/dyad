@@ -25,7 +25,7 @@ import { uuidV5 } from "./ids.ts";
 import { providerOrder } from "./source-preference.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
-import { readRow, writeRow } from "./sync.ts";
+import { readRow, writeRow } from "./replication.ts";
 
 /**
  * The server's own writes of library items and playlists go through this module, so that each
@@ -115,10 +115,12 @@ export const addLinkedPlaylist = (
 /** Sets the fields of a playlist with a new HLC. Returns whether the row changed. */
 export const patchPlaylist = (
   id: string,
+  // An undefined field stays
   fields: {
-    readonly name?: string;
-    readonly link?: PlaylistLink | null;
-    readonly linkState?: PlaylistLinkState | null;
+    readonly name?: string | undefined;
+    readonly link?: PlaylistLink | null | undefined;
+    readonly linkState?: PlaylistLinkState | null | undefined;
+    readonly deleted?: boolean | undefined;
   },
 ) =>
   Effect.gen(function* () {
@@ -381,3 +383,24 @@ export const listPlaylistEntries = (playlistId: string) =>
       owned.link?.direction === "two-way" ? owned.link.provider : null,
     );
   });
+
+/** The saved songs */
+export const listLibrary = Effect.gen(function* () {
+  const db = yield* Database;
+  const principal = yield* CurrentPrincipal;
+  const items = yield* db
+    .select({ entityId: libraryItem.entityId, addedAt: libraryItem.addedAt })
+    .from(libraryItem)
+    .where(
+      and(
+        eq(libraryItem.userId, principal.userId),
+        eq(libraryItem.deleted, false),
+        eq(libraryItem.entityType, "recording"),
+      ),
+    );
+  const view = yield* loadLibraryView(
+    principal.userId,
+    items.map((item) => item.entityId),
+  );
+  return view.libraryEntries(items);
+});

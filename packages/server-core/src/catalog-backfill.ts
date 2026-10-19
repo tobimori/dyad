@@ -152,7 +152,7 @@ export const catalogLayer = Layer.mergeAll(
       const db = yield* Database;
       const jobs = yield* Jobs;
 
-      yield* jobs.register(backfillKind, BackfillPayload, runBackfill);
+      yield* jobs.register(backfillKind, BackfillPayload, runBackfill, { homeOnly: true });
 
       const [waiting] = yield* db
         .select({ key: job.key })

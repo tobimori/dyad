@@ -4,11 +4,11 @@ import { nodeDatabaseLayer } from "@dyad/db/node";
 import { HttpUrl, UserId } from "@dyad/domain";
 import { ServerConfig, replicaLayer } from "@dyad/host";
 import { createDevice, joinWorkspace } from "@dyad/server-core";
-import { Config, Console, Crypto, Effect, FileSystem, Layer, Path } from "effect";
+import { Console, Crypto, Effect, FileSystem, Layer, Path } from "effect";
 import { Argument, Command } from "effect/cli";
 import { Hex } from "effect/encoding";
-import envPaths from "env-paths";
 
+import { localReplica } from "../context/replica.ts";
 import { fail } from "./auth.ts";
 import { saveDeviceToken } from "./devices.ts";
 
@@ -22,17 +22,6 @@ const failures = {
   not_admin: "Only an admin can pair",
   not_found: "The other replica does not know this device",
 };
-
-/** The replica of this device: its database and the local port of its server */
-export const localReplica = Effect.gen(function* () {
-  const path = yield* Path.Path;
-  const port = yield* Config.Port("DYAD_REPLICA_PORT").pipe(Config.withDefault(4319));
-  return {
-    dataDirectory: path.join(envPaths("dyad", { suffix: "" }).data, "replica"),
-    port,
-    origin: `http://127.0.0.1:${port}`,
-  };
-});
 
 const join = Command.make(
   "join",
@@ -82,6 +71,7 @@ const run = Command.make("run", {}, () =>
             allowedOrigins: [],
             dataDirectory: replica.dataDirectory,
             mediaCacheBytes: 2 * 1024 * 1024 * 1024,
+            device: true,
           }),
         ),
       ),

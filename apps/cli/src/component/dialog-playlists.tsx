@@ -1,5 +1,5 @@
 import { providerName } from "@dyad/client-runtime";
-import type { Replica, ServerAtoms } from "@dyad/client-runtime";
+import type { ServerAtoms, ServerConnection } from "@dyad/client-runtime";
 import { PlaylistName } from "@dyad/domain";
 import type { PlaylistSummary, RecordingId } from "@dyad/domain";
 import { useAtomValue } from "@effect/atom-react";
@@ -167,7 +167,8 @@ function PickerDialog(props: {
 /** The dialogs of the playlist edits, as actions */
 export function usePlaylistActions(props: {
   readonly atoms: ServerAtoms;
-  readonly edits: (typeof Replica.Service)["playlists"];
+  /** The replica of this device */
+  readonly replica: typeof ServerConnection.Service;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
 }) {
@@ -176,7 +177,7 @@ export function usePlaylistActions(props: {
   const { names } = useLibraryStatus(props.atoms);
   const providersResult = useAtomValue(props.atoms.playlistProviders);
   const providers = AsyncResult.isSuccess(providersResult) ? providersResult.value : [];
-  const edits = props.edits;
+  const replica = props.replica;
 
   const create = (
     entries: ReadonlyArray<{ readonly recordingId: RecordingId; readonly sourceId: string | null }>,
@@ -184,15 +185,14 @@ export function usePlaylistActions(props: {
   ) => {
     const save = (name: string, provider: string | null) =>
       props.run(
-        edits.create(name, entries, provider).pipe(
+        replica.createPlaylist({ name, entries, twoWayProvider: provider }).pipe(
           Effect.match({
             onSuccess: () =>
               toast(
                 "notice",
                 entries.length === 0 ? `Created ${name}` : `Added to the new playlist ${name}`,
               ),
-            onFailure: () =>
-              toast("error", "Connect to the server once before you create a playlist"),
+            onFailure: () => toast("error", "Cannot create the playlist"),
           }),
         ),
       );
@@ -240,7 +240,7 @@ export function usePlaylistActions(props: {
               atoms={props.atoms}
               onNew={() => create(entries)}
               onChoose={(playlist) => {
-                props.run(edits.add(playlist.id, entries));
+                props.run(replica.addPlaylistEntries({ playlistId: playlist.id, entries }));
                 toast("notice", `Added to ${playlist.name}`);
               }}
             />,
@@ -258,7 +258,9 @@ export function usePlaylistActions(props: {
               <NameDialog
                 title="Rename the playlist"
                 initial={playlist.name}
-                onSubmit={(name) => props.run(edits.rename(playlist.id, name))}
+                onSubmit={(name) =>
+                  props.run(replica.editPlaylist({ playlistId: playlist.id, name }))
+                }
               />,
             ),
         }),
@@ -273,7 +275,9 @@ export function usePlaylistActions(props: {
                     <ConfirmDialog
                       title={`Stop the sync with ${provider}?`}
                       confirm="Unlink, keep the playlist"
-                      onConfirm={() => props.run(edits.unlink(playlist.id))}
+                      onConfirm={() =>
+                        props.run(replica.editPlaylist({ playlistId: playlist.id, unlink: true }))
+                      }
                     />,
                   ),
               }),
@@ -288,7 +292,7 @@ export function usePlaylistActions(props: {
                 confirm="Delete"
                 onConfirm={() => {
                   onDelete();
-                  props.run(edits.delete(playlist.id));
+                  props.run(replica.editPlaylist({ playlistId: playlist.id, deleted: true }));
                   toast("notice", `Deleted ${playlist.name}`);
                 }}
               />,

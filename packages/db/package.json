@@ -19,14 +19,12 @@
       "types": "./src/node.ts",
       "development": "./src/node.ts",
       "default": "./dist/node.js"
-    },
-    "./client": "./src/client/index.ts"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "generate": "node scripts/generate-migration.ts server",
-    "generate-client": "node scripts/generate-migration.ts client"
+    "generate": "node scripts/generate-migration.ts"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "catalog:",

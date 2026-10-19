@@ -3,7 +3,7 @@ import "./sea-assets.ts";
 
 import {
   Downloads,
-  Replica,
+  ServerConnection,
   SessionClient,
   connectTimed,
   downloadsLayer,
@@ -29,6 +29,7 @@ import { accountCommands } from "./commands/accounts.ts";
 import {
   authCommands,
   deviceToken,
+  fail,
   reportFailures,
   serverUrl as serverUrlConfig,
 } from "./commands/auth.ts";
@@ -37,7 +38,8 @@ import { replicaCommand } from "./commands/replica.ts";
 import { serverCommand } from "./commands/server.ts";
 import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
-import { cliReplicaLayer } from "./context/replica.ts";
+import { loadDeviceToken } from "./commands/devices.ts";
+import { startLocalReplica } from "./context/replica.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
 import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
@@ -51,6 +53,8 @@ import { ToastProvider } from "./ui/toast.tsx";
 
 class RendererError extends Data.TaggedError("RendererError")<{ readonly cause: unknown }> {}
 
+class NotJoined extends Data.TaggedError("NotJoined")<{}> {}
+
 /** With `controller`, this device opens no audio and only controls the session */
 const player = (controller: boolean) =>
   Effect.gen(function* () {
@@ -60,24 +64,24 @@ const player = (controller: boolean) =>
     yield* processErrorLogging(logServices);
     const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
-    // One connection for the session, the replica and the atoms
+    // Views and edits use the replica of this device. Playback stays with the session on the
+    // home server until rooms run on each replica.
+    const local = yield* startLocalReplica.pipe(Effect.provide(FetchHttpClient.layer));
+    const localToken = yield* loadDeviceToken(local.origin);
+    if (Option.isNone(localToken)) return yield* new NotJoined();
+    const replicaConnection = yield* Layer.build(
+      serverConnectionLayer(local.origin, localToken).pipe(Layer.provide(logging)),
+    );
+    const replica = Context.get(replicaConnection, ServerConnection);
+
     const serverUrl = yield* serverUrlConfig;
     const token = yield* deviceToken;
     const connection = yield* Layer.build(
       serverConnectionLayer(serverUrl, Option.some(token)).pipe(Layer.provide(logging)),
     );
-    const replicaServices = yield* Layer.build(
-      cliReplicaLayer(serverUrl, token).pipe(
-        Layer.provide(Layer.succeedContext(connection)),
-        Layer.provide(logging),
-      ),
-    );
-    const replica = Context.get(replicaServices, Replica);
     const recordPlay = (play: Parameters<typeof replica.appendPlay>[0]) =>
       replica.appendPlay(play).pipe(
-        Effect.catchTag("ReplicaUnbound", () =>
-          Effect.logWarning("Cannot record a play before the first connection to the server"),
-        ),
+        Effect.catchCause((cause) => Effect.logWarning("Cannot record a play", cause)),
         Effect.provideContext(logServices),
       );
 
@@ -167,7 +171,7 @@ const player = (controller: boolean) =>
     );
     const session = Context.get(sessionServices, SessionClient);
 
-    const atoms = serverAtoms(Context.merge(connection, replicaServices), logging);
+    const atoms = serverAtoms(replicaConnection, logging);
     // Plugin commands read the tracklist that the app shows, so that media keys act like its keys
     const registry = yield* Effect.acquireRelease(
       Effect.sync(() => AtomRegistry.make({ scheduleTask })),
@@ -232,8 +236,7 @@ const player = (controller: boolean) =>
                       downloads={downloads}
                       downloadQuality={settings.downloadQuality ?? "high"}
                       saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
-                      playlists={replica.playlists}
-                      setProviderOrder={replica.setProviderOrder}
+                      replica={replica}
                     />
                   </DialogProvider>
                 </ToastProvider>
@@ -253,7 +256,17 @@ const dyad = Command.make(
       Flag.withDefault(false),
     ),
   },
-  ({ controller }) => Effect.scoped(player(controller)).pipe(reportFailures),
+  ({ controller }) =>
+    Effect.scoped(player(controller)).pipe(
+      Effect.catchTags({
+        NotJoined: () =>
+          fail(
+            "This device has no replica yet. Run `dyad replica join <url> <code>` with a code from `dyad server code`.",
+          ),
+        ReplicaNotStarted: (error) => fail(`The replica did not start. See ${error.logFile}`),
+      }),
+      reportFailures,
+    ),
 ).pipe(
   Command.withDescription("Play the library of a Dyad server"),
   Command.withSubcommands([

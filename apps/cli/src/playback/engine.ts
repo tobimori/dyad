@@ -13,7 +13,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   Data,
   Effect,
   Exit,
@@ -129,9 +128,8 @@ const makeEngine = (options: {
   readonly serverUrl: string;
   readonly volume: number;
   readonly saveVolume: (volume: number) => Effect.Effect<void>;
-  /** Keeps a play of offline time until the server has it */
+  /** Records a play of offline time in the replica of this device */
   readonly recordPlay: (play: {
-    readonly id: string;
     readonly sourceId: string;
     readonly context: typeof PlayContext.Type;
     readonly startedAt: number;
@@ -143,7 +141,6 @@ const makeEngine = (options: {
 }) =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
-    const crypto = yield* Crypto.Crypto;
     const services = yield* Effect.context<
       ServerConnection | HttpClient.HttpClient | FileSystem.FileSystem
     >();
@@ -209,7 +206,6 @@ const makeEngine = (options: {
 
         const now = yield* Clock.currentTimeMillis;
         yield* options.recordPlay({
-          id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
           sourceId: closing.entry.source.id,
           context: closing.entry.context,
           startedAt: closing.startedAt,

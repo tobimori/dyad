@@ -1,7 +1,9 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- NodeHttpServer requires a Node server factory
 import { createServer } from "node:http";
 
-import { ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
+import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
+import { serverPeer } from "@dyad/db";
+import { Database, ReplicaDatabase, nodeDatabaseLayer } from "@dyad/db/node";
 import { ServerDescriptor } from "@dyad/domain";
 import type { Plugin } from "@dyad/plugin";
 import { airplayPlugin } from "@dyad/plugin-airplay/server";
@@ -16,6 +18,7 @@ import { musicbrainzPlugin } from "@dyad/plugin-musicbrainz/server";
 import { soundcloudPlugin } from "@dyad/plugin-soundcloud/server";
 import { youtubePlugin } from "@dyad/plugin-youtube/server";
 import {
+  HomeServer,
   MediaCacheConfig,
   ServerIdentity,
   StreamPort,
@@ -30,7 +33,8 @@ import {
   tracklistsLayer,
 } from "@dyad/server-core";
 import { NodeHttpServer } from "@effect/platform-node";
-import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Redacted, Schema } from "effect";
+import { and, isNotNull } from "drizzle-orm";
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import packageJson from "../package.json" with { type: "json" };
@@ -54,7 +58,8 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
 export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
   Layer.unwrap(
     Effect.gen(function* () {
-      const { dataDirectory, host, port, allowedOrigins, mediaCacheBytes } = yield* ServerConfig;
+      const { dataDirectory, host, port, allowedOrigins, mediaCacheBytes, device } =
+        yield* ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
 
@@ -65,6 +70,28 @@ export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
         maxBytes: mediaCacheBytes,
       });
       const streamPort = Layer.succeed(StreamPort, port);
+      // The peer that this replica joined, through the same token as its replication
+      const homeServer = Layer.unwrap(
+        Effect.gen(function* () {
+          const db = yield* Database;
+          const [peer] = yield* db
+            .select({ url: serverPeer.url, token: serverPeer.token })
+            .from(serverPeer)
+            .where(and(isNotNull(serverPeer.url), isNotNull(serverPeer.token)))
+            .limit(1)
+            .pipe(Effect.orDie);
+          if (!device || peer?.url == null || peer.token === null) {
+            return Layer.succeed(HomeServer, Option.none());
+          }
+          return Layer.effect(
+            HomeServer,
+            Effect.map(ServerConnection, (client) => Option.some(client)),
+          ).pipe(
+            Layer.provide(serverConnectionLayer(peer.url, Option.some(Redacted.make(peer.token)))),
+            Layer.orDie,
+          );
+        }),
+      );
       const identity = Layer.effect(
         ServerIdentity,
         ReplicaDatabase.use((value) =>
@@ -123,6 +150,7 @@ export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
             Layer.provide(mediaCacheConfig),
             Layer.provide(streamPort),
             Layer.provideMerge(hlcClockFromDatabase),
+            Layer.provideMerge(homeServer),
             Layer.provideMerge(database),
           ),
         ),

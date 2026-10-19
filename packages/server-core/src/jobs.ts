@@ -15,6 +15,8 @@ import {
   Schema,
 } from "effect";
 
+import { HomeServer } from "./home-server.ts";
+
 /** Ends a job run as failed and sets the next run, for example from a provider's `Retry-After` */
 export class RetryLater extends Data.TaggedError("RetryLater")<{
   readonly retryAfterSeconds: number;
@@ -39,6 +41,7 @@ const toJobFailure = (error: Error) =>
 
 const makeJobs = Effect.gen(function* () {
   const db = yield* Database;
+  const device = Option.isSome(yield* HomeServer);
   const handlers = new Map<string, (payload: Schema.Json) => Effect.Effect<void, JobFailure>>();
   // Each enqueue and registration opens it, so that a sleeping worker reads the table again
   const wake = yield* Latch.make();
@@ -98,14 +101,16 @@ const makeJobs = Effect.gen(function* () {
 
   /**
    * Runs the jobs of `kind` with `handler`. A payload that does not decode fails the run. Jobs of
-   * kinds without a handler wait.
+   * kinds without a handler wait. A device leaves `homeOnly` jobs to its home server.
    */
   const register = <A, E extends Error, R>(
     kind: string,
     payload: Schema.Decoder<A>,
     handler: (payload: A) => Effect.Effect<void, E, R>,
+    options: { readonly homeOnly?: true } = {},
   ) =>
     Effect.gen(function* () {
+      if (device && options.homeOnly === true) return;
       if (handlers.has(kind)) {
         return yield* Effect.die(new Error(`Job kind "${kind}" is already registered`));
       }

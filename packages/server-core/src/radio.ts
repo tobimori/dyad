@@ -7,7 +7,7 @@ import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Option } from "effect";
 
 import { cachedProviderSource, cachedSummary } from "./provider-cache.ts";
-import { usableProviders } from "./providers.ts";
+import { linkedProviders } from "./providers.ts";
 import { RecommendationMemory, Recommenders, recommenderAccount } from "./recommenders.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { resolveSuggestions } from "./suggestions.ts";
@@ -40,7 +40,7 @@ const sourceSeed = (userId: UserId, sourceId: string) =>
     }
     const cached = yield* cachedProviderSource(sourceId);
     const name = Option.isSome(cached)
-      ? (yield* usableProviders(userId)).get(cached.value.provider)?.provider.name
+      ? (yield* linkedProviders(userId)).get(cached.value.provider)?.name
       : undefined;
     return Option.map(
       Option.filter(cached, () => name !== undefined),

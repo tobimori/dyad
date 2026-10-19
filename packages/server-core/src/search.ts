@@ -207,6 +207,20 @@ const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
     });
   });
 
+/** The ranked sources on this replica, without providers */
+export const searchCatalog = (query: string) =>
+  Stream.fromEffect(
+    Effect.gen(function* () {
+      const principal = yield* CurrentPrincipal;
+      const local = yield* searchLocalSources(query, principal.userId);
+      return yield* rankAnswers(
+        query,
+        principal.userId,
+        new Answer({ candidates: local, hits: [], unavailable: [] }),
+      );
+    }),
+  );
+
 /**
  * The ranked sources on this replica first, then the complete ranked list again each time that a
  * provider search or a popularity source answers

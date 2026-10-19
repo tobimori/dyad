@@ -38,6 +38,8 @@ const configuration = Effect.gen(function* () {
     allowedOrigins: [...new Set(allowedOrigins)],
     dataDirectory: path.resolve(values.dataDirectory),
     mediaCacheBytes: values.mediaCacheMegabytes * 1024 * 1024,
+    // A device asks the replica that it joined for provider calls and leaves the catalog jobs to it
+    device: false,
   };
 });
 

@@ -1,5 +1,5 @@
 import { dieOnDatabaseError, orDieOnDatabaseError } from "@dyad/db/node";
-import { ServerDescriptor, ServerRpc } from "@dyad/domain";
+import { CurrentPrincipal, ServerDescriptor, ServerRpc } from "@dyad/domain";
 import { Context, Effect, Layer, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
@@ -17,7 +17,9 @@ import {
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
+import { insertPlay, listRecentPlays } from "./history.ts";
 import { homePage } from "./home.ts";
+import { forwardEffect, forwardStream } from "./home-server.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
 import { decideMerge, musicbrainzLookupsLayer } from "./matching.ts";
@@ -31,9 +33,18 @@ import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
 import { recommendersLayer } from "./recommenders.ts";
 import { radio } from "./radio.ts";
-import { search } from "./search.ts";
+import { search, searchCatalog } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
-import { heardInSets } from "./sets.ts";
+import {
+  addPlaylistEntries,
+  createPlaylist,
+  editPlaylist,
+  listPlaylists,
+  movePlaylistEntry,
+  removePlaylistEntry,
+} from "./playlists.ts";
+import { heardInSets, listSets } from "./sets.ts";
+import { listProviderChoices, setProviderOrder } from "./source-preference.ts";
 import { copySearchesLayer, sourceCopies } from "./source-copies.ts";
 import { listSources } from "./sources.ts";
 import {
@@ -45,10 +56,10 @@ import {
   serverPairingCodesLayer,
   unpairServer,
 } from "./peers.ts";
-import { syncHubLayer, syncPull, syncPush, syncWatch } from "./sync.ts";
+import { syncHubLayer, watchChanges } from "./sync.ts";
 import { timedRoute } from "./timed-route.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
-import { listPlaylistEntries } from "./user-library.ts";
+import { listLibrary, listPlaylistEntries } from "./user-library.ts";
 import { prepareVideo, videoRoute } from "./video.ts";
 import { webLinks } from "./web-links.ts";
 
@@ -58,6 +69,7 @@ export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { StreamPort } from "./outputs.ts";
 export { createDevice } from "./auth.ts";
+export { HomeServer } from "./home-server.ts";
 export { JoinFailed, joinWorkspace, peerSyncLayer } from "./peers.ts";
 export { pluginLayer } from "./plugin.ts";
 export { recommendationsLayer } from "./recommenders.ts";
@@ -103,17 +115,35 @@ export const serverRoutes = Layer.unwrap(
       listSources: () => listSources.pipe(orDieOnDatabaseError("listSources")),
       listPlaylistEntries: ({ playlistId }) =>
         listPlaylistEntries(playlistId).pipe(orDieOnDatabaseError("listPlaylistEntries")),
+      // The replica with the credentials imports the libraries
       getLibrarySyncStatus: () =>
-        getLibrarySyncStatus.pipe(orDieOnDatabaseError("getLibrarySyncStatus")),
+        forwardEffect(
+          (home) => home.getLibrarySyncStatus(),
+          getLibrarySyncStatus.pipe(orDieOnDatabaseError("getLibrarySyncStatus")),
+        ),
       syncLibrary: ({ provider }) =>
-        syncLibrary(provider).pipe(orDieOnDatabaseError("syncLibrary")),
+        forwardEffect(
+          (home) => home.syncLibrary({ provider }),
+          syncLibrary(provider).pipe(orDieOnDatabaseError("syncLibrary")),
+        ),
       search: ({ query }) =>
-        // Only database errors remain
-        search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
-      artistPage: ({ ref }) => artistPage(ref),
-      albumPage: ({ ref }) => albumPage(ref),
-      homePage: () => homePage,
-      radio: ({ start }) => radio(start).pipe(orDieOnDatabaseError("radio")),
+        forwardStream(
+          (home) => home.search({ query }),
+          // Only database errors remain
+          search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
+          // A device never asks providers itself, so offline it searches only its catalog
+          searchCatalog(query).pipe(
+            Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search"))),
+          ),
+        ),
+      artistPage: ({ ref }) => forwardStream((home) => home.artistPage({ ref }), artistPage(ref)),
+      albumPage: ({ ref }) => forwardStream((home) => home.albumPage({ ref }), albumPage(ref)),
+      homePage: () => forwardStream((home) => home.homePage(), homePage),
+      radio: ({ start }) =>
+        forwardEffect(
+          (home) => home.radio({ start }),
+          radio(start).pipe(orDieOnDatabaseError("radio")),
+        ),
       listLibraryArtists: () => listLibraryArtists.pipe(orDieOnDatabaseError("listLibraryArtists")),
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
       preparePlayback: ({ sourceId, capabilities }) =>
@@ -125,9 +155,31 @@ export const serverRoutes = Layer.unwrap(
       controlSession: (payload) =>
         controlSession(payload).pipe(orDieOnDatabaseError("controlSession")),
       reportPlayback: (payload) => reportPlayback(payload),
-      syncPull: (request) => syncPull(request).pipe(orDieOnDatabaseError("syncPull")),
-      syncPush: (request) => syncPush(request).pipe(orDieOnDatabaseError("syncPush")),
-      syncWatch: () => syncWatch,
+      listLibrary: () => listLibrary.pipe(orDieOnDatabaseError("listLibrary")),
+      listPlaylists: () => listPlaylists.pipe(orDieOnDatabaseError("listPlaylists")),
+      listRecentPlays: () => listRecentPlays.pipe(orDieOnDatabaseError("listRecentPlays")),
+      listSets: () => listSets.pipe(orDieOnDatabaseError("listSets")),
+      listProviderChoices: () =>
+        listProviderChoices.pipe(orDieOnDatabaseError("listProviderChoices")),
+      setProviderOrder: ({ providerRanking }) =>
+        setProviderOrder(providerRanking).pipe(orDieOnDatabaseError("setProviderOrder")),
+      createPlaylist: ({ name, entries, twoWayProvider }) =>
+        createPlaylist(name, entries, twoWayProvider).pipe(orDieOnDatabaseError("createPlaylist")),
+      addPlaylistEntries: ({ playlistId, entries }) =>
+        addPlaylistEntries(playlistId, entries).pipe(orDieOnDatabaseError("addPlaylistEntries")),
+      editPlaylist: ({ playlistId, ...edit }) =>
+        editPlaylist(playlistId, edit).pipe(orDieOnDatabaseError("editPlaylist")),
+      removePlaylistEntry: ({ entryId }) =>
+        removePlaylistEntry(entryId).pipe(orDieOnDatabaseError("removePlaylistEntry")),
+      movePlaylistEntry: ({ playlistId, entryId, direction }) =>
+        movePlaylistEntry(playlistId, entryId, direction).pipe(
+          orDieOnDatabaseError("movePlaylistEntry"),
+        ),
+      appendPlay: (play) =>
+        Effect.flatMap(CurrentPrincipal, (principal) =>
+          insertPlay({ ...play, userId: principal.userId, deviceId: principal.deviceId }),
+        ).pipe(orDieOnDatabaseError("appendPlay")),
+      watchChanges: () => watchChanges,
       prepareDownload: ({ sourceId, quality, capabilities }) =>
         prepareDownload(sourceId, quality, capabilities).pipe(
           orDieOnDatabaseError("prepareDownload"),
@@ -140,10 +192,17 @@ export const serverRoutes = Layer.unwrap(
         removeDevice(deviceId).pipe(orDieOnDatabaseError("removeDevice")),
       listAccountProviders: () => listAccountProviders,
       listAccounts: () => listAccounts.pipe(orDieOnDatabaseError("listAccounts")),
+      // The credentials stay on the home server, which then runs the jobs of the account
       linkAccount: ({ provider, credentials }) =>
-        linkAccount(provider, credentials).pipe(orDieOnDatabaseError("linkAccount")),
+        forwardEffect(
+          (home) => home.linkAccount({ provider, credentials }),
+          linkAccount(provider, credentials).pipe(orDieOnDatabaseError("linkAccount")),
+        ),
       unlinkAccount: ({ provider }) =>
-        unlinkAccount(provider).pipe(orDieOnDatabaseError("unlinkAccount")),
+        forwardEffect(
+          (home) => home.unlinkAccount({ provider }),
+          unlinkAccount(provider).pipe(orDieOnDatabaseError("unlinkAccount")),
+        ),
       unmergeRecording: (pair) =>
         decideMerge(pair, "reject").pipe(orDieOnDatabaseError("unmergeRecording")),
       mergeRecordings: (pair) =>

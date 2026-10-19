@@ -1,37 +1,71 @@
-import { clientDatabaseLayer, replicaLayer } from "@dyad/client-runtime";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { Crypto, Effect, FileSystem, Layer, Path, Redacted } from "effect";
-import { Hex } from "effect/encoding";
-import { Reactivity } from "effect/reactivity";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the replica writes to a log file, which `effect/process` 4.0.5 cannot do
+import * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- `spawn` needs a file descriptor for the log
+import * as NodeFS from "node:fs";
+import { isSea } from "node:sea";
+
+import { Config, Data, Effect, FileSystem, Path, Schedule } from "effect";
+import { HttpClient } from "effect/http";
 import envPaths from "env-paths";
 
+/** The replica of this device: its database and the local port of its server */
+export const localReplica = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const port = yield* Config.Port("DYAD_REPLICA_PORT").pipe(Config.withDefault(4319));
+  return {
+    dataDirectory: path.join(envPaths("dyad", { suffix: "" }).data, "replica"),
+    port,
+    origin: `http://127.0.0.1:${port}`,
+  };
+});
+
+export class ReplicaNotStarted extends Data.TaggedError("ReplicaNotStarted")<{
+  readonly logFile: string;
+}> {}
+
+const healthy = (origin: string) =>
+  HttpClient.get(`${origin}/health`).pipe(
+    Effect.map((response) => response.status === 200),
+    Effect.timeout("1 second"),
+    Effect.orElseSucceed(() => false),
+  );
+
 /**
- * One file per device token: the server binds a replica to one device, and a new sign-in is a
- * new device
+ * Starts `dyad replica run` as a child of this process, unless a replica already answers on its
+ * port. The child stops with the scope.
  */
-export const replicaFile = (origin: string, token: Redacted.Redacted<string>) =>
-  Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const path = yield* Path.Path;
-    const key = new TextEncoder().encode(`${origin}\n${Redacted.value(token)}`);
-    const digest = yield* crypto.digest("SHA-256", key);
-    const name = `${Hex.encode(digest).slice(0, 16)}.db`;
-    return path.join(envPaths("dyad", { suffix: "" }).data, "replicas", name);
-  });
+export const startLocalReplica = Effect.gen(function* () {
+  const replica = yield* localReplica;
+  if (yield* healthy(replica.origin)) return replica;
 
-/** The client replica of the signed-in device, on `node:sqlite` */
-export const cliReplicaLayer = (origin: string, token: Redacted.Redacted<string>) =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const filename = yield* replicaFile(origin, token);
-      yield* fs.makeDirectory(path.dirname(filename), { recursive: true });
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const folder = envPaths("dyad", { suffix: "" }).log;
+  yield* fs.makeDirectory(folder, { recursive: true });
+  const logFile = path.join(folder, "replica.log");
 
-      return replicaLayer.pipe(
-        Layer.provideMerge(clientDatabaseLayer),
-        Layer.provideMerge(SqliteClient.layer({ filename })),
-        Layer.provideMerge(Reactivity.layer),
-      );
+  // The executable is the CLI itself; under Node, the script and its flags come first
+  const script = isSea() ? [] : [...process.execArgv, process.argv[1] ?? ""];
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const log = NodeFS.openSync(logFile, "a");
+      const child = NodeChildProcess.spawn(process.execPath, [...script, "replica", "run"], {
+        stdio: ["ignore", log, log],
+        env: { ...process.env, DYAD_REPLICA_PORT: String(replica.port) },
+      });
+      NodeFS.closeSync(log);
+      return child;
+    }),
+    (child) => Effect.sync(() => child.kill()),
+  );
+
+  const ready = yield* healthy(replica.origin).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("250 millis"),
+      until: (ok) => ok,
+      times: 120,
     }),
   );
+  if (!ready) return yield* new ReplicaNotStarted({ logFile });
+  return replica;
+});
