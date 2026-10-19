@@ -45,7 +45,7 @@ import { insertPlay } from "./history.ts";
 import { Outputs } from "./outputs.ts";
 import { hintPrefetch } from "./playback.ts";
 import { queueCopyDiscovery } from "./source-copies.ts";
-import { Receivers, deviceOutput } from "./receivers.ts";
+import { Receivers, deviceOutput, isDeviceOutput } from "./receivers.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, deleteSession, loadSessions, saveSession } from "./session-store.ts";
 import { continueRadio } from "./radio.ts";
@@ -1251,10 +1251,21 @@ const makeSession = Effect.fn(function* (
       }),
     );
 
+  /** Without a queue and a driver, so that the room can go with its output */
+  const idle = lock.withPermits(1)(
+    Effect.sync(
+      () =>
+        state.entries.length === 0 &&
+        Option.isNone(state.urlDriver) &&
+        Option.isNone(state.timedDriver),
+    ),
+  );
+
   return {
     subscribe,
     playerJoined,
     playerLeft,
+    idle,
     control,
     report,
     release,
@@ -1376,6 +1387,23 @@ const makeSessions = Effect.gen(function* () {
     return session;
   });
 
+  // Only under `roomsLock`
+  const dropRoom = Effect.fn(function* (room: OutputId) {
+    const session = rooms.get(room);
+    if (session === undefined) return;
+    yield* session.endOpenPlay;
+    rooms.delete(room);
+    names.delete(room);
+    yield* deleteSession(room).pipe(
+      Effect.provideService(Database, db),
+      orDieOnDatabaseError("deleteSession"),
+    );
+    for (const connection of household.connections) {
+      if (!connection.rooms.delete(room)) continue;
+      Queue.offerUnsafe(connection.events, SessionEvent.cases.RoomRemoved.make({ room }));
+    }
+  });
+
   const nameOf = (room: OutputId) =>
     outputs().find((output) => output.id === room)?.name ?? names.get(room) ?? room;
 
@@ -1394,12 +1422,18 @@ const makeSessions = Effect.gen(function* () {
 
   for (const saved of yield* loadSessions) yield* createRoom(saved.room, saved.name, saved.state);
 
-  // Plugin outputs belong to the household, so each one is a room
+  // Plugin outputs belong to the household, so each one is a room. An empty room goes with its
+  // output, also when the output becomes the hidden twin of a URL output.
   const refreshOutputs = roomsLock.withPermits(1)(
     Effect.gen(function* () {
-      for (const output of urlOutputs.list()) {
+      const listed = urlOutputs.list();
+      for (const output of listed) {
         names.set(output.id, output.name);
         if (!rooms.has(output.id)) yield* createRoom(output.id, output.name, emptyState);
+      }
+      for (const [room, session] of rooms) {
+        const gone = !isDeviceOutput(room) && !listed.some((output) => output.id === room);
+        if (gone && (yield* session.idle)) yield* dropRoom(room);
       }
       broadcastOutputs();
     }),
@@ -1521,20 +1555,7 @@ const makeSessions = Effect.gen(function* () {
   const removeDevice = Effect.fn(function* (deviceId: DeviceId) {
     const removed = deviceOutput(deviceId);
     yield* releaseFor(removed, [removed]);
-    const own = rooms.get(removed);
-    if (own !== undefined) {
-      yield* own.endOpenPlay;
-      rooms.delete(removed);
-      names.delete(removed);
-      yield* deleteSession(removed).pipe(Effect.provideService(Database, db));
-      for (const connection of household.connections) {
-        if (!connection.rooms.delete(removed)) continue;
-        Queue.offerUnsafe(
-          connection.events,
-          SessionEvent.cases.RoomRemoved.make({ room: removed }),
-        );
-      }
-    }
+    yield* roomsLock.withPermits(1)(dropRoom(removed));
     for (const connection of household.connections) {
       if (connection.deviceId === deviceId) Queue.endUnsafe(connection.events);
     }

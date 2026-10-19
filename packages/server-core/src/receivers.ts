@@ -5,6 +5,8 @@ import { Context, Data, Deferred, Effect, Layer, PubSub, Schema, Stream } from "
 
 export const deviceOutput = (deviceId: DeviceId) => OutputId.make(`device:${deviceId}`);
 
+export const isDeviceOutput = (id: OutputId) => id.startsWith("device:");
+
 // The client plays a block about 150 ms after it gets it; the rest covers stalls of its UI thread
 const receiverLeadMs = 500;
 
