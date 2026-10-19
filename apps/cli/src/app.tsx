@@ -562,7 +562,7 @@ export function App(props: {
         : []),
       ...(playingSet ? [] : heardInSets(recordingId)),
       // A new play: switching the source of an entry in place belongs to the session
-      playFrom(source, (copy) => player.playList([copy], 0, target.context)),
+      playFrom(source, (copy) => player.playCopy(copy, target.context)),
       webLinks(source),
       ...downloadActions(song, commands.download, commands.removeDownload),
       ...target.sectionActions,

@@ -628,7 +628,13 @@ export const DjStyle = Schema.Literals(["blend", "filter", "echo-out", "rise"]);
 
 export class QueueEntry extends Schema.Class<QueueEntry>("QueueEntry")({
   id: EntryId,
+  /** The copy that the owner saw. The room plays the best copy of its song, unless it is `pinned`. */
   source: SourceSummary,
+  /** The owner chose this copy with "Play from…" */
+  pinned: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
   context: PlayContext,
   /** The entry failed to play. Skips and ends pass over it; `JumpTo` tries it again. */
   unplayable: Schema.Boolean,
@@ -736,6 +742,8 @@ export const SessionCommand = Schema.TaggedUnion({
     index: Schema.NullOr(Schema.Int),
     context: PlayContext,
     shuffle: Schema.Boolean,
+    /** The owner chose these copies with "Play from…", so no other copy plays for them */
+    pinned: Schema.Boolean,
     /** `QueueEntry.reason` by source ID, from `radio` */
     reasons: Schema.optionalKey(
       Schema.Record(Schema.String, Schema.String.check(Schema.isMaxLength(200))),
@@ -744,6 +752,7 @@ export const SessionCommand = Schema.TaggedUnion({
   Enqueue: {
     sourceIds: SourceIds,
     context: PlayContext,
+    pinned: Schema.Boolean,
     after: Schema.Union([Schema.Literals(["current", "end"]), EntryId]),
   },
   Remove: { entryIds: Schema.NonEmptyArray(EntryId) },
@@ -870,9 +879,11 @@ const OwnerRpc = RpcGroup.make(
   // The album artists and the albums of the files on the server, sorted by name
   Rpc.make("listLibraryArtists", { success: Schema.Array(ArtistCard) }),
   Rpc.make("listLibraryAlbums", { success: Schema.Array(AlbumCard) }),
+  /** The best copy of the source's song, or the source itself when `pinned` */
   Rpc.make("preparePlayback", {
     payload: {
       sourceId: Schema.String.check(Schema.isUUID()),
+      pinned: Schema.Boolean,
       capabilities: PlaybackCapabilities,
     },
     success: PlaybackPlan,

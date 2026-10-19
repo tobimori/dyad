@@ -231,6 +231,7 @@ const enqueue = Effect.fn(function* (
   const command = yield* Command.Enqueue.makeEffect({
     sourceIds,
     context,
+    pinned: false,
     after: toEnd || before === undefined ? "end" : before.id,
   }).pipe(Effect.mapError(() => commandAcks.queue_full));
   const entryIds = yield* control(command, toEnd ? null : current.queueVersion);

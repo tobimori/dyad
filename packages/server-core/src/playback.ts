@@ -352,23 +352,25 @@ const tryCopy = Effect.fn(
 );
 
 /**
- * What plays for the source: the source itself, else the other sources of the same recording in
- * the order of `playableCopies`, else a possible match of `searchCopy`. A source of a provider
- * without its own audio comes after the other sources of its recording.
+ * What plays for the source: the copies of its song in the order of `playableCopies`, else a
+ * possible match of `searchCopy`. A `pinned` source plays first. A source of a provider without its
+ * own audio, or a search result outside the catalog, comes after the copies of its song.
  */
 export const choosePlayableCopy = Effect.fn("choosePlayableCopy")(function* (
   sourceId: string,
+  pinned: boolean,
   capabilities: PlaybackCapabilities,
 ) {
   const providers = yield* Providers;
   const [own] = yield* playableSources(eq(source.id, sourceId));
   const ownProvider =
     own?.source.provider ?? Option.getOrUndefined(yield* cachedProviderSource(sourceId))?.provider;
-  const copies = yield* playableCopies(sourceId);
+  const copies = (yield* playableCopies(sourceId)).map((row) => row.source.id);
+  const others = copies.filter((id) => id !== sourceId);
   const linked = ownProvider !== undefined && providers.get(ownProvider)?.links === true;
-  const candidates = linked
-    ? [...copies.map((row) => row.source.id), sourceId]
-    : [sourceId, ...copies.map((row) => row.source.id)];
+  const candidates = [
+    ...new Set(pinned && !linked ? [sourceId, ...others] : [...copies, sourceId]),
+  ];
 
   const failures: Array<PlaybackUnavailable | ProviderError> = [];
   for (const candidate of candidates) {
@@ -407,11 +409,13 @@ const copySummary = Effect.fn(function* (sourceId: string, copyId: string) {
  */
 export const streamPlan = Effect.fn("streamPlan")(function* (
   requestedId: string,
+  pinned: boolean,
   holder: DeviceId | OutputId,
   capabilities: PlaybackCapabilities,
 ) {
   const { sourceId, audio, choice, possibleMatch } = yield* choosePlayableCopy(
     requestedId,
+    pinned,
     capabilities,
   );
 
@@ -440,10 +444,11 @@ export const streamPlan = Effect.fn("streamPlan")(function* (
 
 export const preparePlayback = Effect.fn("preparePlayback")(function* (
   sourceId: string,
+  pinned: boolean,
   capabilities: PlaybackCapabilities,
 ) {
   const principal = yield* CurrentPrincipal;
-  return yield* streamPlan(sourceId, principal.deviceId, capabilities);
+  return yield* streamPlan(sourceId, pinned, principal.deviceId, capabilities);
 });
 
 class SourceAudio extends Data.Class<{

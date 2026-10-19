@@ -39,6 +39,7 @@ const renderInput = Effect.fn(function* (entry: QueueEntry) {
   const fs = yield* FileSystem.FileSystem;
   const { sourceId, playable, choice } = yield* choosePlayableCopy(
     entry.source.id,
+    entry.pinned,
     renderCapabilities,
   );
   const convert = (media: string | MediaStream) =>

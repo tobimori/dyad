@@ -163,6 +163,7 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
     const prepare = Effect.fn(function* (entry: QueueEntry, startMs: number) {
       const plan = yield* streamPlan(
         entry.source.id,
+        entry.pinned,
         options.outputId,
         new PlaybackCapabilities({ formats: output.formats }),
       ).pipe(Effect.provideContext(services), orDieOnDatabaseError("streamPlan"), Effect.option);

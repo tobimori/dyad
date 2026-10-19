@@ -243,13 +243,14 @@ const makeSession = Effect.fn(function* (
   const createEntries = (
     sources: ReadonlyArray<SourceSummary>,
     context: typeof PlayContext.Type,
+    pinned: boolean,
     reasons: Readonly<Record<string, string>> = {},
   ) =>
     sources.map((summary) => {
       const id = EntryId.make(state.nextEntryId);
       state.nextEntryId += 1;
       const reason = reasons[summary.id] ?? null;
-      return new QueueEntry({ id, source: summary, context, unplayable: false, reason });
+      return new QueueEntry({ id, source: summary, pinned, context, unplayable: false, reason });
     });
 
   // A new transport: the output loads the entry, so the position does not move until it reports
@@ -551,6 +552,7 @@ const makeSession = Effect.fn(function* (
             const entries = createEntries(
               ordered.map((item) => item.summary),
               command.context,
+              command.pinned,
               command.reasons,
             );
             const first = entries[ordered.indexOf(selected)];
@@ -579,7 +581,7 @@ const makeSession = Effect.fn(function* (
               return yield* fail("entry_not_found");
             }
 
-            const entries = createEntries(summaries, command.context);
+            const entries = createEntries(summaries, command.context, command.pinned);
             spliceQueue([new QueueSplice({ index: after + 1, remove: 0, insert: entries })]);
             return entries.map((entry) => entry.id);
           }),
@@ -1270,6 +1272,7 @@ const makeSession = Effect.fn(function* (
         const insert = createEntries(
           tracks.map((track) => track.source),
           "radio",
+          false,
           reasons,
         );
         spliceQueue([new QueueSplice({ index: state.entries.length, remove: 0, insert })]);

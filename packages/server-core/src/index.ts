@@ -144,8 +144,10 @@ export const serverRoutes = Layer.unwrap(
         ),
       listLibraryArtists: () => listLibraryArtists.pipe(orDieOnDatabaseError("listLibraryArtists")),
       listLibraryAlbums: () => listLibraryAlbums.pipe(orDieOnDatabaseError("listLibraryAlbums")),
-      preparePlayback: ({ sourceId, capabilities }) =>
-        preparePlayback(sourceId, capabilities).pipe(orDieOnDatabaseError("preparePlayback")),
+      preparePlayback: ({ sourceId, pinned, capabilities }) =>
+        preparePlayback(sourceId, pinned, capabilities).pipe(
+          orDieOnDatabaseError("preparePlayback"),
+        ),
       prepareVideo: ({ sourceId, maxHeight }) =>
         prepareVideo(sourceId, maxHeight).pipe(orDieOnDatabaseError("prepareVideo")),
       connectDevice: (payload) =>

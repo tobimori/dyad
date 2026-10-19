@@ -159,10 +159,14 @@ const decoderOf = (format: AudioFormat) =>
 /** Closing the scope stops the download */
 export const fetchSource = Effect.fn("fetchSource")(function* (
   serverUrl: string,
-  sourceId: string,
+  entry: { readonly source: { readonly id: string }; readonly pinned: boolean },
 ) {
   const connection = yield* ServerConnection;
-  const plan = yield* connection.preparePlayback({ sourceId, capabilities });
+  const plan = yield* connection.preparePlayback({
+    sourceId: entry.source.id,
+    pinned: entry.pinned,
+    capabilities,
+  });
   const decoder = decoderOf(plan.format);
   if (decoder === undefined) {
     return yield* new PlaybackError({ cause: "The server chose an undeclared format" });

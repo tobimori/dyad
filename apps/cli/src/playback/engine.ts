@@ -175,7 +175,7 @@ const makeEngine = Effect.fn(function* (options: {
 
   // A file that went away, for example at the end of its lease, falls back to the server
   const fetchEntry = (entry: QueueEntry) => {
-    const stream = fetchSource(options.serverUrl, entry.source.id);
+    const stream = fetchSource(options.serverUrl, entry);
     if (options.downloads === null) return stream;
     return options.downloads.file(entry.source.id).pipe(
       Effect.flatMap(

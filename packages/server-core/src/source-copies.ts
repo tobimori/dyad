@@ -9,7 +9,7 @@ import {
   compareSources,
 } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { eq, inArray, or, sql } from "drizzle-orm";
 import { Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { artistIdOf } from "./artists.ts";
@@ -146,28 +146,36 @@ const groupOf = Effect.fn(function* (sourceId: string) {
 });
 
 /**
- * The other sources of the recording that the user can play, best first: the user's provider
- * order, then a local file, then a stream in the media cache, then quality
+ * The sources of the song that the user can play, also the source itself, best first: a local
+ * file, then a stream in the media cache, then a stream. Quality orders each tier, then the user's
+ * provider order.
  */
 export const playableCopies = Effect.fn("playableCopies")(function* (sourceId: string) {
   const cache = yield* MediaCache;
   const { group } = yield* groupOf(sourceId);
   if (group.length === 0) return [];
-  const rows = yield* playableSources(
-    and(inArray(source.recordingId, group), ne(source.id, sourceId)),
-  );
+  const rows = yield* playableSources(inArray(source.recordingId, group));
   const cached = new Set(
     yield* Effect.filter(rows, (row) => Effect.map(cache.find(row.variant.id), Option.isSome)),
   );
-  const compare = compareSources(yield* providerOrder);
+  const order = yield* providerOrder;
+  const rank = (provider: string) => {
+    const index = order.indexOf(provider);
+    return index === -1 ? order.length : index;
+  };
+  const tier = (row: (typeof rows)[number]) => {
+    if (row.source.provider === "local") return 0;
+    return cached.has(row) ? 1 : 2;
+  };
   return rows.toSorted(
     (a, b) =>
-      compare(
-        { provider: a.source.provider, lossless: a.variant.lossless },
-        { provider: b.source.provider, lossless: b.variant.lossless },
-      ) ||
-      Number(cached.has(b)) - Number(cached.has(a)) ||
-      (b.variant.bitrate ?? 0) - (a.variant.bitrate ?? 0),
+      tier(a) - tier(b) ||
+      Number(b.variant.lossless) - Number(a.variant.lossless) ||
+      // An unknown bitrate leaves the order to the provider order
+      (a.variant.bitrate === null || b.variant.bitrate === null
+        ? 0
+        : b.variant.bitrate - a.variant.bitrate) ||
+      rank(a.source.provider) - rank(b.source.provider),
   );
 });
 

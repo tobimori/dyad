@@ -180,10 +180,23 @@ export function usePlayer(props: {
         index: chosen ? selected.index : null,
         context,
         shuffle,
+        pinned: false,
         reasons,
       }),
     );
   };
+
+  // "Play from…": the owner chose the copy, so no other copy plays for it
+  const playCopy = (copy: SourceSummary, context: typeof PlayContext.Type) =>
+    send(
+      SessionCommand.cases.Play.make({
+        sourceIds: [copy.id],
+        index: 0,
+        context,
+        shuffle: playback.shuffle,
+        pinned: true,
+      }),
+    );
 
   const enqueue = (
     sources: ReadonlyArray<SourceSummary>,
@@ -192,7 +205,14 @@ export function usePlayer(props: {
   ) => {
     const [first, ...others] = sources.slice(0, maxEntries).map((source) => source.id);
     if (first === undefined) return;
-    send(SessionCommand.cases.Enqueue.make({ sourceIds: [first, ...others], context, after }));
+    send(
+      SessionCommand.cases.Enqueue.make({
+        sourceIds: [first, ...others],
+        context,
+        pinned: false,
+        after,
+      }),
+    );
   };
 
   // Offline, the view shows what this device plays, or the last state of another output
@@ -247,6 +267,7 @@ export function usePlayer(props: {
       context: typeof PlayContext.Type,
       reasons?: Readonly<Record<string, string>>,
     ) => playList(sources, index, context, playback.shuffle, reasons),
+    playCopy,
     shuffleList: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) => {
       const index = Effect.runSync(Random.nextIntBetween(0, sources.length, { halfOpen: true }));
       playList(sources, index, context, true, {}, false);
