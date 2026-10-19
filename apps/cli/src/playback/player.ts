@@ -1,5 +1,5 @@
 import { findSeekPoint, readSourceInfo, SeekPoint } from "@dyad/audio";
-import { ServerConnection, qualityLabel } from "@dyad/client-runtime";
+import { ServerConnection, copyLabel, qualityLabel } from "@dyad/client-runtime";
 import { AudioFormat, PlaybackCapabilities } from "@dyad/domain";
 import type { AudioQuality } from "@dyad/domain";
 import type { Audio, AudioStream } from "@opentui/core";
@@ -130,6 +130,8 @@ export class Fetched extends Data.Class<{
   readonly path: string | null;
   readonly format: Format;
   readonly quality: string;
+  /** Where the audio comes from when the server plays another source, see `copyLabel` */
+  readonly copy: string | null;
   readonly download: Download;
 }> {}
 
@@ -155,10 +157,13 @@ export const fetchSource = (serverUrl: string, sourceId: string) =>
     }
 
     const download = yield* startDownload(serverUrl, plan.path, decoder, 0);
+    const copy = copyLabel(plan);
+    const quality = qualityLabel(plan.source, plan.format);
     return new Fetched({
       path: plan.path,
       format: decoder,
-      quality: qualityLabel(plan.source, plan.format),
+      quality: copy === null ? quality : `${copy} · ${quality}`,
+      copy,
       download,
     });
   });
@@ -187,6 +192,7 @@ export const fetchFile = (path: string, format: AudioFormat, audio: AudioQuality
       path: null,
       format: decoder,
       quality: qualityLabel(audio, format),
+      copy: null,
       download: new Download({ startMs: 0, received, scope, tap }),
     });
   });

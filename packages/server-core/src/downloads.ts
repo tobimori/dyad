@@ -138,7 +138,12 @@ const downloadSource = (
   Effect.gen(function* () {
     const { playable, audio, searchResult } = yield* findPlayableSource(sourceId, userId).pipe(
       Effect.catchTag("PlaybackUnavailable", (error) =>
-        Effect.fail(new DownloadUnavailable({ reason: error.reason })),
+        // Only a plan fails with `failed`, after it tried the copies
+        Effect.fail(
+          new DownloadUnavailable({
+            reason: error.reason === "failed" ? "not_found" : error.reason,
+          }),
+        ),
       ),
     );
     const leaseDays =

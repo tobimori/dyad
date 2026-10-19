@@ -26,6 +26,7 @@ import {
   Path,
   PlatformError,
   Redacted,
+  Result,
   Schema,
   Stream,
 } from "effect";
@@ -36,9 +37,10 @@ import { fromHex, hex, variantId } from "./ids.ts";
 import { MediaCache, PrefetchItem } from "./media-cache.ts";
 import { Outputs } from "./outputs.ts";
 import { SourceFormat, audioContainer, choosePlayback, contentTypes } from "./playback-formats.ts";
-import { cachedProviderSource } from "./provider-cache.ts";
+import { cachedProviderSource, cachedSummary } from "./provider-cache.ts";
 import { Providers, usableProviders } from "./providers.ts";
-import { addProviderSource } from "./sources.ts";
+import { CopySearches, playableCopies, searchCopy } from "./source-copies.ts";
+import { addProviderSource, playableSources, sourceSummary } from "./sources.ts";
 import { queueTracklistRead } from "./tracklists.ts";
 
 const generateStreamKey = Effect.promise(() =>
@@ -58,6 +60,40 @@ export class StreamKey extends Context.Service<
 >()("@dyad/server-core/StreamKey") {}
 
 export const streamKeyLayer = Layer.effect(StreamKey, generateStreamKey);
+
+/**
+ * Recent attempts by user and source. `resolved`: the audio of a resolve in the last minute, so
+ * that the stream after a plan does not resolve again. `failed`: the time of the last failure
+ * before the first byte, so that the next plan tries another copy.
+ */
+export class CopyAttempts extends Context.Service<
+  CopyAttempts,
+  {
+    readonly resolved: Map<string, { readonly audio: ProviderAudio; readonly at: number }>;
+    readonly failed: Map<string, number>;
+  }
+>()("@dyad/server-core/CopyAttempts") {}
+
+export const copyAttemptsLayer = Layer.sync(CopyAttempts, () => ({
+  resolved: new Map(),
+  failed: new Map(),
+}));
+
+// Signed provider URLs stay valid for longer
+const resolvedLifetimeMs = 60_000;
+// A provider that refuses a source now often refuses it for some minutes
+const failedLifetimeMs = 10 * 60_000;
+
+const attemptKey = (userId: UserId, sourceId: string) => `${userId} ${sourceId}`;
+
+/** Records a failure before the first byte, so that the next plan skips the source for a while */
+export const markFailed = (userId: UserId, sourceId: string) =>
+  Effect.gen(function* () {
+    const { failed } = yield* CopyAttempts;
+    const now = yield* Clock.currentTimeMillis;
+    for (const [key, at] of failed) if (now - at > failedLifetimeMs) failed.delete(key);
+    failed.set(attemptKey(userId, sourceId), now);
+  });
 
 // Long enough for a queue that starts the URL later. A started stream continues after expiry.
 const streamLifetimeMs = 6 * 60 * 60 * 1000;
@@ -157,6 +193,7 @@ const selectSource = (sourceId: string) =>
 
 const providerPlayback = (
   item: {
+    readonly sourceId: string;
     readonly provider: string;
     readonly externalId: string;
     readonly kind: string;
@@ -179,7 +216,9 @@ const providerPlayback = (
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
 
-    const resolve = Effect.gen(function* () {
+    const { resolved } = yield* CopyAttempts;
+    const key = attemptKey(userId, item.sourceId);
+    const fresh = Effect.gen(function* () {
       const audio = yield* usable.provider.resolve(item.externalId, usable.credentials);
       if (!(audio instanceof ProviderLink)) return audio;
 
@@ -194,6 +233,17 @@ const providerPlayback = (
         return yield* new ProviderError({ reason: "The linked source links again" });
       }
       return linkedAudio;
+    });
+    const resolve = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      for (const [entry, value] of resolved) {
+        if (now - value.at > resolvedLifetimeMs) resolved.delete(entry);
+      }
+      const earlier = resolved.get(key);
+      if (earlier !== undefined) return earlier.audio;
+      const audio = yield* fresh;
+      resolved.set(key, { audio, at: now });
+      return audio;
     });
 
     const keys = usable.provider.keys;
@@ -222,6 +272,7 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
 
       const playable = yield* providerPlayback(
         {
+          sourceId,
           provider: cached.value.provider,
           externalId: cached.value.source.externalId,
           kind: "stream",
@@ -254,6 +305,7 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
           })
         : yield* providerPlayback(
             {
+              sourceId,
               provider: row.source.provider,
               externalId: row.source.externalId,
               kind: row.source.kind,
@@ -271,7 +323,8 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
 
 /**
  * How the user can play the source in one of the `capabilities` formats. A search result enters
- * the shared catalog here, but only when the user can play it.
+ * the shared catalog here, but only when the user can play it. A possible match of `searchCopy`
+ * plays from the provider cache and does not enter the catalog.
  */
 export const choosePlayableSource = (
   sourceId: string,
@@ -282,23 +335,110 @@ export const choosePlayableSource = (
     const { playable, audio, searchResult } = yield* findPlayableSource(sourceId, userId);
     const choice = yield* choosePlayback(playable.format, capabilities);
 
-    if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
+    const searches = yield* CopySearches;
+    const possibleMatch = [...searches.values()].some((search) => search.found === sourceId);
+    if (Option.isSome(searchResult) && !possibleMatch) {
+      yield* addProviderSource(searchResult.value);
+    }
     yield* queueTracklistRead(sourceId, userId);
     return { playable, audio, choice };
   });
 
+// A copy plays when it gives audio before the first byte: a file, a complete cache file or a
+// resolve. A source that failed a moment ago fails again without a request.
+const tryCopy = (sourceId: string, userId: UserId, capabilities: PlaybackCapabilities) =>
+  Effect.gen(function* () {
+    const { failed } = yield* CopyAttempts;
+    const failedAt = failed.get(attemptKey(userId, sourceId));
+    if (failedAt !== undefined && (yield* Clock.currentTimeMillis) - failedAt < failedLifetimeMs) {
+      return yield* new ProviderError({ reason: "The source failed a moment ago" });
+    }
+    const chosen = yield* choosePlayableSource(sourceId, userId, capabilities);
+    if (chosen.playable instanceof ProviderPlayback) {
+      const cached = yield* cachedAudio(chosen.playable);
+      if (Option.isNone(cached)) {
+        yield* chosen.playable.resolve.pipe(Effect.tapError(() => markFailed(userId, sourceId)));
+      }
+    }
+    return { sourceId, ...chosen };
+  }).pipe(
+    orDieOnDatabaseError("tryCopy"),
+    Effect.tapError((error) =>
+      Effect.logWarning("Cannot play a copy", error.reason).pipe(Effect.annotateLogs({ sourceId })),
+    ),
+    Effect.result,
+  );
+
 /**
- * A signed stream URL for `holder`. It stops working when the device is removed, or when the
- * user's session no longer holds the output.
+ * What plays for the source: the source itself, else the other sources of the same recording in
+ * the order of `playableCopies`, else a possible match of `searchCopy`. A source of a provider
+ * without its own audio comes after the other sources of its recording.
+ */
+export const choosePlayableCopy = (
+  sourceId: string,
+  userId: UserId,
+  capabilities: PlaybackCapabilities,
+) =>
+  Effect.gen(function* () {
+    const providers = yield* Providers;
+    const [own] = yield* playableSources(userId, eq(source.id, sourceId));
+    const ownProvider =
+      own?.source.provider ??
+      Option.getOrUndefined(yield* cachedProviderSource(sourceId))?.provider;
+    const copies = yield* playableCopies(sourceId, userId);
+    const linked = ownProvider !== undefined && providers.get(ownProvider)?.links === true;
+    const candidates = linked
+      ? [...copies.map((row) => row.source.id), sourceId]
+      : [sourceId, ...copies.map((row) => row.source.id)];
+
+    const failures: Array<PlaybackUnavailable | ProviderError> = [];
+    for (const candidate of candidates) {
+      const result = yield* tryCopy(candidate, userId, capabilities);
+      if (Result.isSuccess(result)) return { ...result.success, possibleMatch: false };
+      failures.push(result.failure);
+    }
+
+    const found = yield* searchCopy(sourceId, userId, candidates);
+    if (found !== undefined) {
+      const result = yield* tryCopy(found, userId, capabilities);
+      if (Result.isSuccess(result)) return { ...result.success, possibleMatch: true };
+    }
+
+    // The reason of the source itself, unless only a provider failed
+    const first = failures[candidates.indexOf(sourceId)];
+    return yield* new PlaybackUnavailable({
+      reason: Schema.is(PlaybackUnavailable)(first) ? first.reason : "failed",
+    });
+  });
+
+// The source that plays, when it is not the requested source
+const copySummary = (sourceId: string, copyId: string, userId: UserId) =>
+  Effect.gen(function* () {
+    if (copyId === sourceId) return null;
+    const [row] = yield* playableSources(userId, eq(source.id, copyId));
+    if (row !== undefined) return sourceSummary(row);
+    const cached = yield* cachedProviderSource(copyId);
+    if (Option.isNone(cached)) return null;
+    const provider = (yield* Providers).get(cached.value.provider);
+    return cachedSummary(cached.value, provider?.name ?? cached.value.provider);
+  });
+
+/**
+ * A signed stream URL for `holder`, of the source or of the copy that plays for it. It stops
+ * working when the device is removed, or when the user's session no longer holds the output.
  */
 export const streamPlan = (
-  sourceId: string,
+  requestedId: string,
   userId: UserId,
   holder: DeviceId | OutputId,
   capabilities: PlaybackCapabilities,
 ) =>
   Effect.gen(function* () {
-    const { audio, choice } = yield* choosePlayableSource(sourceId, userId, capabilities);
+    const { sourceId, audio, choice, possibleMatch } = yield* choosePlayableCopy(
+      requestedId,
+      userId,
+      capabilities,
+    );
 
     const grant = new StreamGrant({
       sourceId,
@@ -320,6 +460,8 @@ export const streamPlan = (
       path: `/stream/${sourceId}?${search}`,
       analysis: yield* sourceAnalysis(sourceId),
       source: audio,
+      copy: yield* copySummary(requestedId, sourceId, userId),
+      possibleMatch,
     });
   });
 
@@ -428,7 +570,12 @@ export const hintPrefetch = (session: string, userId: UserId, sourceIds: Readonl
     yield* cache.hint(session, items.flat());
   });
 
-export const unavailableStatus = { not_found: 404, unsupported_format: 406, account_required: 403 };
+export const unavailableStatus = {
+  not_found: 404,
+  unsupported_format: 406,
+  account_required: 403,
+  failed: 502,
+};
 
 const StreamRequest = Schema.Struct({
   sourceId: Schema.String.check(Schema.isUUID()),
@@ -489,13 +636,22 @@ export const streamRoute = HttpRouter.add(
         ? encodeFlac(media, startMs)
         : remuxAudio(media, choice.format.container, startMs);
 
+    const failed = markFailed(grant.userId, request.sourceId).pipe(
+      Effect.provideService(CopyAttempts, yield* CopyAttempts),
+    );
     const body =
       playable instanceof FilePlayback
         ? convert(playable.path)
-        : yield* providerStream(playable, request.sourceId, startMs, convert);
+        : yield* providerStream(playable, request.sourceId, startMs, convert).pipe(
+            Effect.tapError((error) => (error instanceof ProviderError ? failed : Effect.void)),
+          );
 
+    // A stream that fails before its first byte, for example after a refused media URL, makes
+    // the next plan try another source
+    const progress = { started: false };
     return HttpServerResponse.stream(
       body.pipe(
+        Stream.tap(() => Effect.sync(() => (progress.started = true))),
         // The error text can contain provider URLs or key material, so only its name is logged
         Stream.tapError((error) =>
           Effect.logError("Playback stream failed").pipe(
@@ -504,6 +660,7 @@ export const streamRoute = HttpRouter.add(
               operation: choice.operation,
               error: error.name,
             }),
+            Effect.andThen(Effect.suspend(() => (progress.started ? Effect.void : failed))),
           ),
         ),
       ),

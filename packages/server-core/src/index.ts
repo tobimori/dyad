@@ -25,7 +25,7 @@ import { albumPage, artistPage, listLibraryAlbums, listLibraryArtists } from "./
 import { mediaCacheLayer } from "./media-cache.ts";
 import { liveRoute } from "./live-output.ts";
 import { outputsLayer } from "./outputs.ts";
-import { preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
+import { copyAttemptsLayer, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { receiversLayer } from "./receivers.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
 import { popularitiesLayer, providersLayer } from "./providers.ts";
@@ -34,7 +34,7 @@ import { radio } from "./radio.ts";
 import { search } from "./search.ts";
 import { connectDevice, controlSession, reportPlayback, sessionsLayer } from "./sessions.ts";
 import { heardInSets } from "./sets.ts";
-import { sourceCopies } from "./source-copies.ts";
+import { copySearchesLayer, sourceCopies } from "./source-copies.ts";
 import { listSources } from "./sources.ts";
 import {
   createServerPairingCode,
@@ -78,6 +78,8 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       providerCacheSweepLayer,
       mediaCacheLayer,
       musicbrainzLookupsLayer,
+      copyAttemptsLayer,
+      copySearchesLayer,
       outputsLayer,
       receiversLayer,
       syncHubLayer,

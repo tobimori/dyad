@@ -20,7 +20,7 @@ import {
 import { sourceAnalysis, sourceDjAnalysis } from "./audio-analysis.ts";
 import { Outputs } from "./outputs.ts";
 import { Receivers } from "./receivers.ts";
-import { FilePlayback, choosePlayableSource, providerStream } from "./playback.ts";
+import { FilePlayback, choosePlayableCopy, providerStream } from "./playback.ts";
 import { Ended, EntryFailed, EntryStarted, RenderInput, openSessionRenderer } from "./renderer.ts";
 import { OutputReport } from "./url-output.ts";
 
@@ -38,8 +38,11 @@ const renderCapabilities = new PlaybackCapabilities({
 const renderInput = (userId: UserId, entry: QueueEntry) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const sourceId = entry.source.id;
-    const { playable, choice } = yield* choosePlayableSource(sourceId, userId, renderCapabilities);
+    const { sourceId, playable, choice } = yield* choosePlayableCopy(
+      entry.source.id,
+      userId,
+      renderCapabilities,
+    );
     const convert = (media: string | MediaStream) =>
       choice.operation === "transcode"
         ? encodeFlac(media)

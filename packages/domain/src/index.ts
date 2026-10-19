@@ -416,6 +416,16 @@ export class PlaybackPlan extends Schema.Class<PlaybackPlan>("PlaybackPlan")({
    * `null` from older servers.
    */
   source: Schema.NullOr(AudioQuality).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /**
+   * The other source that plays, because the requested source cannot. `null` when the requested
+   * source plays.
+   */
+  copy: Schema.NullOr(SourceSummary).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /**
+   * `copy` is a search result with the same artist, title and duration, not a source of the same
+   * recording. Clients must label it as a possible match.
+   */
+  possibleMatch: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 }) {}
 
 export class VideoPlan extends Schema.Class<VideoPlan>("VideoPlan")({
@@ -429,7 +439,8 @@ export class VideoPlan extends Schema.Class<VideoPlan>("VideoPlan")({
 export class PlaybackUnavailable extends Schema.TaggedError<PlaybackUnavailable>()(
   "PlaybackUnavailable",
   {
-    reason: Schema.Literals(["not_found", "unsupported_format", "account_required"]),
+    // `failed`: no copy of the recording gave audio, for example after a provider error
+    reason: Schema.Literals(["not_found", "unsupported_format", "account_required", "failed"]),
   },
 ) {}
 

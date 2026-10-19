@@ -348,6 +348,11 @@ export class Provider extends Data.Class<{
    * them as credits. `ProviderSource.uploader` names the account.
    */
   readonly uploads?: true;
+  /**
+   * The provider has no audio of its own: `resolve` gives a `ProviderLink`. The core plays the other
+   * sources of the same recording first.
+   */
+  readonly links?: true;
   /** The tracklists that the provider shows for a source, for example of a DJ set */
   readonly tracklists?: (
     externalId: string,

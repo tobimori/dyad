@@ -109,6 +109,10 @@ const recordingKey = (title: string | null, artist: string | null) => {
 
 const containsPhrase = (text: string, phrase: string) => ` ${text} `.includes(` ${phrase} `);
 
+/** The words of `text` that mark another version of a song, for example `remix` or `live` */
+export const versionWordsOf = (text: string) =>
+  versionMarkers.filter((marker) => containsPhrase(simplifyText(text), marker));
+
 const sum = (values: ReadonlyArray<number>) => values.reduce((total, value) => total + value, 0);
 
 // Maps any sum of plays to -1..1. One recent listen gives 0.5, three give 0.75.

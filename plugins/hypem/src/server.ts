@@ -24,6 +24,7 @@ export const hypemPlugin = new Plugin({
           name: "Hype Machine",
           resolve: (externalId) => resolveItem(externalId).pipe(Effect.provide(services)),
           home: () => readHome(pace).pipe(Effect.provide(services)),
+          links: true,
         }),
       );
     }),

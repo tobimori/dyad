@@ -1,4 +1,4 @@
-import type { AudioFormat, AudioQuality, SourceSummary } from "@dyad/domain";
+import type { AudioFormat, AudioQuality, PlaybackPlan, SourceSummary } from "@dyad/domain";
 
 export const formatTime = (milliseconds: number) => {
   const seconds = Math.floor(milliseconds / 1000);
@@ -61,6 +61,16 @@ export const qualityLabel = (source: AudioQuality | null, output: AudioFormat) =
   if (source === null) return codecName(output.codec);
   const label = audioLabel(source);
   return source.codec === output.codec ? label : `${label} → ${codecName(output.codec)}`;
+};
+
+/**
+ * Where the audio comes from when the server plays another source than the requested one, for
+ * example `from Apple Music · possible match`. `null` when the requested source plays.
+ */
+export const copyLabel = (plan: PlaybackPlan) => {
+  if (plan.copy === null) return null;
+  const from = `from ${plan.copy.providerName ?? plan.copy.provider}`;
+  return plan.possibleMatch ? `${from} · possible match` : from;
 };
 
 export const titleOf = (track: { readonly title: string | null }) => track.title ?? "Unknown title";

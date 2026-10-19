@@ -233,6 +233,9 @@ const makeEngine = (options: {
         const actions = yield* Queue.unbounded<Effect.Effect<void>>();
         const latest = SubscriptionRef.get(session.view);
         const buffers = new Map<EntryId, Buffered>();
+        // Entries that failed once before their audio started. The next plan of the server skips
+        // the source that failed, so one more start can play another source of the recording.
+        const retried = new Set<EntryId>();
         let disconnected = true;
 
         const dropBuffer = (entryId: EntryId) => {
@@ -241,12 +244,12 @@ const makeEngine = (options: {
           return buffered === undefined ? Effect.void : Scope.close(buffered.scope, Exit.void);
         };
 
-        // A failed download starts again, for example after the connection came back
+        // A failed download stays until `failedTrack` or a reconnect drops it, so that a failed
+        // next entry does not ask the server a second time when it starts
         const bufferOf = (entry: QueueEntry) =>
           Effect.gen(function* () {
             const existing = buffers.get(entry.id);
-            if (existing !== undefined && !failed(existing)) return existing;
-            yield* dropBuffer(entry.id);
+            if (existing !== undefined) return existing;
 
             const scope = yield* Scope.make();
             const fetching = yield* fetchEntry(entry).pipe(
@@ -372,10 +375,13 @@ const makeEngine = (options: {
             ? reportState(view)
             : Effect.void;
 
-        const started = (opened: number, loaded: Track) =>
+        // The failure text of the entry before stays until audio plays
+        const started = (opened: number, loaded: Track, copy: string | null) =>
           Effect.gen(function* () {
             if (opened !== token) return;
             track = loaded;
+            callbacks.onFailure(null);
+            if (copy !== null) callbacks.onNotice(`Playing ${copy}`);
             yield* reportState(yield* latest);
           });
 
@@ -390,12 +396,11 @@ const makeEngine = (options: {
             trackScope = scope;
             playing = true;
             audio.start();
-            callbacks.onFailure(null);
 
             const play = Effect.gen(function* () {
               const fetched = yield* Fiber.join(buffered.fetching);
               const loaded = yield* openTrack(audio, options.serverUrl, fetched, startMs);
-              yield* Queue.offer(actions, started(opened, loaded));
+              yield* Queue.offer(actions, started(opened, loaded, fetched.copy));
               yield* loaded.ended;
             });
 
@@ -492,14 +497,25 @@ const makeEngine = (options: {
             yield* Effect.logWarning("Cannot play", describeFailure(cause)).pipe(
               Effect.annotateLogs({ sourceId: entry.source.id, provider: entry.source.provider }),
             );
+            const audible = track !== null;
             yield* stopAudio;
             playing = false;
+            // A later start, for example a jump to the entry, asks the server again
+            yield* dropBuffer(entry.id);
 
             const view = yield* latest;
             if (!view.connected) return yield* advanceOffline("failed", 1);
             // Without the server, the entry did not fail. It waits for the connection.
             const error = Cause.findErrorOption(cause);
             if (Option.exists(error, Predicate.isTagged("RpcClientError"))) return;
+
+            // The server marks a source that failed before its first byte, and the next plan
+            // tries the other sources of the recording. A plan that fails needs no second try.
+            const planFailed = Option.exists(error, Schema.is(PlaybackUnavailable));
+            if (!audible && !planFailed && !retried.has(entry.id)) {
+              retried.add(entry.id);
+              return yield* open(entry, positionMs);
+            }
 
             callbacks.onFailure(failureText(error, titleOf(entry.source)));
             const unavailable = Option.filter(error, Schema.is(PlaybackUnavailable));
