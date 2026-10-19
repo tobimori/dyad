@@ -80,10 +80,41 @@ const linkedPage = (kind: keyof typeof links, itemId: string) =>
       : Option.none();
   });
 
-const firstLink = (itemId: string) =>
+// The ID of the linked track on the Bandcamp or SoundCloud provider, from its page
+const targetOf = (kind: keyof typeof links, page: string) =>
+  Effect.gen(function* () {
+    const link = links[kind];
+    const html = yield* getText(HttpClientRequest.get(page)).pipe(
+      Effect.mapError(() => new ProviderError({ reason: `Cannot read the ${link.name} page` })),
+    );
+    const unknownPage = new ProviderError({ reason: `Unexpected ${link.name} page` });
+
+    if (kind === "sc") {
+      const trackId = html.match(/soundcloud:\/\/sounds:(\d+)/)?.[1];
+      if (trackId === undefined) return yield* unknownPage;
+      return new ProviderLink({ provider: link.provider, externalId: trackId });
+    }
+
+    const attribute = (pattern: RegExp) => html.match(pattern)?.[1]?.replaceAll("&quot;", '"');
+    const band = yield* Schema.decodeUnknownEffect(BandcampBand)(
+      attribute(/data-band="([^"]*)"/),
+    ).pipe(Effect.mapError(() => unknownPage));
+    const item = yield* Schema.decodeUnknownEffect(BandcampItem)(
+      attribute(/name="bc-page-properties" content="([^"]*)"/),
+    ).pipe(Effect.mapError(() => unknownPage));
+    return new ProviderLink({ provider: link.provider, externalId: `${band.id}-${item.item_id}` });
+  });
+
+// The first kind with a page, and the track on its provider
+const firstLink = (pace: Effect.Success<ReturnType<typeof makePacer>>, itemId: string) =>
   Effect.gen(function* () {
     for (const kind of ["bc", "sc"] as const) {
-      if (Option.isSome(yield* linkedPage(kind, itemId))) return Option.some(kind);
+      const page = yield* pace(linkedPage(kind, itemId));
+      if (Option.isSome(page)) {
+        // Bandcamp and SoundCloud pages do not count against Hype Machine
+        const target = yield* targetOf(kind, page.value);
+        return Option.some({ kind, target });
+      }
     }
     return Option.none();
   });
@@ -98,34 +129,50 @@ const readShelf = (
       Effect.mapError(providerError("Hype Machine")),
     );
 
-    // Items without a link that a provider plays are left out
-    const tracks = yield* Effect.forEach(items, (item) =>
-      Effect.gen(function* () {
-        const kind = Option.getOrNull(yield* pace(firstLink(item.itemid)));
-        // Hype Machine gives 30 seconds for a SoundCloud track that plays only as a snippet
-        if (kind === null || (kind === "sc" && item.time <= 30)) return [];
+    // Items without a link that a provider plays are left out. A page that fails leaves out
+    // only its item.
+    const tracks = yield* Effect.forEach(
+      items,
+      (item) =>
+        Effect.gen(function* () {
+          const found = Option.getOrNull(
+            yield* firstLink(pace, item.itemid).pipe(
+              Effect.catchTag("ProviderError", () => Effect.succeed(Option.none())),
+            ),
+          );
+          // Hype Machine gives 30 seconds for a SoundCloud track that plays only as a snippet
+          if (found === null || (found.kind === "sc" && item.time <= 30)) return [];
 
-        const link = links[kind];
-        const source = new ProviderSource({
-          externalId: `${kind}-${item.itemid}`,
-          title: item.title,
-          artist: item.artist === "" ? null : item.artist,
-          album: null,
-          durationMs: item.time > 0 ? item.time * 1000 : null,
-          isrc: null,
-          container: link.container,
-          codec: link.codec,
-          lossless: false,
-          encrypted: false,
-          artworkUrl: item.thumb_url_large,
-          artists: [],
-          explicit: null,
-          bitrate: link.bitrate,
-          uploader: null,
-          albumId: null,
-        });
-        return [new ProviderTrack({ disc: null, number: null, source, streamable: true })];
-      }),
+          const link = links[found.kind];
+          const source = new ProviderSource({
+            externalId: found.target.externalId,
+            title: item.title,
+            artist: item.artist === "" ? null : item.artist,
+            album: null,
+            durationMs: item.time > 0 ? item.time * 1000 : null,
+            isrc: null,
+            container: link.container,
+            codec: link.codec,
+            lossless: false,
+            encrypted: false,
+            artworkUrl: item.thumb_url_large,
+            artists: [],
+            explicit: null,
+            bitrate: link.bitrate,
+            uploader: null,
+            albumId: null,
+          });
+          return [
+            new ProviderTrack({
+              disc: null,
+              number: null,
+              source,
+              streamable: true,
+              provider: found.target.provider,
+            }),
+          ];
+        }),
+      { concurrency: 5 },
     );
     return new ProviderShelf({ title, tracks: tracks.flat(), releases: [] });
   });
@@ -150,35 +197,17 @@ export const readHome = (pace: Effect.Success<ReturnType<typeof makePacer>>) =>
     return [popular, latest];
   });
 
-/** Links to the Bandcamp or SoundCloud source of an item */
+/** Links to the Bandcamp or SoundCloud source of an item, for sources from before shelves linked */
 export const resolveItem = (externalId: string) =>
   Effect.gen(function* () {
     const [kind, , itemId] = yield* Schema.decodeUnknownEffect(ExternalId)(externalId).pipe(
       Effect.mapError(() => new ProviderError({ reason: "Invalid item ID" })),
     );
-    const link = links[kind];
-
     const page = yield* linkedPage(kind, itemId);
     if (Option.isNone(page)) {
-      return yield* new ProviderError({ reason: `Hype Machine has no ${link.name} link anymore` });
+      return yield* new ProviderError({
+        reason: `Hype Machine has no ${links[kind].name} link anymore`,
+      });
     }
-    const html = yield* getText(HttpClientRequest.get(page.value)).pipe(
-      Effect.mapError(() => new ProviderError({ reason: `Cannot read the ${link.name} page` })),
-    );
-    const unknownPage = new ProviderError({ reason: `Unexpected ${link.name} page` });
-
-    if (kind === "sc") {
-      const trackId = html.match(/soundcloud:\/\/sounds:(\d+)/)?.[1];
-      if (trackId === undefined) return yield* unknownPage;
-      return new ProviderLink({ provider: link.provider, externalId: trackId });
-    }
-
-    const attribute = (pattern: RegExp) => html.match(pattern)?.[1]?.replaceAll("&quot;", '"');
-    const band = yield* Schema.decodeUnknownEffect(BandcampBand)(
-      attribute(/data-band="([^"]*)"/),
-    ).pipe(Effect.mapError(() => unknownPage));
-    const item = yield* Schema.decodeUnknownEffect(BandcampItem)(
-      attribute(/name="bc-page-properties" content="([^"]*)"/),
-    ).pipe(Effect.mapError(() => unknownPage));
-    return new ProviderLink({ provider: link.provider, externalId: `${band.id}-${item.item_id}` });
+    return yield* targetOf(kind, page.value);
   });

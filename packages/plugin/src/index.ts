@@ -106,6 +106,14 @@ export class ProviderTrack extends Schema.Class<ProviderTrack>("ProviderTrack")(
   source: ProviderSource,
   /** `false` when the provider does not stream it, for example outside the storefront */
   streamable: Schema.Boolean,
+  /**
+   * The provider of `source` when it is another one, for example a SoundCloud track on a Hype
+   * Machine chart. The core keeps a cached copy of that provider, which has more data.
+   */
+  provider: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 export class ProviderAlbum extends Schema.Class<ProviderAlbum>("ProviderAlbum")({

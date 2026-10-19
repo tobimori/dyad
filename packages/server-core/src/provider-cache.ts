@@ -91,8 +91,12 @@ export const toCachedSource = (provider: string, source: ProviderSource) =>
     return new CachedSource({ sourceId: id, recordingId, provider, isrc, source });
   });
 
-/** Replaces the cached results of `provider` with the same external IDs */
-export const cacheProviderSources = (provider: string, sources: ReadonlyArray<ProviderSource>) =>
+/** Replaces the cached results of `provider` with the same external IDs, or keeps them with `keepKnown` */
+export const cacheProviderSources = (
+  provider: string,
+  sources: ReadonlyArray<ProviderSource>,
+  options: { readonly keepKnown?: true } = {},
+) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const fetchedAt = yield* Clock.currentTimeMillis;
@@ -139,11 +143,12 @@ export const cacheProviderSources = (provider: string, sources: ReadonlyArray<Pr
     yield* db.transaction((tx) =>
       Effect.forEach(
         rows,
-        (row) =>
-          tx
-            .insert(providerItem)
-            .values(row)
-            .onConflictDoUpdate({ target: providerItem.sourceId, set: row }),
+        (row) => {
+          const insert = tx.insert(providerItem).values(row);
+          return options.keepKnown === true
+            ? insert.onConflictDoNothing()
+            : insert.onConflictDoUpdate({ target: providerItem.sourceId, set: row });
+        },
         { discard: true },
       ),
     );

@@ -438,27 +438,36 @@ const localAlbumPage = (ref: AlbumRef) =>
 // Like search results, a track of a page enters the shared catalog only when it is played
 const pageLifetimeMs = 24 * 60 * 60 * 1000;
 
-// Apple pages need a request for each view with more than 10 releases
-const fetchTimeout = "20 seconds";
+// Apple pages need a request for each view with more than 10 releases. A home page shows its
+// cached shelves while it fetches, and Hype Machine paces a request for each track.
+const fetchTimeouts = { artist: "20 seconds", album: "20 seconds", home: "60 seconds" } as const;
 
 export const providerTracks = (
   provider: string,
   providerName: string,
   tracks: ReadonlyArray<ProviderTrack>,
 ) =>
-  Effect.forEach(tracks, (track) =>
-    toCachedSource(provider, track.source).pipe(
-      Effect.map(
-        (item) =>
-          new PageTrack({
-            source: cachedSummary(item, providerName),
-            disc: track.disc,
-            number: track.number,
-            playable: track.streamable,
-          }),
+  Effect.gen(function* () {
+    const providers = yield* Providers;
+    return yield* Effect.forEach(tracks, (track) =>
+      toCachedSource(track.provider ?? provider, track.source).pipe(
+        Effect.map(
+          (item) =>
+            new PageTrack({
+              source: cachedSummary(
+                item,
+                track.provider === null
+                  ? providerName
+                  : (providers.get(track.provider)?.name ?? track.provider),
+              ),
+              disc: track.disc,
+              number: track.number,
+              playable: track.streamable,
+            }),
+        ),
       ),
-    ),
-  );
+    );
+  });
 
 export const releaseCard = (provider: string, release: ProviderRelease) =>
   new AlbumCard({
@@ -498,10 +507,23 @@ export const fetchProviderPage = <A, E, R>(
     const db = yield* Database;
     // Before the tracks, so that every track of the page is at least as new as the page
     const fetchedAt = yield* Clock.currentTimeMillis;
-    const data = yield* fetch.pipe(Effect.timeout(fetchTimeout));
+    const data = yield* fetch.pipe(Effect.timeout(fetchTimeouts[kind]));
+    const tracks = options.tracks(data);
     yield* cacheProviderSources(
       parts.provider,
-      options.tracks(data).map((track) => track.source),
+      tracks.flatMap((track) => (track.provider === null ? [track.source] : [])),
+    );
+    // Tracks of other providers do not replace their richer copies
+    const others = new Set(tracks.flatMap((track) => track.provider ?? []));
+    yield* Effect.forEach(
+      others,
+      (other) =>
+        cacheProviderSources(
+          other,
+          tracks.flatMap((track) => (track.provider === other ? [track.source] : [])),
+          { keepKnown: true },
+        ),
+      { discard: true },
     );
     const values = {
       ...parts,
