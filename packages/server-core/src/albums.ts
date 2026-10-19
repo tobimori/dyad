@@ -6,6 +6,7 @@ import {
   edition,
   editionTrack,
   entityMerge,
+  job,
   recording,
 } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
@@ -553,6 +554,7 @@ export const matchAlbumsOf = (recordingIds: Iterable<string>) =>
  */
 export const assertEdition = (provider: string, data: ProviderAlbum) =>
   Effect.gen(function* () {
+    const db = yield* Database;
     const release = data.release;
     const id = yield* uuidV5(`${provider}:edition:${release.externalId}`);
     const tracks = yield* Effect.forEach(
@@ -572,33 +574,45 @@ export const assertEdition = (provider: string, data: ProviderAlbum) =>
         }),
     );
 
-    const changed = yield* assertFields(
-      "edition",
-      id,
-      "provider",
-      `${provider}:${release.externalId}`,
-      {
-        title: release.title,
-        album_id: yield* uuidV5(`${provider}:album:${release.externalId}`),
-        artist_credit:
-          release.artist === null
-            ? null
-            : { name: release.artist, artists: [{ id: release.artistId, name: release.artist }] },
-        date: release.releaseDate,
-        album_type: { primary: release.primaryType, secondary: release.secondaryTypes },
-        artwork_url: release.artworkUrl,
-        upc: release.upc,
-        label: release.label,
-        tracks,
-      },
-      {},
-    );
-    if (!changed) return;
+    // One transaction, so that a crash does not leave facts without their rows
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        const changed = yield* assertFields(
+          "edition",
+          id,
+          "provider",
+          `${provider}:${release.externalId}`,
+          {
+            title: release.title,
+            album_id: yield* uuidV5(`${provider}:album:${release.externalId}`),
+            artist_credit:
+              release.artist === null
+                ? null
+                : {
+                    name: release.artist,
+                    artists: [{ id: release.artistId, name: release.artist }],
+                  },
+            date: release.releaseDate,
+            // Only a stated type counts
+            album_type:
+              release.primaryType === null && release.secondaryTypes.length === 0
+                ? null
+                : { primary: release.primaryType, secondary: release.secondaryTypes },
+            artwork_url: release.artworkUrl,
+            upc: release.upc,
+            label: release.label,
+            tracks,
+          },
+          {},
+        );
+        if (!changed) return;
 
-    const albums = yield* projectEditions([id]);
-    const editionMerges = yield* matchUpc(id);
-    const albumMerges = (yield* Effect.forEach(albums, matchAlbum)).flat();
-    yield* deriveAlbums({ editions: [], albumMerges, editionMerges });
+        const albums = yield* projectEditions([id]);
+        const editionMerges = yield* matchUpc(id);
+        const albumMerges = (yield* Effect.forEach(albums, matchAlbum)).flat();
+        yield* deriveAlbums({ editions: [], albumMerges, editionMerges });
+      }),
+    );
   });
 
 const editionKind = "catalog.edition";
@@ -614,6 +628,12 @@ export const queueEditions = (provider: string, albumIds: Iterable<string>) =>
     const ids = new Map(
       yield* Effect.forEach(unique, (albumId) =>
         uuidV5(`${provider}:edition:${albumId}`).pipe(Effect.map((id) => [albumId, id] as const)),
+      ),
+    );
+    // A waiting job keeps its backoff; enqueuing it again would run a failing album at once
+    const waiting = new Set(
+      (yield* db.select({ key: job.key }).from(job).where(eq(job.kind, editionKind))).map(
+        (row) => row.key,
       ),
     );
     const known = new Set(
@@ -633,7 +653,9 @@ export const queueEditions = (provider: string, albumIds: Iterable<string>) =>
         .map((row) => row.id),
     );
     yield* Effect.forEach(
-      unique.filter((albumId) => !known.has(ids.get(albumId) ?? "")),
+      unique.filter(
+        (albumId) => !known.has(ids.get(albumId) ?? "") && !waiting.has(`${provider}:${albumId}`),
+      ),
       (albumId) =>
         jobs.enqueue(
           editionKind,
