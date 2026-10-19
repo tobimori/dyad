@@ -5,9 +5,13 @@ import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo } from "react";
 
 import { accountHint, useLibraryStatus } from "../component/library-notice.tsx";
+import { useListScreen } from "../component/list-screen.tsx";
 import { AlbumRow, RowList, headed, selectableRows, trackRows } from "../component/row-list.tsx";
+import type { Row, SelectableRow } from "../component/row-list.tsx";
 import { ListTitle } from "../component/track-list.tsx";
 import { Section, SectionView } from "../context/routes.ts";
+import { useReload } from "../context/screen-app.ts";
+import type { ScreenApp } from "../context/screen-app.ts";
 import { useTheme } from "../theme/theme.ts";
 import { statusText } from "./page/page-view.tsx";
 
@@ -63,13 +67,42 @@ const homeRows = (page: HomePage) => {
   ];
 };
 
+function HomeScreen(props: {
+  readonly app: ScreenApp;
+  readonly rows: ReadonlyArray<Row>;
+  readonly items: ReadonlyArray<SelectableRow>;
+  /** Shown above the charts until the user played something */
+  readonly hint: string | null;
+  readonly empty: string;
+}) {
+  const theme = useTheme();
+  const list = useListScreen(props.app, { title, items: props.items });
+  return (
+    <>
+      <ListTitle title={title} detail="" />
+      {props.hint !== null && (
+        <text fg={theme.muted} paddingX={1} marginBottom={1} flexShrink={0}>
+          {props.hint}
+        </text>
+      )}
+      <RowList
+        rows={props.rows}
+        selected={props.items[list.selected]?.key ?? null}
+        playingId={props.app.player.current?.source.id ?? null}
+        empty={props.empty}
+        onSelect={list.selectRow}
+        onActivate={list.activateRow}
+      />
+    </>
+  );
+}
+
 export const home = new Section({
   id: "home",
   title,
   order: 0,
   command: null,
   useView: (app) => {
-    const theme = useTheme();
     const result = useAtomValue(app.atoms.homePage);
     const status = useLibraryStatus(app.atoms);
     const refresh = useAtomRefresh(app.atoms.homePage);
@@ -99,26 +132,18 @@ export const home = new Section({
       onSuccess: () => hint,
     });
 
+    const showsHint = AsyncResult.isSuccess(result) && ownShelves === 0 && rows.length > 0;
+    useReload(app, refresh);
     return new SectionView({
-      items,
-      refresh,
-      render: (list) => (
-        <>
-          <ListTitle title={title} detail="" />
-          {AsyncResult.isSuccess(result) && ownShelves === 0 && rows.length > 0 && (
-            <text fg={theme.muted} paddingX={1} marginBottom={1} flexShrink={0}>
-              {hint}
-            </text>
-          )}
-          <RowList
-            rows={rows}
-            selected={items[list.selected]?.key ?? null}
-            playingId={app.player.current?.source.id ?? null}
-            empty={empty}
-            onSelect={list.selectRow}
-            onActivate={list.activateRow}
-          />
-        </>
+      count: items.length,
+      render: () => (
+        <HomeScreen
+          app={app}
+          rows={rows}
+          items={items}
+          hint={showsHint ? hint : null}
+          empty={empty}
+        />
       ),
     });
   },

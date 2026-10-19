@@ -2,9 +2,12 @@ import type { InputRenderable } from "@opentui/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 
+import { useListScreen } from "../component/list-screen.tsx";
 import { TrackList, listItems, playsSource } from "../component/track-list.tsx";
+import type { TrackItem } from "../component/track-list.tsx";
 import { commands, useCommands } from "../context/keymap.ts";
 import { Section, SectionView } from "../context/routes.ts";
+import type { ScreenApp } from "../context/screen-app.ts";
 import { useTheme } from "../theme/theme.ts";
 
 /** It has its own keys, so that all letters stay text while it has focus */
@@ -60,6 +63,37 @@ function SearchField(props: {
 
 const title = "Search";
 
+function SearchScreen(props: {
+  readonly app: ScreenApp;
+  readonly items: ReadonlyArray<TrackItem>;
+  readonly input: RefObject<InputRenderable | null>;
+}) {
+  const { app, input } = props;
+  const list = useListScreen(app, { title, items: props.items });
+
+  const { status, query } = app.search;
+  return (
+    <>
+      <SearchField
+        input={input}
+        query={query}
+        onInput={app.search.search}
+        onLeave={() => app.main.current?.focus()}
+      />
+      <TrackList
+        title={status === null ? title : `${title}  ·  ${status}`}
+        items={props.items}
+        selected={list.selected}
+        playing={playsSource(app.player.current?.source.id)}
+        historyRows={0}
+        empty={query.trim() === "" ? "Type to search the library and the providers" : ""}
+        onSelect={list.select}
+        onActivate={list.activate}
+      />
+    </>
+  );
+}
+
 export const search = new Section({
   id: "search",
   title,
@@ -78,32 +112,10 @@ export const search = new Section({
       setFocus(false);
     }, [focus]);
 
-    const status = app.search.status;
-    const query = app.search.query;
-
     return new SectionView({
-      items,
+      count: items.length,
       focus: () => setFocus(true),
-      render: (list) => (
-        <>
-          <SearchField
-            input={input}
-            query={query}
-            onInput={app.search.search}
-            onLeave={app.focusList}
-          />
-          <TrackList
-            title={status === null ? title : `${title}  ·  ${status}`}
-            items={items}
-            selected={list.selected}
-            playing={playsSource(app.player.current?.source.id)}
-            historyRows={0}
-            empty={query.trim() === "" ? "Type to search the library and the providers" : ""}
-            onSelect={list.select}
-            onActivate={list.activate}
-          />
-        </>
-      ),
+      render: () => <SearchScreen app={app} items={items} input={input} />,
     });
   },
 });

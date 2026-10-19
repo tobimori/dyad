@@ -1,16 +1,35 @@
 import { formatDuration, songLine, sourceLabel, titleOf } from "@dyad/client-runtime";
 import type { QueueEntry, SourceSegment } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { Action } from "../component/dialog-actions.tsx";
+import { useItemCommands } from "../component/list-screen.tsx";
 import { scrollOffset, useRowClick } from "../component/track-list.tsx";
+import { SegmentItem, SongItem } from "../context/action-items.ts";
+import { commands } from "../context/keymap.ts";
+import type { Command } from "../context/keymap.ts";
+import { useScreenCommands } from "../context/screen-app.ts";
+import type { ScreenApp } from "../context/screen-app.ts";
+import type { usePlayer } from "../playback/use-player.ts";
 import { useTheme } from "../theme/theme.ts";
+import { useToast } from "../ui/toast.tsx";
 import { fit } from "../ui/format.ts";
+import { Backdrop } from "../visualizer/backdrop.tsx";
 
 /** `Artist – Title` of a track in a DJ set */
 export const segmentLine = (segment: SourceSegment) =>
   segment.artist === null ? segment.title : `${segment.artist} – ${segment.title}`;
+
+const upNextRows = 20;
+const pageStep = 10;
+
+/** The entries after the one that plays */
+export const upNextOf = (player: ReturnType<typeof usePlayer>) => {
+  const current = player.currentIndex;
+  return current === null ? [] : player.entries.slice(current + 1, current + 1 + upNextRows);
+};
 
 // The time column fits `12:34:56`
 const segmentTimeWidth = 8;
@@ -291,5 +310,106 @@ export function NowPlayingView(props: {
         )}
       </box>
     </box>
+  );
+}
+
+/** In a DJ set, the actions of the selected track of the set come before the actions of the set */
+export function NowPlayingScreen(props: { readonly app: ScreenApp }) {
+  const app = props.app;
+  const { player, backdrop, segments } = app;
+  const toast = useToast();
+  // `null` follows the track that plays
+  const [selection, setSelection] = useState<number | null>(null);
+  useEffect(() => setSelection(null), [player.current?.id]);
+  const selected = selection ?? Math.max(0, app.currentSegment);
+
+  const playSegment = (index: number) => {
+    const segment = segments[index];
+    if (segment === undefined) return;
+    setSelection(index);
+    if (segment.startMs === null) toast("notice", "The tracklist gives no time for this track");
+    else player.seekTo(segment.startMs);
+  };
+
+  const segmentActions = () => {
+    const segment = segments[selected];
+    if (segment === undefined) return [];
+    return [
+      new Action({
+        command: commands.playSegment,
+        label: "Play from this track",
+        run: () => playSegment(selected),
+      }),
+      ...app.itemActions(new SegmentItem({ segment })),
+    ];
+  };
+
+  const itemCommands = useItemCommands(app, {
+    item: () => {
+      const current = player.current;
+      if (current === undefined) return undefined;
+      const { source, context } = current;
+      return new SongItem({ source, context, play: () => {}, extra: [] });
+    },
+    title: "Now playing",
+    before: segmentActions,
+  });
+
+  const selectSegment = (index: number) =>
+    setSelection(Math.max(0, Math.min(segments.length - 1, index)));
+  const segmentCommands: ReadonlyArray<readonly [Command, () => void]> =
+    segments.length === 0
+      ? []
+      : [
+          [commands.playSegment, () => playSegment(selected)],
+          [commands.up, () => selectSegment(selected - 1)],
+          [commands.down, () => selectSegment(selected + 1)],
+          [commands.pageUp, () => selectSegment(selected - pageStep)],
+          [commands.pageDown, () => selectSegment(selected + pageStep)],
+          [commands.first, () => selectSegment(0)],
+          [commands.last, () => selectSegment(segments.length - 1)],
+        ];
+
+  useScreenCommands(app, [
+    ...segmentCommands,
+    [commands.close, app.router.back],
+    [commands.actions, itemCommands.openActions],
+    ...backdrop.commands,
+    ...itemCommands.keys,
+  ]);
+
+  return (
+    <Backdrop
+      style={backdrop.style}
+      overlay={backdrop.overlay}
+      preset={backdrop.preset}
+      source={player.current?.source}
+      artwork={app.artwork}
+      playing={player.state === "playing"}
+      tap={player.tap}
+      positionMs={player.position}
+      connection={app.client}
+      serverUrl={app.serverUrl}
+      delayMs={backdrop.delayMs}
+      onPresetEnd={backdrop.nextPreset}
+      onVideoFailure={backdrop.videoFailed}
+    >
+      {backdrop.overlay !== "none" && (
+        <NowPlayingView
+          entry={player.current}
+          segments={segments}
+          currentSegment={app.currentSegment}
+          selectedSegment={selected}
+          onSelectSegment={setSelection}
+          onPlaySegment={playSegment}
+          upNext={upNextOf(player)}
+          overlay={backdrop.overlay}
+          video={app.cover.video}
+          cover={app.cover.render}
+          width={app.width}
+          height={app.bodyHeight}
+        />
+      )}
+    </Backdrop>
   );
 }

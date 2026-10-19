@@ -1,4 +1,4 @@
-import { songLine, titleOf } from "@dyad/client-runtime";
+import { songLine } from "@dyad/client-runtime";
 import type {
   Downloads,
   ListenFeed,
@@ -6,19 +6,18 @@ import type {
   ServerAtoms,
   SessionClient,
 } from "@dyad/client-runtime";
-import { AlbumPage, ArtistPage, segmentIndexAt } from "@dyad/domain";
-import type { AlbumRef, ArtistRef, DownloadQuality, SourceSegment } from "@dyad/domain";
+import { segmentIndexAt } from "@dyad/domain";
+import type { AlbumRef, ArtistRef, DownloadQuality } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
 import type { BoxRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AccountsDialog } from "./component/dialog-accounts.tsx";
-import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
 import { DownloadsDialog, useDownloadAction } from "./component/dialog-downloads.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
@@ -29,52 +28,35 @@ import { PluginsDialog } from "./component/dialog-plugins.tsx";
 import { ProviderOrderDialog } from "./component/dialog-provider-order.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
-import {
-  AlbumRow,
-  ArtistRow,
-  PlaylistRow,
-  TrackRow,
-  selectableRows,
-} from "./component/row-list.tsx";
-import type { SelectableRow } from "./component/row-list.tsx";
 import { Sidebar } from "./component/sidebar.tsx";
-import { ListItem, UnavailableItem, playsSource } from "./component/track-list.tsx";
-import type { TrackItem } from "./component/track-list.tsx";
 import { useArtwork } from "./component/use-artwork.ts";
 import { commands, useCommands } from "./context/keymap.ts";
 import type { Command } from "./context/keymap.ts";
 import type { PluginHost } from "./context/plugin-host.ts";
-import {
-  ActionApp,
-  AlbumItem,
-  ArtistItem,
-  PlaylistItem,
-  SegmentItem,
-  SongItem,
-} from "./context/action-items.ts";
+import { ActionApp } from "./context/action-items.ts";
+import type { SongItem } from "./context/action-items.ts";
 import { useItemActions } from "./context/item-actions.ts";
 import { Route, sectionPlace, useRouter } from "./context/router.ts";
 import type { Place } from "./context/router.ts";
 import type { Section } from "./context/routes.ts";
+import { ScreenApp } from "./context/screen-app.ts";
 import { useCoverAccent } from "./context/theme-provider.tsx";
 import { useSearch } from "./context/use-search.ts";
 import type { Engine } from "./playback/engine.ts";
 import { usePlayer } from "./playback/use-player.ts";
 import { useSegments } from "./playback/use-segments.ts";
-import { NowPlayingPanel, NowPlayingView } from "./routes/now-playing.tsx";
-import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
-import { PlaylistView, usePlaylist } from "./routes/page/playlist-view.tsx";
+import { NowPlayingPanel, NowPlayingScreen, upNextOf } from "./routes/now-playing.tsx";
+import { PageScreen } from "./routes/page/page-view.tsx";
+import { PlaylistScreen } from "./routes/page/playlist-view.tsx";
 import { sections, startSection } from "./routes/sections.ts";
 import { useTheme } from "./theme/theme.ts";
 import { useDialog } from "./ui/dialog.tsx";
 import { useToast } from "./ui/toast.tsx";
 import { useCoverVideo } from "./video/video-view.tsx";
-import { Backdrop, useBackdrop } from "./visualizer/backdrop.tsx";
+import { useBackdrop } from "./visualizer/backdrop.tsx";
 
 const sidebarMinWidth = 100;
 const panelMinWidth = 120;
-const pageStep = 10;
-const upNextRows = 20;
 
 export function App(props: {
   readonly serverUrl: string;
@@ -127,10 +109,6 @@ export function App(props: {
   const artwork = useArtwork(player.current?.source.artworkUrl ?? null);
   const segments = useSegments(props.atoms, player.current?.source.id);
   const currentSegment = segmentIndexAt(segments, player.position());
-  // `null` follows the track that plays
-  const [segmentSelection, setSegmentSelection] = useState<number | null>(null);
-  useEffect(() => setSegmentSelection(null), [player.current?.id]);
-  const selectedSegment = segmentSelection ?? Math.max(0, currentSegment);
   useCoverAccent(artwork?.accent ?? null);
 
   // A saved section that the app no longer has opens the start section
@@ -152,45 +130,16 @@ export function App(props: {
   const showNowPlaying = () => {
     if (!nowPlaying) routes.push(Route.cases.NowPlaying.make({}));
   };
-  const page = usePage(props.atoms, route);
-  const playlist = usePlaylist(props.atoms, route);
   const playlistActions = usePlaylistActions({
     atoms: props.atoms,
     replica: props.replica,
     run: props.run,
   });
-  const libraryMarks = useLibraryMarks({
-    replica: props.replica,
-    run: props.run,
-  });
-  const playlistSummaries = useAtomValue(props.atoms.playlists);
-  const shownPlaylist =
-    Route.guards.Playlist(route) && AsyncResult.isSuccess(playlistSummaries)
-      ? playlistSummaries.value.find((candidate) => candidate.id === route.id)
-      : undefined;
+  const libraryMarks = useLibraryMarks({ replica: props.replica, run: props.run });
 
   const main = useRef<BoxRenderable | null>(null);
   const [downloadQuality, setDownloadQuality] = useState(props.downloadQuality);
   const backdrop = useBackdrop(player.current?.source);
-
-  // `sections` never changes, so each render calls the same hooks in the same order
-  const views = new Map(
-    sections.map(
-      (entry) =>
-        [
-          entry,
-          entry.useView({
-            atoms: props.atoms,
-            player,
-            search,
-            focusList: () => main.current?.focus(),
-            playlistActions,
-          }),
-        ] as const,
-    ),
-  );
-  // A route holds only sections from `sections`
-  const sectionView = views.get(section)!;
 
   // The keys of the list work only while the main box has focus, so the focus must not get lost
   useEffect(() => {
@@ -204,11 +153,8 @@ export function App(props: {
     };
   }, []);
 
-  const reload = () => {
-    for (const entry of views.values()) entry.refresh?.();
-    page.refresh();
-    playlist.refresh();
-  };
+  const [reloads, setReloads] = useState(0);
+  const reload = () => setReloads((count) => count + 1);
 
   const previousStatus = useRef(status);
   useEffect(() => {
@@ -227,31 +173,6 @@ export function App(props: {
   const title = player.current === undefined ? "dyad" : `${songLine(player.current.source)} · dyad`;
   useEffect(() => renderer.setTerminalTitle(title), [title]);
 
-  // The footer renders twice a second, so the page keeps its rows between renders
-  const pageItems = useMemo(
-    () => (AsyncResult.isSuccess(page.result) ? pageRows(page.result.value) : []),
-    [page.result],
-  );
-  const routeItems = () => {
-    if (Route.guards.Section(route)) return sectionView.items;
-    if (Route.guards.Playlist(route)) return playlist.items;
-    return selectableRows(pageItems);
-  };
-  const items: ReadonlyArray<TrackItem | SelectableRow> = routeItems();
-
-  const indexOfSelection = () =>
-    Math.max(
-      0,
-      items.findIndex((item) => item.key === routes.selected()),
-    );
-  const selectedIndex = indexOfSelection();
-  const selectedItem = items[selectedIndex];
-
-  const select = (index: number) => {
-    const item = items[Math.max(0, Math.min(items.length - 1, index))];
-    if (item !== undefined) routes.select(item.key);
-  };
-
   const openArtist = (ref: ArtistRef, name: string | null) =>
     routes.push(Route.cases.Artist.make({ ref, hint: name ?? "Unknown artist" }));
 
@@ -260,43 +181,6 @@ export function App(props: {
 
   const openPlaylist = (id: string, name: string) =>
     routes.push(Route.cases.Playlist.make({ id, hint: name }));
-
-  const playRow = (row: TrackRow) => {
-    const index = row.section.findIndex((source) => source.id === row.track.source.id);
-    if (!row.track.playable || index === -1) {
-      toast("notice", `${titleOf(row.track.source)} cannot play`);
-      return;
-    }
-    player.playList(row.section, index, row.context);
-  };
-
-  const activate = (index: number) => {
-    const item = items[index];
-
-    if (item instanceof ListItem && Route.guards.Section(route) && sectionView.play !== undefined) {
-      sectionView.play(index);
-      return;
-    }
-    if (item instanceof ListItem) {
-      const tracks = items.filter((entry) => entry instanceof ListItem);
-      player.playList(
-        tracks.map((entry) => entry.source),
-        tracks.indexOf(item),
-        item.context,
-      );
-      return;
-    }
-
-    if (item instanceof UnavailableItem) {
-      toast("notice", `${titleOf(item.entry)} cannot play: ${item.label}`);
-    }
-    if (item instanceof TrackRow) playRow(item);
-    if (item instanceof AlbumRow) {
-      openAlbum(item.album.ref, item.album.title, item.album.artistRef);
-    }
-    if (item instanceof ArtistRow) openArtist(item.artist.ref, item.artist.name);
-    if (item instanceof PlaylistRow) openPlaylist(item.playlist.id, item.playlist.name);
-  };
 
   const openSection = (target: Section) => routes.open(target.id);
 
@@ -324,34 +208,6 @@ export function App(props: {
     const target = sectionOf(commands.search);
     if (target !== undefined) openSection(target);
     search.search(query);
-  };
-
-  const actionTarget = () => {
-    const index = indexOfSelection();
-    const item = items[index];
-    const play = () => activate(index);
-
-    if (!nowPlaying && item instanceof ListItem) {
-      return new SongItem({
-        source: item.source,
-        context: item.context,
-        play,
-        extra: Route.guards.Section(route) ? (sectionView.actions?.(index) ?? []) : [],
-      });
-    }
-    if (!nowPlaying && item instanceof TrackRow) {
-      return new SongItem({ source: item.track.source, context: item.context, play, extra: [] });
-    }
-    if (!nowPlaying && item !== undefined) return item;
-
-    const current = player.current;
-    if (current === undefined) return undefined;
-    return new SongItem({
-      source: current.source,
-      context: current.context,
-      play: () => {},
-      extra: sectionView.actions?.(null) ?? [],
-    });
   };
 
   // The video plays with its own audio, so a song that does not play yet starts first
@@ -383,144 +239,6 @@ export function App(props: {
   });
   const itemActions = useItemActions(actionApp);
   const downloadAction = useDownloadAction(actionApp);
-
-  const pageSources = Route.guards.Playlist(route)
-    ? playlist.items.flatMap((item) => (item instanceof ListItem ? [item.source] : []))
-    : pageItems.flatMap((row) =>
-        row instanceof TrackRow && row.track.playable ? [row.track.source] : [],
-      );
-  const pageContext = () => {
-    if (Route.guards.Album(route)) return "album";
-    if (Route.guards.Artist(route)) return "artist";
-    if (Route.guards.Playlist(route)) return "playlist";
-    return "library";
-  };
-
-  const pageDownloadActions = () => {
-    const sourceIds = pageSources.map((source) => source.id);
-    if (Route.guards.Album(route)) {
-      const album = { kind: "album" as const, id: route.ref, title: route.hint, sourceIds };
-      return downloadAction(album, commands.downloadAll, commands.removeAllDownload);
-    }
-    if (Route.guards.Playlist(route)) {
-      const playlist = { kind: "playlist" as const, id: route.id, title: route.hint, sourceIds };
-      return downloadAction(playlist, commands.downloadAll, commands.removeAllDownload);
-    }
-    return [];
-  };
-
-  // The marks of the shown album or artist
-  const pageMarks = (loaded: AlbumPage | ArtistPage | null) => {
-    if (Schema.is(AlbumPage)(loaded) && loaded.albumId !== null) {
-      const tracks = loaded.tracks.flatMap((track) =>
-        track.edition === null ? [track.source] : [],
-      );
-      return libraryMarks.album(loaded.albumId, loaded.album?.title ?? "the album", tracks);
-    }
-    if (Schema.is(ArtistPage)(loaded) && loaded.artistId !== null) {
-      return libraryMarks.artist(loaded.artistId, loaded.name ?? "the artist");
-    }
-    return [];
-  };
-
-  const pageActions = () => {
-    const loaded = AsyncResult.isSuccess(page.result) ? page.result.value : null;
-    const artist = loaded !== null && Schema.is(ArtistPage)(loaded) ? loaded.name : null;
-    const radio =
-      Route.guards.Artist(route) && artist !== null
-        ? itemActions(new ArtistItem({ name: artist }))
-        : [];
-    const marks = pageMarks(loaded);
-    const pageRoute = Route.guards.Artist(route) || Route.guards.Album(route);
-    if (!(pageRoute || Route.guards.Playlist(route)) || pageSources.length === 0) {
-      return [...radio, ...marks];
-    }
-
-    return [
-      ...marks,
-      new Action({
-        command: commands.playAll,
-        label: "Play all",
-        run: () => player.playList(pageSources, 0, pageContext()),
-      }),
-      new Action({
-        command: commands.shuffleAll,
-        label: "Shuffle",
-        run: () => player.shuffleList(pageSources, pageContext()),
-      }),
-      new Action({
-        command: commands.addAllToQueue,
-        label: "Add all to queue",
-        run: () => player.addToQueue(pageSources, pageContext()),
-      }),
-      ...pageDownloadActions(),
-    ];
-  };
-
-  const playSegment = (index: number) => {
-    const segment = segments[index];
-    if (segment === undefined) return;
-    setSegmentSelection(index);
-    if (segment.startMs === null) toast("notice", "The tracklist gives no time for this track");
-    else player.seekTo(segment.startMs);
-  };
-
-  const segmentActions = (segment: SourceSegment) => [
-    new Action({
-      command: commands.playSegment,
-      label: "Play from this track",
-      run: () => playSegment(segments.indexOf(segment)),
-    }),
-    ...itemActions(new SegmentItem({ segment })),
-  ];
-
-  const shownSegment = nowPlaying ? segments[selectedSegment] : undefined;
-
-  // In a DJ set, the actions of the selected track come before the actions of the set
-  const actionsFor = (target: ReturnType<typeof actionTarget>) => {
-    const inSet = shownSegment === undefined ? [] : segmentActions(shownSegment);
-    if (target instanceof SongItem) return [...inSet, ...itemActions(target)];
-    if (target instanceof AlbumRow) return itemActions(new AlbumItem({ album: target.album }));
-    if (target instanceof PlaylistRow) {
-      return itemActions(new PlaylistItem({ playlist: target.playlist, onDelete: () => {} }));
-    }
-    if (target instanceof ArtistRow)
-      return itemActions(new ArtistItem({ name: target.artist.name }));
-    return [];
-  };
-
-  const actionTitle = (target: ReturnType<typeof actionTarget>) => {
-    if (target instanceof SongItem) return songLine(target.source);
-    if (target instanceof AlbumRow) return target.album.title;
-    if (target instanceof ArtistRow) return target.artist.name;
-    return titleOfRoute(route);
-  };
-
-  const runAction = (command: Command) => {
-    actionsFor(actionTarget())
-      .find((action) => action.command === command)
-      ?.run();
-  };
-
-  const openActions = () => {
-    const target = actionTarget();
-    const manage =
-      !nowPlaying && shownPlaylist !== undefined
-        ? playlistActions.manage(shownPlaylist, routes.back)
-        : [];
-    const removal = entryCommands.some(([command]) => command === commands.removeEntry)
-      ? [
-          new Action({
-            command: commands.removeEntry,
-            label: "Remove from the playlist",
-            run: () => editEntry(removeEntry),
-          }),
-        ]
-      : [];
-    const actions = [...actionsFor(target), ...removal, ...pageActions(), ...manage];
-    if (actions.length === 0) return;
-    dialog.push(<ActionsDialog title={actionTitle(target)} actions={actions} />);
-  };
 
   const quit = () => {
     search.cancel();
@@ -619,193 +337,16 @@ export function App(props: {
     [commands.volumeDown, () => player.changeVolume(-1)],
     [commands.shuffle, player.toggleShuffle],
     [commands.repeat, player.cycleRepeat],
-    [commands.playNext, () => runAction(commands.playNext)],
-    [commands.addToQueue, () => runAction(commands.addToQueue)],
-    [commands.addToPlaylist, () => runAction(commands.addToPlaylist)],
-    [commands.saveToLibrary, () => runAction(commands.saveToLibrary)],
-    [commands.favorite, () => runAction(commands.favorite)],
-    [
-      commands.watchVideo,
-      () => {
-        const target = actionTarget();
-        const current = player.current;
-        if (target instanceof SongItem) watchVideo(target);
-        else if (current !== undefined) {
-          watchVideo(
-            new SongItem({
-              source: current.source,
-              context: current.context,
-              play: () => {},
-              extra: [],
-            }),
-          );
-        } else toast("notice", "Nothing is playing");
-      },
-    ],
   ];
 
-  const opensCard =
-    selectedItem instanceof AlbumRow ||
-    selectedItem instanceof ArtistRow ||
-    selectedItem instanceof PlaylistRow;
-  const listCommands: ReadonlyArray<readonly [Command, () => void]> = [
-    [
-      opensCard ? commands.open : commands.play,
-      () => {
-        if (selectedItem !== undefined) activate(indexOfSelection());
-      },
-    ],
-    [commands.actions, openActions],
-    ...(routes.canGoBack ? [[commands.back, routes.back] as const] : []),
-    [commands.up, () => select(indexOfSelection() - 1)],
-    [commands.down, () => select(indexOfSelection() + 1)],
-    [commands.pageUp, () => select(indexOfSelection() - pageStep)],
-    [commands.pageDown, () => select(indexOfSelection() + pageStep)],
-    [commands.first, () => select(0)],
-    [commands.last, () => select(items.length - 1)],
-  ];
-
-  // A playlist can have a recording twice, so its items have the entry IDs as keys
-  const editEntry = (edit: (entryId: string) => void) => {
-    const entry = items[selectedIndex];
-    if (entry !== undefined) edit(entry.key);
-  };
-  const removeEntry = (entryId: string) => {
-    const neighbor = items[selectedIndex + 1] ?? items[selectedIndex - 1];
-    if (neighbor !== undefined) routes.select(neighbor.key);
-    props.run(props.replica.removePlaylistEntry({ entryId }));
-  };
-  const entryCommands: ReadonlyArray<readonly [Command, () => void]> =
-    Route.guards.Playlist(route) && shownPlaylist !== undefined
-      ? [
-          [commands.removeEntry, () => editEntry(removeEntry)],
-          [
-            commands.moveEntryUp,
-            () =>
-              editEntry((id) =>
-                props.run(
-                  props.replica.movePlaylistEntry({
-                    playlistId: route.id,
-                    entryId: id,
-                    direction: -1,
-                  }),
-                ),
-              ),
-          ],
-          [
-            commands.moveEntryDown,
-            () =>
-              editEntry((id) =>
-                props.run(
-                  props.replica.movePlaylistEntry({
-                    playlistId: route.id,
-                    entryId: id,
-                    direction: 1,
-                  }),
-                ),
-              ),
-          ],
-          [
-            commands.renamePlaylist,
-            () =>
-              playlistActions
-                .manage(shownPlaylist, routes.back)
-                .find((action) => action.command === commands.renamePlaylist)
-                ?.run(),
-          ],
-        ]
-      : [];
-
-  const sectionKeys = Route.guards.Section(route) ? (sectionView.keys ?? []) : [];
-  const sectionCommands = sectionKeys.map(
-    ([command, run]) => [command, () => run(indexOfSelection())] as const,
-  );
-
-  const selectSegment = (index: number) =>
-    setSegmentSelection(Math.max(0, Math.min(segments.length - 1, index)));
-  const segmentCommands: ReadonlyArray<readonly [Command, () => void]> =
-    nowPlaying && segments.length > 0
-      ? [
-          [commands.playSegment, () => playSegment(selectedSegment)],
-          [commands.up, () => selectSegment(selectedSegment - 1)],
-          [commands.down, () => selectSegment(selectedSegment + 1)],
-          [commands.pageUp, () => selectSegment(selectedSegment - pageStep)],
-          [commands.pageDown, () => selectSegment(selectedSegment + pageStep)],
-          [commands.first, () => selectSegment(0)],
-          [commands.last, () => selectSegment(segments.length - 1)],
-        ]
-      : [];
-
-  const viewCommands: ReadonlyArray<readonly [Command, () => void]> = !nowPlaying
-    ? [...sectionCommands, ...entryCommands, ...listCommands]
-    : [
-        ...segmentCommands,
-        [commands.close, routes.back],
-        [commands.actions, openActions],
-        ...backdrop.commands,
-      ];
-
-  // The footer shows the hints in this order
-  useCommands([...viewCommands, ...playbackCommands], { target: main, targetMode: "focus" });
+  // The keys of the screen come first
+  useCommands(playbackCommands, { target: main, targetMode: "focus" });
 
   const showSidebar = screen.width >= sidebarMinWidth;
   const showPanel = screen.width >= panelMinWidth && screen.height >= 24;
   const panelWidth = Math.min(50, Math.floor(screen.width * 0.32));
   const showHeader = !nowPlaying || backdrop.overlay !== "none";
   const bodyHeight = screen.height - (showHeader ? 4 : 3);
-
-  const current = player.currentIndex;
-  const upNext =
-    current === null ? [] : player.entries.slice(current + 1, current + 1 + upNextRows);
-  const openNowPlaying = showNowPlaying;
-
-  const selectRow = (row: SelectableRow) => routes.select(row.key);
-  const activateRow = (row: SelectableRow) => {
-    routes.select(row.key);
-    activate(items.findIndex((item) => item.key === row.key));
-  };
-
-  const content = () => {
-    if (Route.guards.Section(route)) {
-      return sectionView.render({
-        selected: selectedIndex,
-        select,
-        activate,
-        selectRow,
-        activateRow,
-      });
-    }
-
-    if (Route.guards.Playlist(route)) {
-      return (
-        <PlaylistView
-          atoms={props.atoms}
-          route={route}
-          breadcrumb={breadcrumb}
-          result={playlist.result}
-          items={playlist.items}
-          selected={selectedIndex}
-          playing={playsSource(player.current?.source.id)}
-          onSelect={select}
-          onActivate={activate}
-        />
-      );
-    }
-
-    if (!Route.guards.Artist(route) && !Route.guards.Album(route)) return null;
-    return (
-      <PageView
-        breadcrumb={breadcrumb}
-        hint={route.hint}
-        result={page.result}
-        rows={pageItems}
-        selected={selectedItem?.key ?? null}
-        playingId={player.current?.source.id ?? null}
-        onSelect={selectRow}
-        onActivate={activateRow}
-      />
-    );
-  };
 
   const cover = useCoverVideo({
     source: player.current?.source,
@@ -817,6 +358,42 @@ export function App(props: {
     connection: client,
     serverUrl: props.serverUrl,
   });
+
+  const app = new ScreenApp({
+    serverUrl: props.serverUrl,
+    atoms: props.atoms,
+    replica: props.replica,
+    client,
+    run: props.run,
+    player,
+    search,
+    router: routes,
+    breadcrumb,
+    main,
+    segments,
+    currentSegment,
+    downloads: props.downloads,
+    itemActions,
+    downloadAction,
+    playlistActions,
+    libraryMarks,
+    backdrop,
+    showNowPlaying,
+    artwork,
+    cover,
+    width: screen.width,
+    bodyHeight,
+    reloads,
+    openArtist,
+    openAlbum,
+    openPlaylist,
+    watchVideo,
+  });
+
+  // `sections` never changes, so each render calls the same hooks in the same order
+  const views = new Map(sections.map((entry) => [entry, entry.useView(app)] as const));
+  // A route holds only sections from `sections`
+  const sectionView = views.get(section)!;
 
   return (
     <box
@@ -835,62 +412,35 @@ export function App(props: {
           status={status}
         />
       )}
-      {nowPlaying && (
-        <Backdrop
-          style={backdrop.style}
-          overlay={backdrop.overlay}
-          preset={backdrop.preset}
-          source={player.current?.source}
-          artwork={artwork}
-          playing={player.state === "playing"}
-          tap={player.tap}
-          positionMs={player.position}
-          connection={client}
-          serverUrl={props.serverUrl}
-          delayMs={backdrop.delayMs}
-          onPresetEnd={backdrop.nextPreset}
-          onVideoFailure={backdrop.videoFailed}
-        >
-          {backdrop.overlay !== "none" && (
-            <NowPlayingView
-              entry={player.current}
-              segments={segments}
-              currentSegment={currentSegment}
-              selectedSegment={selectedSegment}
-              onSelectSegment={setSegmentSelection}
-              onPlaySegment={playSegment}
-              upNext={upNext}
-              overlay={backdrop.overlay}
-              video={cover.video}
-              cover={cover.render}
-              width={screen.width}
-              height={bodyHeight}
-            />
-          )}
-        </Backdrop>
-      )}
+      {nowPlaying && <NowPlayingScreen app={app} />}
       {!nowPlaying && (
         <box flexDirection="row" flexGrow={1}>
           {showSidebar && (
             <Sidebar
               sections={sections}
-              count={(entry) => views.get(entry)?.items.length ?? 0}
+              count={(entry) => views.get(entry)?.count ?? 0}
               active={section}
               onSelect={enterSection}
             />
           )}
           <box flexDirection="column" flexGrow={1} paddingX={1} paddingTop={1}>
-            {content()}
+            {Route.match(route, {
+              Section: () => sectionView.render(),
+              Artist: (page) => <PageScreen app={app} route={page} />,
+              Album: (page) => <PageScreen app={app} route={page} />,
+              Playlist: (playlist) => <PlaylistScreen app={app} route={playlist} />,
+              NowPlaying: () => null,
+            })}
           </box>
           {showPanel && (
             <NowPlayingPanel
               entry={player.current}
               segment={segments[currentSegment]}
-              upNext={upNext}
+              upNext={upNextOf(player)}
               cover={cover.render}
               width={panelWidth}
               height={bodyHeight}
-              onOpen={openNowPlaying}
+              onOpen={showNowPlaying}
             />
           )}
         </box>
@@ -915,7 +465,7 @@ export function App(props: {
         }
         artwork={artwork}
         showCover={nowPlaying ? backdrop.overlay !== "full" : !showPanel}
-        onOpen={openNowPlaying}
+        onOpen={showNowPlaying}
         onSeek={player.seekTo}
         onVolume={player.setVolume}
       />

@@ -5,7 +5,10 @@ import { useMemo } from "react";
 import { LibraryNotices, accountHint, useLibraryStatus } from "../component/library-notice.tsx";
 import { ListItem, TrackList, entryItems, playsSource } from "../component/track-list.tsx";
 import type { TrackItem } from "../component/track-list.tsx";
+import { useListScreen } from "../component/list-screen.tsx";
 import { Section, SectionView } from "../context/routes.ts";
+import { useReload } from "../context/screen-app.ts";
+import type { ScreenApp } from "../context/screen-app.ts";
 
 const title = "Songs";
 
@@ -20,6 +23,29 @@ const byArtistAlbumTitle = (a: TrackItem, b: TrackItem) => {
     (left.title ?? "").localeCompare(right.title ?? "")
   );
 };
+
+function SongsScreen(props: {
+  readonly app: ScreenApp;
+  readonly items: ReadonlyArray<TrackItem>;
+  readonly notices: Parameters<typeof LibraryNotices>[0]["notices"];
+  readonly empty: string;
+}) {
+  const list = useListScreen(props.app, { title, items: props.items });
+  return (
+    <TrackList
+      title={title}
+      header={<LibraryNotices notices={props.notices} />}
+      items={props.items}
+      selected={list.selected}
+      playing={playsSource(props.app.player.current?.source.id)}
+      historyRows={0}
+      markSaved={false}
+      empty={props.empty}
+      onSelect={list.select}
+      onActivate={list.activate}
+    />
+  );
+}
 
 export const songs = new Section({
   id: "songs",
@@ -50,22 +76,11 @@ export const songs = new Section({
       );
     };
 
+    useReload(app, refresh);
     return new SectionView({
-      items,
-      refresh,
-      render: (list) => (
-        <TrackList
-          title={title}
-          header={<LibraryNotices notices={status.notices} />}
-          items={items}
-          selected={list.selected}
-          playing={playsSource(app.player.current?.source.id)}
-          historyRows={0}
-          markSaved={false}
-          empty={empty()}
-          onSelect={list.select}
-          onActivate={list.activate}
-        />
+      count: items.length,
+      render: () => (
+        <SongsScreen app={app} items={items} notices={status.notices} empty={empty()} />
       ),
     });
   },

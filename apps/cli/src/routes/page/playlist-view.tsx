@@ -1,57 +1,33 @@
 import { formatTotalDuration, providerName } from "@dyad/client-runtime";
 import type { ServerAtoms } from "@dyad/client-runtime";
 import { PlaylistNotFound } from "@dyad/domain";
-import type { PlaylistEntry } from "@dyad/domain";
+import type { PlaylistEntry, PlaylistSummary } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { Cause, Option, Schema } from "effect";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
+import { Action } from "../../component/dialog-actions.tsx";
 import { useLibraryStatus } from "../../component/library-notice.tsx";
-import { TrackList, entryItems } from "../../component/track-list.tsx";
-import type { TrackItem } from "../../component/track-list.tsx";
-import { Route } from "../../context/router.ts";
+import { useListScreen } from "../../component/list-screen.tsx";
+import { ListItem, TrackList, entryItems, playsSource } from "../../component/track-list.tsx";
+import { commands } from "../../context/keymap.ts";
+import type { Command } from "../../context/keymap.ts";
+import type { Route } from "../../context/router.ts";
+import { useReload } from "../../context/screen-app.ts";
+import type { ScreenApp } from "../../context/screen-app.ts";
 import { useTheme } from "../../theme/theme.ts";
-
-const noEntries = Atom.make(AsyncResult.initial());
-
-// RETURN TYPE: the atoms have different types, and `useAtomValue` needs one atom type
-const entriesAtom = (
-  atoms: ServerAtoms,
-  route: Route,
-): Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<PlaylistEntry>, unknown>> =>
-  Route.guards.Playlist(route) ? atoms.playlistEntries(route.id) : noEntries;
-
-/** Other routes get no items. A playlist can have a song twice, so the keys are entry IDs. */
-export function usePlaylist(atoms: ServerAtoms, route: Route) {
-  const atom = entriesAtom(atoms, route);
-  const result = useAtomValue(atom);
-  const refresh = useAtomRefresh(atom);
-  const items = useMemo(
-    () =>
-      entryItems(
-        AsyncResult.isSuccess(result) ? result.value : [],
-        "playlist",
-        (entry) => entry.entryId,
-        // The provider has no source of the song, so it stays out of the provider playlist
-        (entry) => (entry.dyadOnly ? "Only in Dyad" : undefined),
-      ),
-    [result],
-  );
-  return { result, refresh, items };
-}
+import { listActions } from "./page-view.tsx";
 
 function PlaylistHeader(props: {
   readonly atoms: ServerAtoms;
   readonly route: typeof Route.cases.Playlist.Type;
+  readonly playlist: PlaylistSummary | undefined;
   readonly entries: ReadonlyArray<PlaylistEntry>;
 }) {
   const theme = useTheme();
-  const result = useAtomValue(props.atoms.playlists);
   const { names } = useLibraryStatus(props.atoms);
-  const playlist = AsyncResult.isSuccess(result)
-    ? result.value.find((candidate) => candidate.id === props.route.id)
-    : undefined;
+  const playlist = props.playlist;
 
   const link = playlist?.link ?? null;
   const provider = link === null ? null : providerName(names, link.provider);
@@ -93,44 +69,110 @@ const isNotFound = (result: AsyncResult.AsyncResult<unknown, unknown>) =>
   AsyncResult.isFailure(result) &&
   Option.exists(Cause.findErrorOption(result.cause), Schema.is(PlaylistNotFound));
 
-export function PlaylistView(props: {
-  readonly atoms: ServerAtoms;
+/** A playlist can have a song twice, so the keys of its items are entry IDs */
+export function PlaylistScreen(props: {
+  readonly app: ScreenApp;
   readonly route: typeof Route.cases.Playlist.Type;
-  readonly breadcrumb: string;
-  readonly result: AsyncResult.AsyncResult<ReadonlyArray<PlaylistEntry>, unknown>;
-  readonly items: ReadonlyArray<TrackItem>;
-  readonly selected: number;
-  readonly playing: (item: TrackItem) => boolean;
-  readonly onSelect: (index: number) => void;
-  readonly onActivate: (index: number) => void;
 }) {
+  const { app, route } = props;
+  const atom = app.atoms.playlistEntries(route.id);
+  const result = useAtomValue(atom);
+  useReload(app, useAtomRefresh(atom));
+  const items = useMemo(
+    () =>
+      entryItems(
+        AsyncResult.isSuccess(result) ? result.value : [],
+        "playlist",
+        (entry) => entry.entryId,
+        // The provider has no source of the song, so it stays out of the provider playlist
+        (entry) => (entry.dyadOnly ? "Only in Dyad" : undefined),
+      ),
+    [result],
+  );
+  const summaries = useAtomValue(app.atoms.playlists);
+  const playlist = AsyncResult.isSuccess(summaries)
+    ? summaries.value.find((candidate) => candidate.id === route.id)
+    : undefined;
+
+  const removeEntry = (selected: number) => {
+    const entry = items[selected];
+    if (entry === undefined) return;
+    const neighbor = items[selected + 1] ?? items[selected - 1];
+    if (neighbor !== undefined) app.router.select(neighbor.key);
+    app.run(app.replica.removePlaylistEntry({ entryId: entry.key }));
+  };
+  const moveEntry = (selected: number, direction: 1 | -1) => {
+    const entry = items[selected];
+    if (entry === undefined) return;
+    app.run(app.replica.movePlaylistEntry({ playlistId: route.id, entryId: entry.key, direction }));
+  };
+  const manage = () =>
+    playlist === undefined ? [] : app.playlistActions.manage(playlist, app.router.back);
+
+  const keys: ReadonlyArray<readonly [Command, (selected: number) => void]> =
+    playlist === undefined
+      ? []
+      : [
+          [commands.removeEntry, removeEntry],
+          [commands.moveEntryUp, (selected) => moveEntry(selected, -1)],
+          [commands.moveEntryDown, (selected) => moveEntry(selected, 1)],
+          [
+            commands.renamePlaylist,
+            () =>
+              manage()
+                .find((action) => action.command === commands.renamePlaylist)
+                ?.run(),
+          ],
+        ];
+
+  const list = useListScreen(app, {
+    title: route.hint,
+    items,
+    keys,
+    actions: () => {
+      const sources = items.flatMap((item) => (item instanceof ListItem ? [item.source] : []));
+      const removal =
+        playlist === undefined
+          ? []
+          : [
+              new Action({
+                command: commands.removeEntry,
+                label: "Remove from the playlist",
+                run: () => removeEntry(list.selected),
+              }),
+            ];
+      const download = { kind: "playlist" as const, id: route.id, title: route.hint };
+      return [...removal, ...listActions(app, sources, "playlist", download), ...manage()];
+    },
+  });
+
   const empty = () => {
-    if (isNotFound(props.result)) {
+    if (isNotFound(result)) {
       return "This playlist does not exist anymore. Press esc to go back.";
     }
-    if (AsyncResult.isFailure(props.result))
-      return "Cannot load the playlist. Press r to try again.";
-    if (AsyncResult.isInitial(props.result)) return "Loading…";
+    if (AsyncResult.isFailure(result)) return "Cannot load the playlist. Press r to try again.";
+    if (AsyncResult.isInitial(result)) return "Loading…";
     return "This playlist is empty";
   };
 
   return (
     <TrackList
-      title={props.breadcrumb}
+      title={app.breadcrumb}
       header={
         <PlaylistHeader
-          atoms={props.atoms}
-          route={props.route}
-          entries={AsyncResult.isSuccess(props.result) ? props.result.value : []}
+          atoms={app.atoms}
+          route={route}
+          playlist={playlist}
+          entries={AsyncResult.isSuccess(result) ? result.value : []}
         />
       }
-      items={props.items}
-      selected={props.selected}
-      playing={props.playing}
+      items={items}
+      selected={list.selected}
+      playing={playsSource(app.player.current?.source.id)}
       historyRows={0}
       empty={empty()}
-      onSelect={props.onSelect}
-      onActivate={props.onActivate}
+      onSelect={list.select}
+      onActivate={list.activate}
     />
   );
 }

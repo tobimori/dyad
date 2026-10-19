@@ -184,6 +184,7 @@ export function useCommands(
   options: {
     readonly target?: RefObject<Renderable | null>;
     readonly targetMode?: "focus" | "focus-within";
+    readonly priority?: number;
   } = {},
 ) {
   const handlers = useRef(bindings);
@@ -199,6 +200,7 @@ export function useCommands(
 
   useBindings(() => {
     const layer = {
+      priority: options.priority ?? 0,
       bindings: bindings.flatMap(([entry]) =>
         entry.keys.map((key) => ({
           key,
