@@ -7,7 +7,7 @@ import { useRef, useState } from "react";
 
 import { commands, useCommands } from "../context/keymap.ts";
 import { useTheme } from "../theme/theme.ts";
-import { Dialog } from "../ui/dialog.tsx";
+import { Dialog, useDialog } from "../ui/dialog.tsx";
 import { SelectList, SelectOption } from "../ui/select-list.tsx";
 
 const dialogWidth = 56;
@@ -22,6 +22,7 @@ export function ProviderOrderDialog(props: {
   readonly setOrder: (providers: ReadonlyArray<string>) => void;
 }) {
   const theme = useTheme();
+  const dialog = useDialog();
   const content = useRef<BoxRenderable | null>(null);
   const result = useAtomValue(props.atoms.providerChoices);
   const choices = Option.getOrNull(AsyncResult.value(result));
@@ -75,7 +76,8 @@ export function ProviderOrderDialog(props: {
           width={dialogWidth - 4}
           rows={10}
           empty={AsyncResult.isInitial(result) ? "Loading…" : "No provider is known yet"}
-          onChoose={() => {}}
+          // Each move applies at once, so Enter only closes
+          onChoose={() => dialog.pop()}
           onHighlight={(provider: string) => setHighlighted(provider)}
         />
       </box>
