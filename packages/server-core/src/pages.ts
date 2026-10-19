@@ -27,6 +27,7 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
+import { assertEdition } from "./albums.ts";
 import { artistPageRef } from "./artists.ts";
 import { albumTypeOf, editionBase, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
@@ -430,6 +431,8 @@ export const providerPageStream = <A, E, Page, R>(
       | ((externalId: string, credentials: Credentials) => Effect.Effect<A, ProviderError>)
       | undefined;
     readonly tracks: (data: A) => ReadonlyArray<ProviderTrack>;
+    /** Writes the facts of a fetched page */
+    readonly facts?: (data: A) => Effect.Effect<void, never, R>;
     readonly build: (page: PageInput<A>) => Effect.Effect<Page, never, R>;
   },
 ) =>
@@ -511,6 +514,7 @@ export const providerPageStream = <A, E, Page, R>(
             target: [providerPage.provider, providerPage.kind, providerPage.externalId],
             set: values,
           });
+        if (options.facts !== undefined) yield* options.facts(data);
         return yield* emit(data, new PageState({ status: "fresh", fetchedAt, reason: null }));
       }).pipe(
         Effect.catchTags({
@@ -618,6 +622,8 @@ export const albumPage = (ref: AlbumRef) =>
       providerPageStream("album", parts, ProviderAlbum, {
         fetch: (plugin) => plugin.album,
         tracks: (data) => data.tracks,
+        facts: (data) =>
+          assertEdition(parts.provider, data).pipe(orDieOnDatabaseError("assertEdition")),
         build: (page) =>
           Effect.gen(function* () {
             const saved = page.library.filter((item) => item.summary.albumRef === ref);

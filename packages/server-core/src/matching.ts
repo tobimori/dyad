@@ -54,7 +54,7 @@ class Edge extends Data.Class<{
  * reject row keeps the entity a candidate, so that the decision does not depend on arrival order.
  */
 export const writeSystemMerge = (edge: {
-  readonly entityType: "recording" | "artist";
+  readonly entityType: typeof entityMerge.$inferInsert.entityType;
   readonly fromId: string;
   readonly intoId: string;
   readonly decision: "merge" | "reject";

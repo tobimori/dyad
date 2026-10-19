@@ -506,5 +506,33 @@
       "\nALTER TABLE `library_root` DROP COLUMN `owner_id`;",
       "\n-- Job keys of accounts were `<user_id>:<provider>`\nUPDATE `job` SET `key` = substr(`key`, instr(`key`, ':') + 1) WHERE `kind` IN ('provider.library', 'recommender.scrobble') AND `key` LIKE '%-%-%-%-%:%';\n"
     ]
+  },
+  {
+    "name": "20261019130150_add_album_edition",
+    "folderMillis": 1792414910000,
+    "hash": "806bc090495f2e0389232f0f5ebeb84328920a35018e2e7b8e11198dcd2c5f63",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `album` (\n\t`id` text PRIMARY KEY,\n\t`title` text,\n\t`artist_name` text,\n\t`artist_id` text,\n\t`type` text,\n\t`year` integer,\n\t`artwork_url` text,\n\t`merged_into_id` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `edition` (\n\t`id` text PRIMARY KEY,\n\t`album_id` text,\n\t`title` text,\n\t`edition_words` text,\n\t`artist_name` text,\n\t`artist_id` text,\n\t`date` text,\n\t`label` text,\n\t`upc` text,\n\t`artwork_url` text,\n\t`merged_into_id` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `edition_track` (\n\t`id` text PRIMARY KEY,\n\t`edition_id` text NOT NULL,\n\t`disc` integer NOT NULL,\n\t`position` integer NOT NULL,\n\t`recording_id` text NOT NULL,\n\t`title` text,\n\t`artist_name` text,\n\t`duration_ms` integer\n);\n",
+      "\nDROP INDEX IF EXISTS `medium_release_idx`;",
+      "\nDROP INDEX IF EXISTS `release_release_group_idx`;",
+      "\nDROP INDEX IF EXISTS `release_artist_credit_idx`;",
+      "\nDROP INDEX IF EXISTS `release_group_artist_credit_idx`;",
+      "\nDROP INDEX IF EXISTS `release_group_local_key_idx`;",
+      "\nDROP INDEX IF EXISTS `track_medium_idx`;",
+      "\nDROP INDEX IF EXISTS `track_recording_idx`;",
+      "\nCREATE INDEX `album_merged_into_idx` ON `album` (`merged_into_id`);",
+      "\nCREATE INDEX `edition_album_idx` ON `edition` (`album_id`);",
+      "\nCREATE INDEX `edition_merged_into_idx` ON `edition` (`merged_into_id`);",
+      "\nCREATE INDEX `edition_upc_idx` ON `edition` (`upc`);",
+      "\nCREATE INDEX `edition_track_edition_idx` ON `edition_track` (`edition_id`,`disc`,`position`);",
+      "\nCREATE INDEX `edition_track_recording_idx` ON `edition_track` (`recording_id`);",
+      "\nDROP TABLE `medium`;",
+      "\nDROP TABLE `release`;",
+      "\nDROP TABLE `release_group`;",
+      "\nDROP TABLE `track`;"
+    ]
   }
 ]

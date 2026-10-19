@@ -21,6 +21,7 @@ import { and, asc, eq, gt, gte, inArray, notInArray, or } from "drizzle-orm";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Data, Effect, Equal, Option, Schema } from "effect";
 
+import { deriveAlbums } from "./albums.ts";
 import { projectRecordings } from "./assertions.ts";
 import { isrcRecordingId } from "./ids.ts";
 import { deriveArtists } from "./artist-matching.ts";
@@ -237,6 +238,19 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
       .from(recording)
       .where(inArray(recording.id, changed));
     yield* projectRecordings([...changed, ...resolved, ...roots.flatMap((row) => row.root ?? [])]);
+    const mergesOf = (entityType: "album" | "edition") =>
+      rows.flatMap((row) =>
+        row.table === "entity_merge" && row.entityType === entityType
+          ? [row.fromId, row.intoId]
+          : [],
+      );
+    yield* deriveAlbums({
+      editions: rows.flatMap((row) =>
+        row.table === "catalog_assertion" && row.entityType === "edition" ? [row.entityId] : [],
+      ),
+      albumMerges: mergesOf("album"),
+      editionMerges: mergesOf("edition"),
+    });
     // A changed source or variant changes the group of its recording
     yield* touchGroups(boundIds);
 

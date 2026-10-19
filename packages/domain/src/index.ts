@@ -93,7 +93,7 @@ export class SourceSummary extends Schema.Class<SourceSummary>("SourceSummary")(
 /** `YYYY`, `YYYY-MM` or `YYYY-MM-DD` */
 export const PartialDate = Schema.String.check(Schema.isPattern(/^\d{4}(-\d{2}(-\d{2})?)?$/));
 
-/** The same values as `release_group.primary_type` */
+/** The primary type that a source states */
 export const ReleaseType = Schema.Literals(["album", "single", "ep"]);
 export const SecondaryType = Schema.Literals(["compilation", "live"]);
 

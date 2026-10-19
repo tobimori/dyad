@@ -50,9 +50,6 @@ export const relations = defineRelations(schema, (r) => ({
   artistCredit: {
     names: r.many.artistCreditName(),
     recordings: r.many.recording(),
-    releaseGroups: r.many.releaseGroup(),
-    releases: r.many.release(),
-    tracks: r.many.track(),
   },
   artistCreditName: {
     artistCredit: r.one.artistCredit({
@@ -69,7 +66,6 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.recording.artistCreditId,
       to: r.artistCredit.id,
     }),
-    tracks: r.many.track(),
     sources: r.many.source(),
     segments: r.many.sourceSegment(),
     identifiers: r.many.identifier({
@@ -78,69 +74,10 @@ export const relations = defineRelations(schema, (r) => ({
       where: { entityType: "recording" },
     }),
   },
-  releaseGroup: {
-    artistCredit: r.one.artistCredit({
-      from: r.releaseGroup.artistCreditId,
-      to: r.artistCredit.id,
-    }),
-    releases: r.many.release(),
-    identifiers: r.many.identifier({
-      from: r.releaseGroup.id,
-      to: r.identifier.entityId,
-      where: { entityType: "release_group" },
-    }),
-  },
-  release: {
-    releaseGroup: r.one.releaseGroup({
-      from: r.release.releaseGroupId,
-      to: r.releaseGroup.id,
-    }),
-    artistCredit: r.one.artistCredit({
-      from: r.release.artistCreditId,
-      to: r.artistCredit.id,
-    }),
-    media: r.many.medium(),
-    identifiers: r.many.identifier({
-      from: r.release.id,
-      to: r.identifier.entityId,
-      where: { entityType: "release" },
-    }),
-  },
-  medium: {
-    release: r.one.release({
-      from: r.medium.releaseId,
-      to: r.release.id,
-    }),
-    tracks: r.many.track(),
-  },
-  track: {
-    medium: r.one.medium({
-      from: r.track.mediumId,
-      to: r.medium.id,
-    }),
-    recording: r.one.recording({
-      from: r.track.recordingId,
-      to: r.recording.id,
-    }),
-    artistCredit: r.one.artistCredit({
-      from: r.track.artistCreditId,
-      to: r.artistCredit.id,
-    }),
-    sources: r.many.source(),
-    identifiers: r.many.identifier({
-      from: r.track.id,
-      to: r.identifier.entityId,
-      where: { entityType: "track" },
-    }),
-  },
   source: {
     recording: r.one.recording({
       from: r.source.recordingId,
       to: r.recording.id,
-    }),
-    track: r.one.track({
-      from: r.source.trackId,
-      to: r.track.id,
     }),
     variants: r.many.sourceVariant(),
     segments: r.many.sourceSegment(),

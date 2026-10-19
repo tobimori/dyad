@@ -113,90 +113,76 @@ export const recordingDerivative = sqliteTable(
   ],
 );
 
-export const releaseGroup = sqliteTable(
-  "release_group",
+/** What the owner sees as one album. Its fields come from its root editions. */
+export const album = sqliteTable(
+  "album",
   {
     id: text("id").primaryKey(),
-    // Binding key for local release groups: `<album_artist_credit_id>:<norm(album)>`.
-    // Resolved from `local_key` assertions.
-    localKey: text("local_key"),
+    // The title of the original edition without edition words
     title: text("title"),
-    artistCreditId: text("artist_credit_id"),
-    // Null means unknown; `other` is a known classification
-    primaryType: text("primary_type", {
-      enum: ["album", "single", "ep", "broadcast", "other"],
+    artistName: text("artist_name"),
+    // The album artist of the original edition. The edition rule compares its root.
+    artistId: text("artist_id"),
+    // Null when no source states a type
+    type: text("type", {
+      enum: ["album", "ep", "single", "compilation", "live", "dj-mix", "broadcast"],
     }),
-    classificationStatus: text("classification_status", { enum: ["resolved", "uncertain"] })
-      .notNull()
-      .default("uncertain"),
-    secondaryTypes: text("secondary_types", { mode: "json" })
-      .$type<ReadonlyArray<string>>()
-      .notNull()
-      .default([]),
-    firstReleaseDate: text("first_release_date"),
+    // The earliest year of its editions
+    year: integer("year"),
+    artworkUrl: text("artwork_url"),
+    mergedIntoId: text("merged_into_id"),
     ...entity,
   },
-  (table) => [
-    index("release_group_artist_credit_idx").on(table.artistCreditId),
-    index("release_group_local_key_idx").on(table.localKey),
-  ],
+  (table) => [index("album_merged_into_idx").on(table.mergedIntoId)],
 );
 
-export const release = sqliteTable(
-  "release",
+/** One release of an album with its own track list */
+export const edition = sqliteTable(
+  "edition",
   {
     id: text("id").primaryKey(),
-    releaseGroupId: text("release_group_id"),
+    albumId: text("album_id"),
     title: text("title"),
-    artistCreditId: text("artist_credit_id"),
+    // The edition words of `title`, for example `Deluxe Edition`
+    editionWords: text("edition_words"),
+    artistName: text("artist_name"),
+    artistId: text("artist_id"),
     date: text("date"),
-    country: text("country"),
-    // MusicBrainz release status: official, promotion, bootleg, pseudo-release
-    releaseStatus: text("release_status"),
     label: text("label"),
-    catalogNumber: text("catalog_number"),
+    upc: text("upc"),
+    artworkUrl: text("artwork_url"),
+    mergedIntoId: text("merged_into_id"),
     ...entity,
   },
   (table) => [
-    index("release_release_group_idx").on(table.releaseGroupId),
-    index("release_artist_credit_idx").on(table.artistCreditId),
+    index("edition_album_idx").on(table.albumId),
+    index("edition_merged_into_idx").on(table.mergedIntoId),
+    index("edition_upc_idx").on(table.upc),
   ],
 );
 
-export const medium = sqliteTable(
-  "medium",
+/** A track of an edition, from its `tracks` assertion */
+export const editionTrack = sqliteTable(
+  "edition_track",
   {
+    // `<edition_id>:track:<disc>:<position>`
     id: text("id").primaryKey(),
-    releaseId: text("release_id"),
-    position: integer("position"),
-    format: text("format"),
+    editionId: text("edition_id").notNull(),
+    disc: integer("disc").notNull(),
+    position: integer("position").notNull(),
+    // The bound recording; views resolve `merged_into_id`
+    recordingId: text("recording_id").notNull(),
     title: text("title"),
-    ...projection,
-  },
-  (table) => [index("medium_release_idx").on(table.releaseId, table.position)],
-);
-
-export const track = sqliteTable(
-  "track",
-  {
-    id: text("id").primaryKey(),
-    mediumId: text("medium_id"),
-    position: integer("position"),
-    // Display number such as "A1"
-    number: text("number"),
-    title: text("title"),
-    artistCreditId: text("artist_credit_id"),
-    recordingId: text("recording_id"),
+    artistName: text("artist_name"),
     durationMs: integer("duration_ms"),
-    ...entity,
   },
   (table) => [
-    index("track_medium_idx").on(table.mediumId, table.position),
-    index("track_recording_idx").on(table.recordingId),
+    index("edition_track_edition_idx").on(table.editionId, table.disc, table.position),
+    index("edition_track_recording_idx").on(table.recordingId),
   ],
 );
 
-export const entityTypes = ["artist", "recording", "release_group", "release", "track"] as const;
+export const entityTypes = ["artist", "recording", "album", "edition"] as const;
 
 /**
  * Identity decisions between entities. Replicated directly in the workspace scope; not a
@@ -215,8 +201,18 @@ export const entityMerge = sqliteTable(
     origin: text("origin", { enum: ["system", "admin"] }).notNull(),
     // Artists: `shared_recording` (a provider credit and a MusicBrainz credit of one merge group)
     // and `url_rel` (a MusicBrainz URL relation)
+    // Editions: `upc`. Albums: `edition_rule` (same artist, title and most songs).
     method: text("method", {
-      enum: ["mbid_tag", "isrc", "mapper", "manual", "shared_recording", "url_rel"],
+      enum: [
+        "mbid_tag",
+        "isrc",
+        "mapper",
+        "manual",
+        "shared_recording",
+        "url_rel",
+        "upc",
+        "edition_rule",
+      ],
     }).notNull(),
     confidence: real("confidence").notNull(),
     // Lookup response fields or tag names that support the decision

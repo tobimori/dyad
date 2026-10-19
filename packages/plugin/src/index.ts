@@ -89,6 +89,15 @@ export class ProviderRelease extends Schema.Class<ProviderRelease>("ProviderRele
   explicit: Schema.Boolean,
   trackCount: Schema.NullOr(Schema.Int),
   artworkUrl: Schema.NullOr(Schema.String),
+  /** Same UPC, same edition. Cache rows from before it existed have no key. */
+  upc: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
+  label: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 export class ProviderTrack extends Schema.Class<ProviderTrack>("ProviderTrack")({

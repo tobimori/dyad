@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 9;
+export const syncProtocolVersion = 10;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -212,12 +212,21 @@ export class CatalogAssertionRow extends Schema.Class<CatalogAssertionRow>("Cata
 export class EntityMergeRow extends Schema.Class<EntityMergeRow>("EntityMergeRow")({
   table: Schema.Literal("entity_merge"),
   id: Uuid,
-  entityType: Schema.Literals(["artist", "recording", "release_group", "release", "track"]),
+  entityType: Schema.Literals(["artist", "recording", "album", "edition"]),
   fromId: Schema.String,
   intoId: Schema.String,
   decision: Schema.Literals(["merge", "reject"]),
   origin: Schema.Literals(["system", "admin"]),
-  method: Schema.Literals(["mbid_tag", "isrc", "mapper", "manual", "shared_recording", "url_rel"]),
+  method: Schema.Literals([
+    "mbid_tag",
+    "isrc",
+    "mapper",
+    "manual",
+    "shared_recording",
+    "url_rel",
+    "upc",
+    "edition_rule",
+  ]),
   confidence: Schema.Finite,
   evidence: Schema.Unknown,
   hlc: HybridLogicalClock,

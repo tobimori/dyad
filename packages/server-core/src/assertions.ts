@@ -6,6 +6,7 @@ import { HlcClock } from "@dyad/sync";
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 
+import type { editionFields } from "./albums.ts";
 import { AlbumType, ReleaseDate, shownAlbum } from "./editions.ts";
 import { projectArtists } from "./artists.ts";
 import { assertionId } from "./ids.ts";
@@ -15,7 +16,7 @@ import { MashupPart, ParsedTitle, TitleSeries, TitleVersion } from "./version-ti
 
 const schemaVersion = 1;
 
-const ArtistCredit = Schema.Struct({
+export const ArtistCredit = Schema.Struct({
   name: Schema.String,
   artists: Schema.Array(
     Schema.Struct({
@@ -67,13 +68,14 @@ export class ArtistLinkEvidence extends Schema.Class<ArtistLinkEvidence>("Artist
 const parseVersion = (revision: string | null) => Number(revision?.replace("parse:v", "") ?? 0);
 
 // One assertion for each field of `values`. Unchanged assertions write nothing.
-const assertFields = (
-  entityType: "recording" | "artist",
+export const assertFields = (
+  entityType: "recording" | "artist" | "edition",
   entityId: string,
   origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
   originRef: string,
   values:
     | { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null }
+    | { readonly [F in keyof typeof editionFields]?: (typeof editionFields)[F]["Type"] | null }
     | { readonly links?: ReadonlyArray<string>; readonly mbid?: string | null },
   details: {
     readonly confidence?: number;

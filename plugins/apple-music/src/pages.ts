@@ -37,6 +37,8 @@ export const AppleAlbum = Schema.Struct({
     trackCount: Schema.optional(Schema.Int),
     contentRating: Schema.optional(Schema.String),
     artwork: Artwork,
+    upc: Schema.optional(Schema.String),
+    recordLabel: Schema.optional(Schema.String),
   }),
   relationships: Schema.optional(Schema.Struct({ artists: Related })),
 });
@@ -107,6 +109,8 @@ export const toRelease = (album: typeof AppleAlbum.Type, artistId: string | null
     explicit: album.attributes.contentRating === "explicit",
     trackCount: album.attributes.trackCount ?? null,
     artworkUrl: artwork(album.attributes.artwork),
+    upc: album.attributes.upc ?? null,
+    label: album.attributes.recordLabel ?? null,
   });
 
 export const toTrack = (song: AppleTrack) =>
