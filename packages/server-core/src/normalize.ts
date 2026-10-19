@@ -24,6 +24,9 @@ export const simplifyText = (text: string) =>
     .normalize("NFKD")
     .replaceAll(/\p{M}/gu, "")
     .toLowerCase()
+    // `Ständer`, `Staender` and `Stander` are one title
+    .replaceAll(/([aou])e/gu, "$1")
+    .replaceAll("ß", "ss")
     .replaceAll("&", " and ")
     .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
     .trim();

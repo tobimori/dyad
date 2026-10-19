@@ -9,7 +9,7 @@ import {
   compareSources,
 } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { artistIdOf } from "./artists.ts";
@@ -56,6 +56,16 @@ const cachedSongFacts = (item: CachedSource) =>
     return { title, titleKey, durationMs, artistRoot: yield* artistRoot(item.provider, artistId) };
   });
 
+const digraphs = new Map([
+  ["ä", "ae"],
+  ["ö", "oe"],
+  ["ü", "ue"],
+  ["Ä", "Ae"],
+  ["Ö", "Oe"],
+  ["Ü", "Ue"],
+  ["ß", "ss"],
+]);
+
 // The cached results of the song by the `artist_title` rule
 const cachedCopies = (facts: NonNullable<Effect.Success<ReturnType<typeof cachedSongFacts>>>) =>
   Effect.gen(function* () {
@@ -63,11 +73,29 @@ const cachedCopies = (facts: NonNullable<Effect.Success<ReturnType<typeof cached
     // The title before its brackets narrows the scan; the rule decides
     const base = facts.title.split(/[([]/u)[0]?.trim() ?? "";
     if (base === "") return [];
-    const pattern = `%${base.replaceAll(/[\\%_]/g, "\\$&")}%`;
+    // The spellings with umlauts, with `ae` and without both
+    const spellings = new Set([
+      base,
+      base.replaceAll(/[äöüÄÖÜß]/gu, (letter) => digraphs.get(letter) ?? letter),
+      base.replaceAll(/([aou])e/giu, "$1\u0308").normalize("NFC"),
+      base
+        .normalize("NFD")
+        .replaceAll("\u0308", "")
+        .replaceAll(/([aou])e/giu, "$1")
+        .replaceAll("ß", "ss")
+        .normalize("NFC"),
+    ]);
     const rows = yield* db
       .select({ provider: providerItem.provider, data: providerItem.data })
       .from(providerItem)
-      .where(sql`json_extract(${providerItem.data}, '$.title') like ${pattern} escape '\\'`);
+      .where(
+        or(
+          ...[...spellings].map(
+            (spelling) =>
+              sql`json_extract(${providerItem.data}, '$.title') like ${`%${spelling.replaceAll(/[\\%_]/g, "\\$&")}%`} escape '\\'`,
+          ),
+        ),
+      );
     const items = yield* Effect.forEach(rows, (row) =>
       Option.match(Schema.decodeUnknownOption(ProviderSource)(row.data), {
         onNone: () => Effect.succeed([]),
