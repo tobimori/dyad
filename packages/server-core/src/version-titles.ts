@@ -69,7 +69,7 @@ export class ParsedTitle extends Schema.Class<ParsedTitle>("ParsedTitle")({
 }) {}
 
 /** Change it when the parser gives other results, so that replicas with an older parser cannot overwrite them */
-export const parserRevision = "parse:v5";
+export const parserRevision = "parse:v6";
 
 const kindLabels = {
   remix: "Remix",
@@ -262,6 +262,41 @@ const qualifierWords = [
   "sc",
   "\\d{4}",
 ].join("|");
+// Music styles. A bracket with only styles, for example `(Hardtekk)`, names a remix in that style.
+const styleWords = [
+  "hard ?techno",
+  "techno",
+  "uptempo",
+  "hardstyle",
+  "hardtekk",
+  "d'?n'?b",
+  "drum (?:and|&|n) bass",
+  "jersey ?club",
+  "amapiano",
+  "phonk",
+  "(?:deep|tech|afro|future|bass|latin|melodic) house",
+  "house",
+  "speed garage",
+  "afro ?beats?",
+  "reggaeton",
+  "uk ?g(?:arage)?",
+  "garage",
+  "2 ?step",
+  "makina",
+  "frenchcore",
+  "hyperpop",
+  "trap",
+  "drill",
+  "schranz",
+  "lo-?fi",
+  "baile funk",
+  "dubstep",
+  "trance",
+  "hardcore",
+  "breaks",
+].join("|");
+const styleOnly = new RegExp(`^(?:${styleWords})(?:\\s+(?:${styleWords}))*$`, "iu");
+
 const leadingQualifier = new RegExp(`^(?:${qualifierWords})(?:\\s+|$)`, "iu");
 const trailingQualifier = new RegExp(`(?:^|\\s+)(?:${qualifierWords}|my|x|&|and|,|-)$`, "iu");
 
@@ -601,6 +636,7 @@ export const parseVersionTitle = (input: {
 
   // Versions from bracket groups. `position` is the group start until the segments are known.
   const groupVersions: Array<ReturnType<typeof parseVersions>["versions"][number]> = [];
+  let styled = false;
   // RETURN TYPE: recursive function
   const classify = (inner: string, position: number): "title" | "used" => {
     const text = inner.trim();
@@ -626,7 +662,7 @@ export const parseVersionTitle = (input: {
     if (parsed.versions.length === 0) {
       const short = text.match(shortProducer);
       if (short !== null) producers.push(cleanName(short[1]!));
-      // `(Hardstyle)`
+      if (short === null && styleOnly.test(text)) return ((styled = true), "used");
       if (short === null && stripQualifiers(text) !== "") return "title";
       return (removed.push(text), "used");
     }
@@ -722,6 +758,9 @@ export const parseVersionTitle = (input: {
       ? [{ kind: "live" as const, credit: "", byWord: false, position: Infinity }]
       : []),
   ];
+  if (styled && !versions.some((version) => makerKinds.has(version.kind))) {
+    versions.push({ kind: "remix", credit: "", byWord: false, position: Infinity });
+  }
 
   // Removes kind words from the end, one by one: `Lyutiki izzamuzzic remix Slowed`
   // RETURN TYPE: recursive function
