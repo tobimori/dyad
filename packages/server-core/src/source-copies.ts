@@ -1,4 +1,13 @@
-import { artist, providerItem, recording, source, sourceVariant } from "@dyad/db";
+import {
+  album,
+  artist,
+  edition,
+  editionTrack,
+  providerItem,
+  recording,
+  source,
+  sourceVariant,
+} from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   RecordingId,
@@ -9,7 +18,7 @@ import {
   compareSources,
 } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
-import { eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { artistIdOf } from "./artists.ts";
@@ -152,16 +161,50 @@ const groupOf = Effect.fn(function* (sourceId: string) {
   return { group, cached, sameSong };
 });
 
+// The recordings of the default edition of the song's album: the newest root edition, with the
+// editions merged into it
+const defaultEditionRecordings = Effect.fn(function* (group: ReadonlyArray<string>) {
+  const db = yield* Database;
+  const [song] = yield* db
+    .select({ albumId: recording.albumId })
+    .from(recording)
+    .where(and(inArray(recording.id, group), isNull(recording.mergedIntoId)));
+  const albumId = song?.albumId ?? null;
+  if (albumId === null) return new Set<string>();
+
+  const [newest] = yield* db
+    .select({ id: edition.id })
+    .from(edition)
+    .innerJoin(album, eq(album.id, edition.albumId))
+    .where(
+      and(
+        isNull(edition.mergedIntoId),
+        sql`coalesce(${album.mergedIntoId}, ${album.id}) = ${albumId}`,
+      ),
+    )
+    .orderBy(sql`${edition.date} is null`, desc(edition.date), edition.id)
+    .limit(1);
+  if (newest === undefined) return new Set<string>();
+
+  const tracks = yield* db
+    .select({ recordingId: editionTrack.recordingId })
+    .from(editionTrack)
+    .innerJoin(edition, eq(edition.id, editionTrack.editionId))
+    .where(or(eq(edition.id, newest.id), eq(edition.mergedIntoId, newest.id)));
+  return new Set(tracks.map((track) => track.recordingId));
+});
+
 /**
- * The sources of the song that the user can play, also the source itself, best first: a local
- * file, then a stream in the media cache, then a stream. Quality orders each tier, then the user's
- * provider order.
+ * The sources of the song that the user can play, also the source itself, best first: a copy of
+ * the default edition, then a local file, then a stream in the media cache, then a stream. Quality
+ * orders each tier, then the user's provider order.
  */
 export const playableCopies = Effect.fn("playableCopies")(function* (sourceId: string) {
   const cache = yield* MediaCache;
   const { group } = yield* groupOf(sourceId);
   if (group.length === 0) return [];
   const rows = yield* playableSources(inArray(source.recordingId, group));
+  const defaultEdition = yield* defaultEditionRecordings(group);
   const cached = new Set(
     yield* Effect.filter(rows, (row) => Effect.map(cache.find(row.variant.id), Option.isSome)),
   );
@@ -171,8 +214,9 @@ export const playableCopies = Effect.fn("playableCopies")(function* (sourceId: s
     return index === -1 ? order.length : index;
   };
   const tier = (row: (typeof rows)[number]) => {
-    if (row.source.provider === "local") return 0;
-    return cached.has(row) ? 1 : 2;
+    if (defaultEdition.has(row.source.recordingId ?? "")) return 0;
+    if (row.source.provider === "local") return 1;
+    return cached.has(row) ? 2 : 3;
   };
   return rows.toSorted(
     (a, b) =>
