@@ -221,6 +221,8 @@ const incompleteReasonOf = (
   return null;
 };
 
+const markStrength = { saved: 0, disliked: 1, favorite: 2 };
+
 const importSongs = Effect.fn(function* (
   account: LinkedAccount,
   library: ProviderLibrary,
@@ -236,11 +238,14 @@ const importSongs = Effect.fn(function* (
     account,
     Effect.gen(function* () {
       const recordingIds = yield* writeSongs(account, snapshot.items);
-      const changes = yield* setMembership(
-        accountOrigin(account.provider),
-        new Set(recordingIds),
-        complete,
-      );
+      // A song can be in the library more than once: the strongest mark of its copies decides
+      const marks = new Map<string, keyof typeof markStrength>();
+      recordingIds.forEach((id, index) => {
+        const mark = snapshot.items[index]?.mark ?? "saved";
+        const old = marks.get(id);
+        if (old === undefined || markStrength[mark] > markStrength[old]) marks.set(id, mark);
+      });
+      const changes = yield* setMembership(accountOrigin(account.provider), marks, complete);
 
       yield* writeState(account, { lastFullReadAt: now, incompleteReason });
       if (complete) {
@@ -761,7 +766,7 @@ export const forgetLibrary = Effect.fn("forgetLibrary")(function* (provider: str
   const db = yield* Database;
   const jobs = yield* Jobs;
 
-  yield* setMembership(accountOrigin(provider), new Set(), true);
+  yield* setMembership(accountOrigin(provider), new Map(), true);
   yield* unlinkPlaylists(provider, new Set());
   yield* db.delete(librarySyncState).where(eq(librarySyncState.provider, provider));
   const clock = yield* HlcClock;

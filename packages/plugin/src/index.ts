@@ -244,6 +244,8 @@ export class LibrarySong extends Data.Class<{
   readonly artist: string | null;
   readonly album: string | null;
   readonly durationMs: number | null;
+  /** The user's mark on the provider, from `songs` only. Without it, the song is saved. */
+  readonly mark?: "favorite" | "disliked" | undefined;
 }> {}
 
 export class LibraryPlaylist extends Data.Class<{

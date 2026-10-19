@@ -34,42 +34,45 @@ import { readRow, writeRow } from "./replication.ts";
 
 /**
  * The server's own writes of library items and playlists go through this module, so that each
- * changed row gets an HLC and a `change_seq`. The rows of an import origin mirror the provider;
- * with `complete`, the other items of `origin` are removed. A `user` row decides over them.
+ * changed row gets an HLC and a `change_seq`. The rows of an import origin mirror the provider:
+ * `marks` gives the mark of each recording, and with `complete`, the other items of `origin` are
+ * removed. A `user` row decides over them.
  */
 export const setMembership = Effect.fn("setMembership")(function* (
   origin: string,
-  recordingIds: ReadonlySet<string>,
+  marks: ReadonlyMap<string, LibraryMark>,
   complete: boolean,
 ) {
   const db = yield* Database;
   const clock = yield* HlcClock;
   const now = yield* Clock.currentTimeMillis;
 
-  const rows = yield* db.select().from(libraryItem).where(eq(libraryItem.origin, origin));
-  const live = new Set(rows.filter((row) => !row.deleted).map((row) => row.entityId));
-
-  const removedRows = new Map(
-    rows.filter((row) => row.deleted).map((row) => [row.entityId, row.id]),
+  const rows = new Map(
+    (yield* db.select().from(libraryItem).where(eq(libraryItem.origin, origin))).map((row) => [
+      row.entityId,
+      row,
+    ]),
   );
-  const added = [...recordingIds].filter((id) => !live.has(id));
+  const written = [...marks].filter(([entityId, mark]) => {
+    const row = rows.get(entityId);
+    return row === undefined || row.deleted || row.mark !== mark;
+  });
   const removed = complete
-    ? rows.filter((row) => !row.deleted && !recordingIds.has(row.entityId))
+    ? [...rows.values()].filter((row) => !row.deleted && !marks.has(row.entityId))
     : [];
-  if (added.length === 0 && removed.length === 0) return { added: 0, removed: 0 };
+  if (written.length === 0 && removed.length === 0) return { written: 0, removed: 0 };
 
   const changeSeq = yield* nextChangeSeq;
   yield* Effect.forEach(
-    added,
-    (entityId) =>
+    written,
+    ([entityId, mark]) =>
       Effect.gen(function* () {
+        const row = rows.get(entityId);
         // A row from before single user has another ID
-        const id =
-          removedRows.get(entityId) ??
-          (yield* libraryItemId({ entityType: "recording", entityId, origin }));
+        const id = row?.id ?? (yield* libraryItemId({ entityType: "recording", entityId, origin }));
         const change = {
-          addedAt: now,
-          mark: "saved" as const,
+          addedAt: row === undefined || row.deleted ? now : row.addedAt,
+          mark,
           hlc: yield* clock.next,
           deleted: false,
           changeSeq,
@@ -91,7 +94,7 @@ export const setMembership = Effect.fn("setMembership")(function* (
       .where(inArray(libraryItem.id, ids));
   }
 
-  return { added: added.length, removed: removed.length };
+  return { written: written.length, removed: removed.length };
 });
 
 const markTables = { recording, album, artist };
@@ -124,7 +127,8 @@ const groupOf = Effect.fn(function* (entityType: LibraryEntityType, entityId: st
   ];
 });
 
-// The newest user row decides. Else an import decides: favorite if one is, else saved.
+// The newest user row decides. Else the imports decide: favorite if one is, else disliked if one
+// is, else saved.
 const effectiveMark = (
   rows: ReadonlyArray<{
     readonly origin: string;
@@ -139,7 +143,8 @@ const effectiveMark = (
       undefined,
     );
   if (own !== undefined) return own.mark;
-  return rows.some((row) => row.mark === "favorite") ? "favorite" : "saved";
+  if (rows.some((row) => row.mark === "favorite")) return "favorite";
+  return rows.some((row) => row.mark === "disliked") ? "disliked" : "saved";
 };
 
 /** The effective mark of each marked entity, by merge root, with the marked entity IDs */
@@ -272,9 +277,10 @@ const saveAlbumSongs = Effect.fn(function* (
   const clock = yield* HlcClock;
   const saved = mark !== null && inLibrary(mark);
   const ids = new Set(saved ? songs.map((song) => song.recordingId) : []);
+  const marks = new Map([...ids].map((id) => [id, "saved" as const]));
   yield* Effect.forEach(
     yield* groupOf("album", albumId),
-    (member) => setMembership(albumOrigin(member), member === albumId ? ids : new Set(), true),
+    (member) => setMembership(albumOrigin(member), member === albumId ? marks : new Map(), true),
     { discard: true },
   );
   if (ids.size === 0) return;

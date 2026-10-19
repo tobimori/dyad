@@ -114,6 +114,42 @@ const libraryRequest = (session: AppleSession, path: string) =>
     authorize(session),
   );
 
+const Ratings = Schema.Struct({
+  data: Schema.Array(
+    Schema.Struct({ id: Schema.String, attributes: Schema.Struct({ value: Schema.Finite }) }),
+  ),
+});
+
+// A favorite has the rating 1 and a dislike -1. The answer leaves out songs without a rating, and a
+// chunk without any rating is a 404.
+const readRatings = Effect.fn(function* (
+  pace: Pace,
+  session: AppleSession,
+  ids: ReadonlyArray<string>,
+) {
+  const chunks = yield* Effect.forEach(Arr.chunksOf(ids, 100), (chunk) => {
+    const request = HttpClientRequest.get(`${amp}/v1/me/ratings/library-songs`).pipe(
+      HttpClientRequest.setUrlParam("ids", chunk.join(",")),
+      authorize(session),
+    );
+    return pace(getJson(request, Ratings)).pipe(
+      Effect.catchIf(
+        (error) => error instanceof HttpStatusError && error.status === 404,
+        () => Effect.succeed({ data: [] }),
+      ),
+      Effect.mapError(appleError("library ratings", request)),
+    );
+  });
+  return new Map(
+    chunks.flatMap((chunk) => chunk.data).map((row) => [row.id, row.attributes.value]),
+  );
+});
+
+const markOf = (rating: number | undefined) => {
+  if (rating === 1) return "favorite" as const;
+  return rating === -1 ? ("disliked" as const) : undefined;
+};
+
 export const readLibrarySongs = Effect.fn("readLibrarySongs")(function* (
   pace: Pace,
   session: AppleSession,
@@ -122,9 +158,16 @@ export const readLibrarySongs = Effect.fn("readLibrarySongs")(function* (
     HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
   );
   const snapshot = yield* readPages(pace, request, LibrarySongItem, "library songs");
+  const ratings = yield* readRatings(
+    pace,
+    session,
+    snapshot.items.map((item) => item.id),
+  );
 
   return new LibrarySnapshot({
-    items: snapshot.items.map(toLibrarySong),
+    items: snapshot.items.map(
+      (item) => new LibrarySong({ ...toLibrarySong(item), mark: markOf(ratings.get(item.id)) }),
+    ),
     incompleteReason: snapshot.incompleteReason,
   });
 });
