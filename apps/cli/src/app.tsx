@@ -436,6 +436,7 @@ export function App(props: {
               entry={player.current}
               segment={segments[currentSegment]}
               upNext={upNextOf(player)}
+              playing={player.current && player.playingSource(player.current)}
               cover={cover.render}
               width={panelWidth}
               height={bodyHeight}

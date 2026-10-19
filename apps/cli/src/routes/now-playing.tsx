@@ -1,5 +1,5 @@
 import { formatDuration, songLine, sourceLabel, titleOf } from "@dyad/client-runtime";
-import type { QueueEntry, SourceSegment } from "@dyad/domain";
+import type { QueueEntry, SourceSegment, SourceSummary } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -100,8 +100,8 @@ function Tracklist(props: {
   );
 }
 
-const details = (entry: QueueEntry) =>
-  [sourceLabel(entry.source), formatDuration(entry.source.durationMs)]
+const details = (entry: QueueEntry, playing: SourceSummary) =>
+  [sourceLabel(playing), formatDuration(entry.source.durationMs)]
     .filter((part) => part !== "")
     .join(" · ");
 
@@ -128,6 +128,8 @@ export function NowPlayingPanel(props: {
   /** The track of the DJ set that plays */
   readonly segment: SourceSegment | undefined;
   readonly upNext: ReadonlyArray<QueueEntry>;
+  /** The copy that the room plays for `entry` */
+  readonly playing: SourceSummary | undefined;
   /** The cover of the source that plays, in a box of `width` by `height` cells */
   readonly cover: (width: number, height: number) => ReactNode;
   readonly width: number;
@@ -179,7 +181,7 @@ export function NowPlayingPanel(props: {
         {line(source.album ?? "")}
       </text>
       <text fg={theme.faint} wrapMode="none">
-        {line(details(props.entry))}
+        {line(details(props.entry, props.playing ?? props.entry.source))}
       </text>
       {props.segment !== undefined && (
         <text fg={theme.accent} wrapMode="none">
@@ -206,6 +208,8 @@ export function NowPlayingView(props: {
   readonly onSelectSegment: (index: number) => void;
   readonly onPlaySegment: (index: number) => void;
   readonly upNext: ReadonlyArray<QueueEntry>;
+  /** The copy that the room plays for `entry` */
+  readonly playing: SourceSummary | undefined;
   /** `details` shows the text without the cover, in a column over the backdrop */
   readonly overlay: "full" | "details";
   /** The cover shows a video, which gets a large 16:9 box above the text */
@@ -288,7 +292,7 @@ export function NowPlayingView(props: {
           {line(source.album ?? "")}
         </text>
         <text fg={theme.faint} wrapMode="none" flexShrink={0}>
-          {line(details(props.entry))}
+          {line(details(props.entry, props.playing ?? props.entry.source))}
         </text>
         {segment !== undefined && (
           <text fg={theme.accent} wrapMode="none" flexShrink={0}>
@@ -402,6 +406,7 @@ export function NowPlayingScreen(props: { readonly app: ScreenApp }) {
           onSelectSegment={setSelection}
           onPlaySegment={playSegment}
           upNext={upNextOf(player)}
+          playing={player.current && player.playingSource(player.current)}
           overlay={backdrop.overlay}
           video={app.cover.video}
           cover={app.cover.render}

@@ -1,7 +1,7 @@
 import { currentEntryOf, isOwnRoom, positionOf } from "@dyad/client-runtime";
 import type { ListenFeed, SessionClient } from "@dyad/client-runtime";
 import { SessionCommand, skipSeekTarget } from "@dyad/domain";
-import type { OutputId, PlayContext, SourceSegment, SourceSummary } from "@dyad/domain";
+import type { OutputId, PlayContext, QueueEntry, SourceSegment, SourceSummary } from "@dyad/domain";
 import { Clock, Effect, Fiber, Random, Schedule, Stream, SubscriptionRef } from "effect";
 import { useEffect, useState } from "react";
 
@@ -217,6 +217,9 @@ export function usePlayer(props: {
 
   return {
     entries,
+    /** The source that the room plays for the entry: a better copy of its song, or its own */
+    playingSource: (entry: QueueEntry) =>
+      view.copies.find((copy) => copy.entryId === entry.id)?.source ?? entry.source,
     currentIndex,
     current,
     state: loading ? ("loading" as const) : playback.state,

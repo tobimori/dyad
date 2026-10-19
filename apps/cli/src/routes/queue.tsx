@@ -1,3 +1,4 @@
+import { sourceLabel } from "@dyad/client-runtime";
 import { Action } from "../component/dialog-actions.tsx";
 import { useListScreen } from "../component/list-screen.tsx";
 import { ListItem, TrackList } from "../component/track-list.tsx";
@@ -69,6 +70,7 @@ export const queue = new Section({
         new ListItem({
           key: String(entry.id),
           source: entry.source,
+          label: sourceLabel(app.player.playingSource(entry)),
           context: entry.context,
           reason: entry.reason,
         }),
