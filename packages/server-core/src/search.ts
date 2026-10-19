@@ -7,7 +7,7 @@ import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import type { Column, SQL } from "drizzle-orm";
 import { Array as Arr, Clock, Data, Effect, Option, Ref, Schema, Stream } from "effect";
 
-import { normalizeIsrc } from "./normalize.ts";
+import { normalizeIsrc, spellings } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
 import { Popularities, Providers, callProvider, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
@@ -26,8 +26,11 @@ const answerTimeout = "8 seconds";
 const searchLocalSources = Effect.fn(function* (query: string) {
   const db = yield* Database;
   // `%` and `_` in the query match only themselves
-  const pattern = `%${query.replaceAll(/[\\%_]/g, "\\$&")}%`;
-  const contains = (column: Column | SQL) => sql`${column} like ${pattern} escape '\\'`;
+  const patterns = spellings(query).map(
+    (spelling) => `%${spelling.replaceAll(/[\\%_]/g, "\\$&")}%`,
+  );
+  const contains = (column: Column | SQL) =>
+    or(...patterns.map((pattern) => sql`${column} like ${pattern} escape '\\'`));
   // A series name also finds the episodes whose titles leave it out
   const episodes = db
     .select({ id: catalogAssertion.entityId })

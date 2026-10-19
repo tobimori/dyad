@@ -31,6 +31,35 @@ export const simplifyText = (text: string) =>
     .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 
+const digraphs = new Map([
+  ["ä", "ae"],
+  ["ö", "oe"],
+  ["ü", "ue"],
+  ["Ä", "Ae"],
+  ["Ö", "Oe"],
+  ["Ü", "Ue"],
+  ["ß", "ss"],
+]);
+
+/**
+ * The German spellings of a text for a `like` scan: with umlauts and `ß`, with `ae` and `ss`, and
+ * without both. `simplifyText` then decides.
+ */
+export const spellings = (text: string) => [
+  ...new Set([
+    text,
+    text.replaceAll(/[äöüÄÖÜß]/gu, (letter) => digraphs.get(letter) ?? letter),
+    text.replaceAll(/([aou])e/giu, "$1\u0308").normalize("NFC"),
+    text.replaceAll("ss", "ß"),
+    text
+      .normalize("NFD")
+      .replaceAll("\u0308", "")
+      .replaceAll(/([aou])e/giu, "$1")
+      .replaceAll("ß", "ss")
+      .normalize("NFC"),
+  ]),
+];
+
 /**
  * `simplifyText` without `feat.` parts. Recording matching must use the same rules as search, so
  * that a search group and a stored match agree.

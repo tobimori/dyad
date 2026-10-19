@@ -26,7 +26,7 @@ import { isrcRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { fitsDuration, rootRank, songCandidates, songFacts, songTitleKey } from "./matching.ts";
 import { MediaCache } from "./media-cache.ts";
-import { normalizeArtist, normalizeTitle } from "./normalize.ts";
+import { normalizeArtist, normalizeTitle, spellings } from "./normalize.ts";
 import {
   cacheProviderSources,
   cachedArtistId,
@@ -70,16 +70,6 @@ const cachedSongFacts = Effect.fn(function* (item: CachedSource) {
   return { title, titleKey, durationMs, artistRoot: yield* artistRoot(item.provider, artistId) };
 });
 
-const digraphs = new Map([
-  ["ä", "ae"],
-  ["ö", "oe"],
-  ["ü", "ue"],
-  ["Ä", "Ae"],
-  ["Ö", "Oe"],
-  ["Ü", "Ue"],
-  ["ß", "ss"],
-]);
-
 // The cached results of the song by the `artist_title` rule
 const cachedCopies = Effect.fn(function* (
   facts: NonNullable<Effect.Success<ReturnType<typeof cachedSongFacts>>>,
@@ -88,24 +78,12 @@ const cachedCopies = Effect.fn(function* (
   // The title before its brackets narrows the scan; the rule decides
   const base = facts.title.split(/[([]/u)[0]?.trim() ?? "";
   if (base === "") return [];
-  // The spellings with umlauts, with `ae` and without both
-  const spellings = new Set([
-    base,
-    base.replaceAll(/[äöüÄÖÜß]/gu, (letter) => digraphs.get(letter) ?? letter),
-    base.replaceAll(/([aou])e/giu, "$1\u0308").normalize("NFC"),
-    base
-      .normalize("NFD")
-      .replaceAll("\u0308", "")
-      .replaceAll(/([aou])e/giu, "$1")
-      .replaceAll("ß", "ss")
-      .normalize("NFC"),
-  ]);
   const rows = yield* db
     .select({ provider: providerItem.provider, data: providerItem.data })
     .from(providerItem)
     .where(
       or(
-        ...[...spellings].map(
+        ...spellings(base).map(
           (spelling) =>
             sql`json_extract(${providerItem.data}, '$.title') like ${`%${spelling.replaceAll(/[\\%_]/g, "\\$&")}%`} escape '\\'`,
         ),
