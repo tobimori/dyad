@@ -6,6 +6,7 @@ import {
   libraryRemoteTrack,
   librarySyncState,
   playlistEntry,
+  providerItem,
   providerAccount,
   recording,
   source,
@@ -216,10 +217,6 @@ const writeSongs = (
     const sources = songs.flatMap((song) => (song.source === null ? [] : [song.source]));
     yield* cacheProviderSources(provider, sources);
     yield* touchGroups(changed);
-    yield* queueEditions(
-      provider,
-      sources.flatMap((source) => source.albumId ?? []),
-    );
 
     return recordingIds;
   });
@@ -766,10 +763,28 @@ const runLibrarySync = (payload: typeof SyncPayload.Type) =>
       );
     }
 
-    return yield* importLibrary(account.value, library).pipe(
+    yield* importLibrary(account.value, library).pipe(
       Effect.catchTag("LibraryError", (error) => recordFailure(account.value, error)),
     );
+    yield* queueLibraryEditions(payload.provider);
   }).pipe(Effect.catchTag("AccountChanged", () => Effect.void));
+
+// The albums of all library songs, also of songs that this sync did not change
+const queueLibraryEditions = (provider: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const rows = yield* db
+      .selectDistinct({
+        albumId: sql<string | null>`json_extract(${providerItem.data}, '$.albumId')`,
+      })
+      .from(libraryRemoteTrack)
+      .innerJoin(providerItem, eq(providerItem.sourceId, libraryRemoteTrack.sourceId))
+      .where(and(eq(libraryRemoteTrack.provider, provider), eq(libraryRemoteTrack.deleted, false)));
+    yield* queueEditions(
+      provider,
+      rows.flatMap((row) => row.albumId ?? []),
+    );
+  });
 
 export const queueLibrarySync = (provider: string) =>
   Effect.gen(function* () {
