@@ -1,4 +1,4 @@
-import { libraryItem, localFile, providerItem, providerPage, source } from "@dyad/db";
+import { libraryItem, localFile, providerItem, providerPage, recording, source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AlbumCard,
@@ -27,7 +27,7 @@ import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
-import { assertEdition } from "./albums.ts";
+import { albumEditions, assertEdition } from "./albums.ts";
 import { artistPageRef } from "./artists.ts";
 import { albumTypeOf, editionBase, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
@@ -634,6 +634,71 @@ const refArtistPage = (ref: ArtistRef) =>
       }),
   });
 
+// All tracks of the album: the tracks of the original edition, then the tracks of the other
+// editions that are not on it, marked with their edition words
+const albumTracks = (page: PageInput<ProviderAlbum>, externalId: string, data: ProviderAlbum) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const plugins = yield* Providers;
+    const own = yield* providerTracks(page.provider, page.providerName, data.tracks);
+    const editions = yield* albumEditions(page.provider, externalId);
+    if (editions.length === 0) return own;
+
+    const cached = (originRef: string) =>
+      Effect.gen(function* () {
+        const parts = Option.getOrNull(providerRefParts(originRef));
+        if (parts === null) return [];
+        const [row] = yield* db
+          .select({ data: providerPage.data })
+          .from(providerPage)
+          .where(
+            and(
+              eq(providerPage.provider, parts.provider),
+              eq(providerPage.kind, "album"),
+              eq(providerPage.externalId, parts.externalId),
+            ),
+          );
+        const album =
+          row === undefined ? Option.none() : Schema.decodeUnknownOption(ProviderAlbum)(row.data);
+        if (Option.isNone(album)) return [];
+        const name = plugins.get(parts.provider)?.name ?? parts.provider;
+        return yield* providerTracks(parts.provider, name, album.value.tracks);
+      });
+    const lists = yield* Effect.forEach(editions, (edition, index) =>
+      Effect.gen(function* () {
+        const tracks = edition.hasPage ? own : yield* firstNonEmpty(edition.albums.map(cached));
+        return tracks.map((track) =>
+          index === 0 ? track : new PageTrack({ ...track, edition: edition.words }),
+        );
+      }),
+    );
+
+    const ids = [...new Set(lists.flat().flatMap((track) => track.source.recordingId ?? []))];
+    const roots = new Map(
+      (yield* db
+        .select({ id: recording.id, root: recording.mergedIntoId })
+        .from(recording)
+        .where(inArray(recording.id, ids))).map((row) => [row.id, row.root ?? row.id]),
+    );
+    const seen = new Set<string>();
+    return lists.flat().filter((track) => {
+      const bound = track.source.recordingId;
+      const song = bound === null ? track.source.id : (roots.get(bound) ?? bound);
+      if (seen.has(song)) return false;
+      seen.add(song);
+      return true;
+    });
+  });
+
+const firstNonEmpty = <A, E, R>(lists: ReadonlyArray<Effect.Effect<ReadonlyArray<A>, E, R>>) =>
+  Effect.gen(function* () {
+    for (const list of lists) {
+      const found = yield* list;
+      if (found.length > 0) return found;
+    }
+    return [];
+  });
+
 /** Before the first fetch, a provider album page shows the tracks that the user saved */
 export const albumPage = (ref: AlbumRef) =>
   Option.match(providerRefParts(ref), {
@@ -669,7 +734,9 @@ export const albumPage = (ref: AlbumRef) =>
               ref,
               providerName: page.providerName,
               album: releaseCard(page.provider, page.data.release),
-              tracks: yield* providerTracks(page.provider, page.providerName, page.data.tracks),
+              tracks: yield* albumTracks(page, parts.externalId, page.data).pipe(
+                orDieOnDatabaseError("albumTracks"),
+              ),
               state: page.state,
             });
           }),

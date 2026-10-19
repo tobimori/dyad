@@ -123,6 +123,11 @@ export class PageTrack extends Schema.Class<PageTrack>("PageTrack")({
   number: Schema.NullOr(Schema.Int),
   /** `false`: the provider does not stream it, for example outside the storefront */
   playable: Schema.Boolean,
+  /** The edition words of a track that only another edition of the album has, for example `Deluxe` */
+  edition: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
   /** Why Dyad suggests the track, for example `Because you played Song`. Safe to show. */
   reason: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),

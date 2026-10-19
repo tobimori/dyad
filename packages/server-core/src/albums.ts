@@ -131,6 +131,72 @@ const resolveGroups = (entityType: "album" | "edition", ids: ReadonlyArray<strin
     return [...affected];
   });
 
+// The original edition: the earliest date, then the one without edition words
+const originalFirst = (a: typeof edition.$inferSelect, b: typeof edition.$inferSelect) =>
+  Number(a.date === null) - Number(b.date === null) ||
+  (a.date ?? "").localeCompare(b.date ?? "") ||
+  Number(a.editionWords !== null) - Number(b.editionWords !== null) ||
+  a.id.localeCompare(b.id);
+
+/**
+ * The editions of the album of a provider edition, the original first, with the provider albums
+ * that give their tracks. Empty when the album has only one edition.
+ */
+export const albumEditions = (provider: string, externalId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const id = yield* uuidV5(`${provider}:edition:${externalId}`);
+    const [page] = yield* db
+      .select({ root: sql<string>`coalesce(${edition.mergedIntoId}, ${edition.id})` })
+      .from(edition)
+      .where(eq(edition.id, id));
+    if (page === undefined) return [];
+    const [owner] = yield* db
+      .select({ id: sql<string>`coalesce(${album.mergedIntoId}, ${album.id})` })
+      .from(edition)
+      .innerJoin(album, eq(album.id, edition.albumId))
+      .where(eq(edition.id, page.root));
+    if (owner === undefined) return [];
+
+    const editions = yield* db
+      .select({ edition })
+      .from(edition)
+      .innerJoin(album, eq(album.id, edition.albumId))
+      .where(
+        and(
+          isNull(edition.mergedIntoId),
+          sql`coalesce(${album.mergedIntoId}, ${album.id}) = ${owner.id}`,
+        ),
+      );
+    if (editions.length < 2) return [];
+
+    const roots = editions.map((row) => row.edition.id);
+    const lists = yield* db
+      .select({
+        root: sql<string>`coalesce(${edition.mergedIntoId}, ${edition.id})`,
+        originRef: catalogAssertion.originRef,
+      })
+      .from(catalogAssertion)
+      .innerJoin(edition, eq(edition.id, catalogAssertion.entityId))
+      .where(
+        and(
+          eq(catalogAssertion.entityType, "edition"),
+          eq(catalogAssertion.field, "tracks"),
+          eq(catalogAssertion.retracted, false),
+          sql`coalesce(${edition.mergedIntoId}, ${edition.id}) in ${roots}`,
+        ),
+      );
+    return editions
+      .map((row) => row.edition)
+      .toSorted(originalFirst)
+      .map((row) => ({
+        words: row.editionWords ?? row.title,
+        hasPage: row.id === page.root,
+        // `<plugin>:<album ID>`
+        albums: lists.flatMap((list) => (list.root === row.id ? [list.originRef] : [])),
+      }));
+  });
+
 /**
  * Makes each album and its root from root editions: a root from the editions of all its members,
  * a merged album from its own
@@ -215,14 +281,7 @@ const projectAlbums = (albumIds: Iterable<string>) =>
           const own = editions.filter((row) =>
             merged.includes(id) ? row.albumId === id : rootOf.get(row.albumId ?? "") === id,
           );
-          // The original edition: the earliest date, then the one without edition words
-          const original = own.toSorted(
-            (a, b) =>
-              Number(a.date === null) - Number(b.date === null) ||
-              (a.date ?? "").localeCompare(b.date ?? "") ||
-              Number(a.editionWords !== null) - Number(b.editionWords !== null) ||
-              a.id.localeCompare(b.id),
-          )[0];
+          const original = own.toSorted(originalFirst)[0];
           const editionIds = new Set(own.map((row) => row.id));
           const type = resolveField(
             providers,
