@@ -1,8 +1,8 @@
 # Dyad
 
-Dyad is a local-first music library for local files, cloud files and streaming services. Server replicas (self-hosted server, later Electron) store the shared catalog and sync with each other. Clients (CLI first, then web, later mobile) connect to a server through Effect RPC. Almost every feature is a plugin.
+Dyad is a local-first music library for local files, cloud files and streaming services. It has one owner and no user accounts. Every device is a full replica that runs `server-core` (a home server, the CLI, later Electron) and replicates with the others. Devices differ only in what they can do: plugins, outputs, credentials. Almost every feature is a plugin.
 
-Local design notes are in `.docs/`. Git ignores them, so they can be missing. Start with `architecture.md`, then `data-model.md`, `catalog-schema.md`, `plugins.md` and `dj-sets.md`.
+Local design notes are in `.docs/`. Git ignores them, so they can be missing. Start with `product.md` (product decisions; it wins on conflict), then `architecture.md`, `data-model.md`, `catalog-schema.md`, `plugins.md` and `dj-sets.md`.
 
 ## Taste
 
@@ -32,19 +32,23 @@ Local design notes are in `.docs/`. Git ignores them, so they can be missing. St
 
 ## Glossary
 
-- **workspace**: one Dyad instance with its users, catalog and shared collections
-- **replica**: one database of a workspace. Server replicas hold all catalog input; client replicas hold only canonical rows and user data.
+- **workspace**: one Dyad instance of one owner: its devices, catalog and library
+- **replica**: one device's database. Every replica holds everything and computes the same catalog.
 - **assertion**: one field value of one entity from one origin. Canonical catalog rows are derived from assertions; nothing writes them directly.
-- **source**: one playable item: a provider track, a local file or a DJ set
-- **segment**: the time range of one track in a DJ set source
+- **album** and **edition**: an album is what the owner sees as one album (a Discogs master); an edition is one release of it with its own track list
+- **song**: one recording (table `recording`)
+- **source** (copy): one playable item of a song: a provider track, a local file, a download
+- **segment**: the time range of one track in a DJ set copy
+- **room**: an output or a group of outputs with its own queue; any device controls any room
 - **plugin**: a package in `plugins/` that registers features through `@dyad/plugin`
 
 ## Hit every surface
 
 Before you call a change done, check which of these apply and say so:
 
-- **Replicas**: two server replicas must converge. Data that other replicas need goes through assertions or CRDT operations, never through local state.
+- **Replicas**: two replicas must converge. Data that other replicas need goes through assertions or CRDT rows, never through local state.
 - **Clients**: CLI, web, and later Electron and mobile. Shared client code goes in `packages/client-runtime`. Contracts that cross the wire go in `packages/domain`.
+- **Rooms**: a playback change must work for any room, controlled from any device.
 - **Offline**: navigation and edits must not wait for the network.
 - **Plugins**: a feature that a plugin can supply must not be hard-coded in the core.
 - **Reverse states**: if you add a way in, add the way out. Import needs removal, link needs unlink.
