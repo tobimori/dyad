@@ -9,7 +9,7 @@ import { Clock, Effect, Option, Schema, Stream } from "effect";
 
 import { listRecentPlays } from "./history.ts";
 import { libraryAlbumCards, providerPageStream, providerTracks, releaseCard } from "./pages.ts";
-import { usableProviders } from "./providers.ts";
+import { callProvider, usableProviders } from "./providers.ts";
 import { playHistoryMs, playValue } from "./ranking.ts";
 import { RecommendationMemory, Recommenders, recommenderAccount } from "./recommenders.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
@@ -211,22 +211,11 @@ const forYouGroup = (
         Effect.gen(function* () {
           if (!entry.stale || entry.recommender.shelves === undefined) return entry;
           memory.attempts.set(entry.id, now);
-          const shelves = yield* entry.recommender.shelves(entry.credentials).pipe(
-            Effect.timeout("20 seconds"),
-            Effect.asSome,
-            Effect.catchTags({
-              ProviderError: (error) =>
-                Effect.logWarning("Personal shelves failed", error.reason).pipe(
-                  Effect.as(Option.none()),
-                ),
-              TimeoutError: () =>
-                Effect.logWarning("Personal shelves timed out").pipe(Effect.as(Option.none())),
-            }),
-            Effect.catchDefect((defect) =>
-              Effect.logError("Personal shelves crashed", defect).pipe(Effect.as(Option.none())),
-            ),
-            Effect.annotateLogs("recommender", entry.id),
-          );
+          const shelves = yield* callProvider(
+            "Personal shelves",
+            "20 seconds",
+            entry.recommender.shelves(entry.credentials),
+          ).pipe(Effect.annotateLogs("recommender", entry.id));
           if (Option.isNone(shelves)) return entry;
 
           const values = {

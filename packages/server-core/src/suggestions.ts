@@ -6,7 +6,7 @@ import { count, eq, gte, inArray, sql } from "drizzle-orm";
 import { Clock, Effect, Option } from "effect";
 
 import { cacheProviderSources, cachedProviderSource, cachedSummary } from "./provider-cache.ts";
-import { usableProviders } from "./providers.ts";
+import { callProvider, usableProviders } from "./providers.ts";
 import { playHistoryMs } from "./ranking.ts";
 import { RecommendationMemory } from "./recommenders.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
@@ -45,17 +45,13 @@ const searchOfUser = Effect.gen(function* () {
   // A failure or a timeout finds nothing
   return (query: string, key: string) =>
     Effect.gen(function* () {
-      const results = yield* search(query, usable.credentials).pipe(
-        Effect.timeout(searchTimeout),
-        Effect.catchTags({
-          ProviderError: (error) =>
-            Effect.logWarning("Suggestion search failed", error.reason).pipe(Effect.as([])),
-          TimeoutError: () => Effect.logWarning("Suggestion search timed out").pipe(Effect.as([])),
-        }),
-        Effect.catchDefect((defect) =>
-          Effect.logError("Suggestion search crashed", defect).pipe(Effect.as([])),
-        ),
-        Effect.annotateLogs("provider", id),
+      const results = Option.getOrElse(
+        yield* callProvider(
+          "Suggestion search",
+          searchTimeout,
+          search(query, usable.credentials),
+        ).pipe(Effect.annotateLogs("provider", id)),
+        () => [],
       );
       const cached = yield* cacheProviderSources(id, results);
       const summaries = yield* Effect.forEach(cached, (item) =>

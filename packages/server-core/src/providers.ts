@@ -2,7 +2,7 @@ import { credential, providerAccount } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import type { Credentials, PopularityHit, Provider, ProviderError } from "@dyad/plugin";
 import { eq } from "drizzle-orm";
-import { Context, Data, Effect, Layer, Redacted } from "effect";
+import { Context, Data, Duration, Effect, Layer, Option, Redacted } from "effect";
 
 /** Providers that plugins add, by provider ID */
 export class Providers extends Context.Service<Providers, Map<string, Provider>>()(
@@ -81,3 +81,25 @@ export const usableProviders = Effect.gen(function* () {
 
   return usable;
 });
+
+/**
+ * A plugin call that fails, times out or crashes gives `None` and a log line, so that one provider
+ * does not stop the others. `what` names the call in the log, for example `Copy search`.
+ */
+export const callProvider = <A, R>(
+  what: string,
+  timeout: Duration.Input,
+  call: Effect.Effect<A, ProviderError, R>,
+) =>
+  call.pipe(
+    Effect.timeout(timeout),
+    Effect.asSome,
+    Effect.catchTags({
+      ProviderError: (error) =>
+        Effect.logWarning(`${what} failed`, error.reason).pipe(Effect.as(Option.none<A>())),
+      TimeoutError: () => Effect.logWarning(`${what} timed out`).pipe(Effect.as(Option.none<A>())),
+    }),
+    Effect.catchDefect((defect) =>
+      Effect.logError(`${what} crashed`, defect).pipe(Effect.as(Option.none<A>())),
+    ),
+  );

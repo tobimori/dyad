@@ -7,7 +7,7 @@ import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Option } from "effect";
 
 import { cachedProviderSource, cachedSummary } from "./provider-cache.ts";
-import { linkedProviders } from "./providers.ts";
+import { callProvider, linkedProviders } from "./providers.ts";
 import { RecommendationMemory, Recommenders, recommenderAccount } from "./recommenders.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { resolveSuggestions } from "./suggestions.ts";
@@ -195,20 +195,16 @@ const radioTracks = (
             onSome: (linked) => linked.credentials,
           });
           const ownSeed = seed.summary?.provider === id ? seed.externalId : null;
-          const suggestions = yield* radio(
-            new RadioSeed({ title: seed.title, artist: seed.artist, externalId: ownSeed }),
-            credentials,
-          ).pipe(
-            Effect.timeout(answerTimeout),
-            Effect.catchTags({
-              ProviderError: (error) =>
-                Effect.logWarning("Radio failed", error.reason).pipe(Effect.as([])),
-              TimeoutError: () => Effect.logWarning("Radio timed out").pipe(Effect.as([])),
-            }),
-            Effect.catchDefect((defect) =>
-              Effect.logError("Radio crashed", defect).pipe(Effect.as([])),
-            ),
-            Effect.annotateLogs("recommender", id),
+          const suggestions = Option.getOrElse(
+            yield* callProvider(
+              "Radio",
+              answerTimeout,
+              radio(
+                new RadioSeed({ title: seed.title, artist: seed.artist, externalId: ownSeed }),
+                credentials,
+              ),
+            ).pipe(Effect.annotateLogs("recommender", id)),
+            () => [],
           );
           return suggestions.map((suggestion, position) => ({
             suggestion,

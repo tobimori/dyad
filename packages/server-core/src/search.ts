@@ -9,7 +9,7 @@ import { Array as Arr, Clock, Data, Effect, Option, Ref, Schema, Stream } from "
 
 import { normalizeIsrc } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
-import { Popularities, Providers, usableProviders } from "./providers.ts";
+import { Popularities, Providers, callProvider, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { withSeries } from "./sets.ts";
 import { queueCopyDiscovery } from "./source-copies.ts";
@@ -126,20 +126,11 @@ const searchProvider = (
   query: string,
 ) =>
   Effect.gen(function* () {
-    const sources = yield* search(query, credentials).pipe(
-      Effect.timeout(answerTimeout),
-      Effect.asSome,
-      Effect.catchTags({
-        ProviderError: (error) =>
-          Effect.logWarning("Provider search failed", error.reason).pipe(Effect.as(Option.none())),
-        TimeoutError: () =>
-          Effect.logWarning("Provider search timed out").pipe(Effect.as(Option.none())),
-      }),
-      Effect.catchDefect((defect) =>
-        Effect.logError("Provider search crashed", defect).pipe(Effect.as(Option.none())),
-      ),
-      Effect.annotateLogs("provider", id),
-    );
+    const sources = yield* callProvider(
+      "Provider search",
+      answerTimeout,
+      search(query, credentials),
+    ).pipe(Effect.annotateLogs("provider", id));
     if (Option.isNone(sources)) {
       return new Answer({ candidates: [], hits: [], unavailable: [name] });
     }
@@ -165,24 +156,15 @@ const fetchPopularity = (
   popularity: (query: string) => Effect.Effect<ReadonlyArray<PopularityHit>, ProviderError>,
   query: string,
 ) =>
-  popularity(query).pipe(
-    Effect.timeout(answerTimeout),
+  callProvider("Popularity source", answerTimeout, popularity(query)).pipe(
     Effect.map((hits) =>
-      hits.map(
+      Option.getOrElse(hits, () => []).map(
         (hit) =>
           new PopularityHit({
             ...hit,
             isrc: hit.isrc === null ? null : normalizeIsrc(hit.isrc),
           }),
       ),
-    ),
-    Effect.catchTags({
-      ProviderError: (error) =>
-        Effect.logWarning("Popularity source failed", error.reason).pipe(Effect.as([])),
-      TimeoutError: () => Effect.logWarning("Popularity source timed out").pipe(Effect.as([])),
-    }),
-    Effect.catchDefect((defect) =>
-      Effect.logError("Popularity source crashed", defect).pipe(Effect.as([])),
     ),
     Effect.annotateLogs("popularity", name),
   );

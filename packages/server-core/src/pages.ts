@@ -57,7 +57,7 @@ import { normV1, simplifyText, withoutGuests } from "./normalize.ts";
 import { albumTypeOf, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
-import { Providers, linkedProviders, usableProviders } from "./providers.ts";
+import { Providers, callProvider, linkedProviders, usableProviders } from "./providers.ts";
 import {
   catalogArtistId,
   libraryAlbumKeys,
@@ -825,16 +825,9 @@ const linkByName = (group: ArtistGroup, page: ArtistPage) =>
             return [];
           }
           searches.set(`${group.root}:${provider}`, now);
-          const results = yield* search(name, entry.credentials).pipe(
-            Effect.timeout("8 seconds"),
-            Effect.catchTags({
-              ProviderError: (error) =>
-                Effect.logWarning("Artist search failed", error.reason).pipe(Effect.as([])),
-              TimeoutError: () => Effect.logWarning("Artist search timed out").pipe(Effect.as([])),
-            }),
-            Effect.catchDefect((defect) =>
-              Effect.logError("Artist search crashed", defect).pipe(Effect.as([])),
-            ),
+          const results = Option.getOrElse(
+            yield* callProvider("Artist search", "8 seconds", search(name, entry.credentials)),
+            () => [],
           );
           const candidates = [
             ...new Set(

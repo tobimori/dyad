@@ -26,7 +26,7 @@ import {
   toCachedSource,
 } from "./provider-cache.ts";
 import type { CachedSource } from "./provider-cache.ts";
-import { Providers, linkedProviders, usableProviders } from "./providers.ts";
+import { Providers, callProvider, linkedProviders, usableProviders } from "./providers.ts";
 import { recordingGroup } from "./sets.ts";
 import { providerOrder } from "./source-preference.ts";
 import { versionWordsOf } from "./ranking.ts";
@@ -322,20 +322,16 @@ const discover = (
     yield* Effect.forEach(
       targets,
       ({ id, search, credentials }) =>
-        search(query, credentials).pipe(
-          Effect.timeout(searchTimeout),
-          Effect.flatMap((results) => cacheProviderSources(id, results)),
-          Effect.tap(() => Effect.sync(() => discoveries.set(`${sourceId}:${id}`, now))),
-          Effect.catchTags({
-            ProviderError: (error) =>
-              Effect.logWarning("Copy discovery failed", error.reason).pipe(Effect.as([])),
-            TimeoutError: () => Effect.logWarning("Copy discovery timed out").pipe(Effect.as([])),
-          }),
-          Effect.catchDefect((defect) =>
-            Effect.logError("Copy discovery crashed", defect).pipe(Effect.as([])),
-          ),
-          Effect.annotateLogs("provider", id),
-        ),
+        Effect.gen(function* () {
+          const results = yield* callProvider(
+            "Copy discovery",
+            searchTimeout,
+            search(query, credentials),
+          );
+          if (Option.isNone(results)) return;
+          yield* cacheProviderSources(id, results.value);
+          discoveries.set(`${sourceId}:${id}`, now);
+        }).pipe(Effect.annotateLogs("provider", id)),
       { concurrency: "unbounded", discard: true },
     );
   });
@@ -462,14 +458,13 @@ export const searchCopy = (sourceId: string, tried: ReadonlyArray<string>) =>
     );
 
     for (const { id: provider, search, usable } of providers) {
-      const results = yield* search(`${artist} ${title}`, usable.credentials).pipe(
-        Effect.timeout(searchTimeout),
-        Effect.catchTags({
-          ProviderError: (error) =>
-            Effect.logWarning("Copy search failed", error.reason).pipe(Effect.as([])),
-          TimeoutError: () => Effect.logWarning("Copy search timed out").pipe(Effect.as([])),
-        }),
-        Effect.annotateLogs("provider", provider),
+      const results = Option.getOrElse(
+        yield* callProvider(
+          "Copy search",
+          searchTimeout,
+          search(`${artist} ${title}`, usable.credentials),
+        ).pipe(Effect.annotateLogs("provider", provider)),
+        () => [],
       );
       const cached = yield* cacheProviderSources(
         provider,
