@@ -47,7 +47,7 @@ import { albumEditions, albumPageRefs, assertEdition, splitEdition } from "./alb
 import { linkFoundArtists } from "./artist-matching.ts";
 import { artistIdOf } from "./artists.ts";
 import { uuidV5 } from "./ids.ts";
-import { normV1, simplifyText } from "./normalize.ts";
+import { normV1, simplifyText, withoutGuests } from "./normalize.ts";
 import { albumTypeOf, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
@@ -966,11 +966,7 @@ const catalogArtist = (
 // types that other providers do not share. The title is without edition words, guests and an
 // `EP` or `Single` suffix, so that `Say It (feat. Tove Lo) [Remixes]` is `Say It (Remixes)`.
 const releaseTitle = (card: AlbumCard) =>
-  simplifyText(
-    splitEdition(card.title)
-      .base.replaceAll(/[([]\s*(?:feat|ft|featuring)\.?\s[^)\]]*[)\]]/giu, "")
-      .replace(/\s(?:feat|ft|featuring)\.?\s[^([]*/iu, " "),
-  ).replace(/\s(?:ep|single)$/u, "");
+  simplifyText(withoutGuests(splitEdition(card.title).base)).replace(/\s(?:ep|single)$/u, "");
 const releaseType = (card: AlbumCard) =>
   card.primaryType === null ? null : `${card.primaryType}|${card.secondaryTypes.join()}`;
 const sameRelease = (a: AlbumCard, b: AlbumCard) => {

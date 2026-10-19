@@ -205,6 +205,7 @@ export const entityMerge = sqliteTable(
     // Artists: `shared_recording` (a provider credit and a MusicBrainz credit of one merge group)
     // and `url_rel` (a MusicBrainz URL relation), `name_search` (a search by name, confirmed by
     // shared songs)
+    // Recordings without ISRC or MBID: `artist_title` (same artist group, title and duration).
     // Editions: `upc`. Albums: `edition_rule` (same artist, title and most songs).
     method: text("method", {
       enum: [
@@ -217,6 +218,7 @@ export const entityMerge = sqliteTable(
         "upc",
         "edition_rule",
         "name_search",
+        "artist_title",
       ],
     }).notNull(),
     confidence: real("confidence").notNull(),

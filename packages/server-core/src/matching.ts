@@ -1,10 +1,11 @@
-import { entityMerge, isrcLookup, job, recording } from "@dyad/db";
+import { artist, entityMerge, isrcLookup, job, recording, songArtist } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { MergeFailed } from "@dyad/domain";
 import type { MusicBrainzLookup, MusicBrainzRecording } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
-import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { alias } from "drizzle-orm/sqlite-core";
 
 // `albums.ts` imports this module, so use its exports only inside functions
 import { matchAlbumsOf } from "./albums.ts";
@@ -12,6 +13,7 @@ import { artistLinksKind } from "./artist-links.ts";
 import { matchArtistsOf } from "./artist-matching.ts";
 import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
 import { isrcRecordingId, mergeId, musicbrainzRecordingId } from "./ids.ts";
+import { simplifyText, withoutGuests } from "./normalize.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 
@@ -44,9 +46,9 @@ const IsrcEvidence = Schema.Struct({ isrc: Schema.String });
 class Edge extends Data.Class<{
   readonly fromId: string;
   readonly intoId: string;
-  readonly intoOrigin: "isrc" | "musicbrainz";
+  readonly intoOrigin: "isrc" | "musicbrainz" | "provider";
   readonly decision: "merge" | "reject";
-  readonly method: "mbid_tag" | "isrc";
+  readonly method: "mbid_tag" | "isrc" | "artist_title";
   readonly confidence: number;
   readonly evidence: Readonly<Record<string, string>>;
 }> {}
@@ -106,7 +108,7 @@ const writeEdge = (edge: Edge) =>
     return changed;
   });
 
-const fitsDuration = (durationMs: number | null | undefined, referenceMs: number | null) =>
+export const fitsDuration = (durationMs: number | null | undefined, referenceMs: number | null) =>
   durationMs === null ||
   durationMs === undefined ||
   referenceMs === null ||
@@ -320,6 +322,174 @@ const matchRecording = (recordingId: string, mbid: string | null) =>
     ];
   });
 
+/** Lower than ISRC, so that a copy with an ISRC follows its ISRC */
+const songConfidence = 0.8;
+
+/**
+ * The versions stay, so that a remix is another song. Guests go, because providers write them in
+ * the title or in the credit.
+ */
+export const songTitleKey = (title: string) => simplifyText(withoutGuests(title));
+
+/** The title, the duration and the root of the first credited artist of the recording's own row */
+export const songFacts = (recordingId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const credited = alias(artist, "credited");
+    const [row] = yield* db
+      .select({
+        title: recording.title,
+        durationMs: recording.durationMs,
+        artistRoot: sql<string | null>`coalesce(${credited.mergedIntoId}, ${songArtist.artistId})`,
+      })
+      .from(recording)
+      .leftJoin(
+        songArtist,
+        and(eq(songArtist.recordingId, recording.id), eq(songArtist.position, 0)),
+      )
+      .leftJoin(credited, eq(credited.id, songArtist.artistId))
+      .where(eq(recording.id, recordingId));
+    if (row?.title == null || row.durationMs === null || row.artistRoot === null) return null;
+    const titleKey = songTitleKey(row.title);
+    return titleKey === ""
+      ? null
+      : { title: row.title, titleKey, durationMs: row.durationMs, artistRoot: row.artistRoot };
+  });
+
+/** The other recordings of the same artist group with the same title key and a fitting duration */
+export const songCandidates = (
+  recordingId: string,
+  facts: { readonly titleKey: string; readonly durationMs: number; readonly artistRoot: string },
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const credited = alias(artist, "credited");
+    const root = alias(recording, "root");
+    const rows = yield* db
+      .select({
+        id: recording.id,
+        title: recording.title,
+        durationMs: recording.durationMs,
+        root: sql<string>`coalesce(${recording.mergedIntoId}, ${recording.id})`,
+        rootOrigin: root.origin,
+      })
+      .from(songArtist)
+      .innerJoin(recording, eq(recording.id, songArtist.recordingId))
+      .leftJoin(root, eq(root.id, sql`coalesce(${recording.mergedIntoId}, ${recording.id})`))
+      .leftJoin(credited, eq(credited.id, songArtist.artistId))
+      .where(
+        and(
+          eq(songArtist.position, 0),
+          ne(recording.id, recordingId),
+          sql`coalesce(${credited.mergedIntoId}, ${songArtist.artistId}) = ${facts.artistRoot}`,
+        ),
+      );
+    return rows.filter(
+      (row) =>
+        row.title !== null &&
+        row.durationMs !== null &&
+        songTitleKey(row.title) === facts.titleKey &&
+        fitsDuration(row.durationMs, facts.durationMs),
+    );
+  });
+
+// An ISRC or an MBID tag. Such a recording follows that evidence. Only the recording of a copy
+// decides; an ISRC or MusicBrainz recording is the root of a group of copies.
+const hasStrongIdentity = (recordingId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const [row] = yield* db
+      .select({ origin: recording.origin })
+      .from(recording)
+      .where(eq(recording.id, recordingId));
+    if (row?.origin !== "provider" && row?.origin !== "local") return true;
+    const isrc = (yield* resolvedValues([recordingId], "isrc", fields.isrc)).get(recordingId);
+    if (isrc != null) return true;
+    const tagged = yield* db
+      .select({ id: entityMerge.id })
+      .from(entityMerge)
+      .where(
+        and(
+          eq(entityMerge.fromId, recordingId),
+          eq(entityMerge.method, "mbid_tag"),
+          eq(entityMerge.decision, "merge"),
+        ),
+      );
+    return tagged.length > 0;
+  });
+
+/** MusicBrainz and ISRC groups first, so that weak copies follow the evidence of strong ones */
+export const rootRank = (origin: string | null) =>
+  ["musicbrainz", "isrc", "provider", "local"].indexOf(origin ?? "") + 1 || 9;
+
+/**
+ * A recording without ISRC or MBID joins the best group of a song with the same artist group (by
+ * IDs), the same title key and a fitting duration. Without a candidate it stays alone. Never a
+ * group whose root is the recording itself, so that two copies do not point at each other.
+ */
+const decideSong = (recordingId: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const facts = yield* songFacts(recordingId);
+    const strong = yield* hasStrongIdentity(recordingId);
+    const candidates = facts === null ? [] : yield* songCandidates(recordingId, facts);
+    const [group] = (strong ? [] : candidates)
+      .filter((row) => row.root !== recordingId)
+      .toSorted(
+        (a, b) => rootRank(a.rootOrigin) - rootRank(b.rootOrigin) || a.root.localeCompare(b.root),
+      );
+    const target = group?.root ?? null;
+
+    const earlier = yield* db
+      .select({ intoId: entityMerge.intoId })
+      .from(entityMerge)
+      .where(
+        and(
+          eq(entityMerge.entityType, "recording"),
+          eq(entityMerge.fromId, recordingId),
+          eq(entityMerge.method, "artist_title"),
+          eq(entityMerge.origin, "system"),
+          eq(entityMerge.decision, "merge"),
+        ),
+      );
+    const edge = (intoId: string, decision: "merge" | "reject") =>
+      writeEdge(
+        new Edge({
+          fromId: recordingId,
+          intoId,
+          intoOrigin: "provider",
+          decision,
+          method: "artist_title",
+          confidence: songConfidence,
+          evidence: { artist: facts?.artistRoot ?? "", title: facts?.titleKey ?? "" },
+        }),
+      );
+    const rejected = yield* Effect.filter(
+      earlier.filter((row) => row.intoId !== target),
+      (row) => edge(row.intoId, "reject"),
+    );
+    const merged = target === null ? false : yield* edge(target, "merge");
+    return { strong, candidates, changed: merged || rejected.length > 0 };
+  });
+
+/**
+ * Decides the `artist_title` merges of the recordings. A recording with strong identity also
+ * decides again for its weak candidates, which can now join its group. Returns the changed ones.
+ */
+export const matchSongs = (recordingIds: Iterable<string>) =>
+  Effect.gen(function* () {
+    const changed: Array<string> = [];
+    for (const id of new Set(recordingIds)) {
+      const decided = yield* decideSong(id);
+      if (decided.changed) changed.push(id);
+      if (!decided.strong) continue;
+      for (const candidate of decided.candidates) {
+        if ((yield* decideSong(candidate.id)).changed) changed.push(candidate.id);
+      }
+    }
+    return changed;
+  });
+
 /**
  * Identity of recordings and artists: an `admin` row on an entity freezes its `system` rows. Then
  * the highest confidence, the newest HLC and the lowest target win.
@@ -429,6 +599,9 @@ export const updateRecording = (recordingId: string, mbid: string | null) =>
       .where(eq(recording.id, recordingId));
     const projected = [...affected, recordingId, row?.mergedIntoId ?? recordingId];
     yield* projectRecordings(projected);
+    // After the projection, because the rule compares projected titles, durations and artists
+    const moved = yield* matchSongs([recordingId]);
+    if (moved.length > 0) yield* projectRecordings(yield* resolveRoots(moved));
     yield* matchArtistsOf(projected);
     yield* matchAlbumsOf(affected);
   });

@@ -55,3 +55,9 @@ export const normalizeArtist = (artist: string) =>
  */
 export const normV1 = (text: string) =>
   text.normalize("NFKC").toLowerCase().trim().replaceAll(/\s+/gu, " ");
+
+/** The title without guests: `Say It (feat. Tove Lo) [Remixes]` gives `Say It [Remixes]` */
+export const withoutGuests = (title: string) =>
+  title
+    .replaceAll(/[([]\s*(?:feat|ft|featuring)\.?\s[^)\]]*[)\]]/giu, "")
+    .replace(/\s(?:feat|ft|featuring)\.?\s[^([]*/iu, " ");

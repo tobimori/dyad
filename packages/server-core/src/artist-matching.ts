@@ -1,4 +1,4 @@
-import { artist, catalogAssertion, entityMerge, identifier, recording } from "@dyad/db";
+import { artist, catalogAssertion, entityMerge, identifier, recording, songArtist } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import type { CatalogInputRow } from "@dyad/domain";
 import { artistNameKey } from "@dyad/plugin/tracklist";
@@ -6,8 +6,14 @@ import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Option, Schema } from "effect";
 
 import { artistIdOf, mbidScheme, projectArtistRows, touchArtistGroups } from "./artists.ts";
-import { ArtistLinkEvidence, fields, providerOf } from "./assertions.ts";
-import { effectiveTarget, followEdges, writeSystemMerge } from "./matching.ts";
+import { ArtistLinkEvidence, fields, projectRecordings, providerOf } from "./assertions.ts";
+import {
+  effectiveTarget,
+  followEdges,
+  matchSongs,
+  resolveRoots,
+  writeSystemMerge,
+} from "./matching.ts";
 
 // Below the SQLite limit of 32766 parameters
 const chunkSize = 500;
@@ -371,7 +377,22 @@ export const linkFoundArtists = (
       changed.push(from.id);
       yield* resolveArtistRoots([from.id]);
     }
-    return changed.length > 0;
+    if (changed.length === 0) return false;
+
+    // The songs of the joined artists can now meet the songs of the group
+    const credited = yield* db
+      .selectDistinct({ id: songArtist.recordingId })
+      .from(songArtist)
+      .innerJoin(artist, eq(artist.id, songArtist.artistId))
+      .where(
+        and(
+          eq(songArtist.position, 0),
+          or(inArray(artist.id, changed), inArray(artist.mergedIntoId, changed)),
+        ),
+      );
+    const moved = yield* matchSongs(credited.map((row) => row.id));
+    if (moved.length > 0) yield* projectRecordings(yield* resolveRoots(moved));
+    return true;
   });
 
 /** Decides the provider artists that the credits in the merge groups of the recordings name */
