@@ -81,6 +81,7 @@ export const songs = new Section({
           selected={list.selected}
           playing={playsSource(app.player.current?.source.id)}
           historyRows={0}
+          markSaved={false}
           empty={empty()}
           onSelect={list.select}
           onActivate={list.activate}

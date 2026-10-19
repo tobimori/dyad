@@ -41,7 +41,7 @@ import { startPluginHost } from "./context/plugin-host.ts";
 import { loadDeviceToken } from "./commands/devices.ts";
 import { startLocalReplica } from "./context/replica.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
-import { DislikedProvider } from "./context/disliked.tsx";
+import { MarksProvider } from "./context/marks.tsx";
 import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
 import { Engine, engineLayer } from "./playback/engine.ts";
@@ -225,7 +225,7 @@ const player = Effect.fn(function* (controller: boolean) {
             <ErrorBoundary onError={logCrash} onQuit={() => renderer.destroy()}>
               <ToastProvider>
                 <DialogProvider>
-                  <DislikedProvider atoms={atoms}>
+                  <MarksProvider atoms={atoms}>
                     <App
                       serverUrl={serverUrl}
                       atoms={atoms}
@@ -239,7 +239,7 @@ const player = Effect.fn(function* (controller: boolean) {
                       saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
                       replica={replica}
                     />
-                  </DislikedProvider>
+                  </MarksProvider>
                 </DialogProvider>
               </ToastProvider>
             </ErrorBoundary>

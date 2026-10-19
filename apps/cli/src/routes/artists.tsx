@@ -11,7 +11,7 @@ const title = "Artists";
 export const artists = new Section({
   id: "artists",
   title,
-  order: 30,
+  order: 35,
   command: null,
   useView: (app) => {
     const result = useAtomValue(app.atoms.libraryArtists);

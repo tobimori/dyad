@@ -12,7 +12,7 @@ import { useRef, useState } from "react";
 
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
-import { useDisliked } from "../context/disliked.tsx";
+import { markerOf, useMarks } from "../context/marks.tsx";
 import { scrollOffset, useRowClick, videoMark } from "./track-list.tsx";
 
 /** A heading or the empty row above it. The cursor skips it. */
@@ -158,7 +158,7 @@ function RowCells(props: {
   readonly playing: boolean;
 }) {
   const theme = useTheme();
-  const isDisliked = useDisliked();
+  const marks = useMarks();
   const row = props.row;
   const bold = props.selected;
   const secondary = props.selected ? theme.text : theme.muted;
@@ -170,14 +170,20 @@ function RowCells(props: {
 
   if (row instanceof TrackRow) {
     const source = row.track.source;
+    const mark = marks.song(source);
     const flexible = Math.max(0, props.width - markerWidth - numberWidth - timeWidth - gap * 4);
     const titleWidth = Math.floor(flexible * 0.6);
     // A disliked song shows dim like one that cannot play
-    const dim = !row.track.playable || isDisliked(source);
+    const dim = !row.track.playable || marks.disliked(source);
     const fg = dim ? theme.faint : theme.text;
     return (
       <>
-        {marker}
+        <text
+          width={markerWidth}
+          fg={props.playing || mark === "favorite" ? theme.accent : theme.muted}
+        >
+          {props.playing ? "▶" : markerOf(mark, true)}
+        </text>
         <Cell
           text={row.track.number === null ? "" : String(row.track.number)}
           width={numberWidth}

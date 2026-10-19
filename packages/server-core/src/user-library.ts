@@ -2,6 +2,7 @@ import {
   album,
   artist,
   libraryItem,
+  songArtist,
   libraryRemoteTrack,
   playlist,
   playlistEntry,
@@ -11,6 +12,7 @@ import {
 import { Database } from "@dyad/db/node";
 import {
   LibraryItemRow,
+  LibraryMarks,
   PlaylistEntryRow,
   PlaylistNotFound,
   PlaylistRow,
@@ -93,6 +95,21 @@ export const setMembership = Effect.fn("setMembership")(function* (
 
 const markTables = { recording, album, artist };
 
+// The IDs of the merge groups of `roots`
+const membersOf = Effect.fn(function* (
+  entityType: LibraryEntityType,
+  roots: ReadonlyArray<string>,
+) {
+  if (roots.length === 0) return [];
+  const db = yield* Database;
+  const table = markTables[entityType];
+  const rows = yield* db
+    .select({ id: table.id })
+    .from(table)
+    .where(or(inArray(table.id, roots), inArray(table.mergedIntoId, roots)));
+  return [...new Set([...roots, ...rows.map((row) => row.id)])];
+});
+
 // The entity IDs of the merge group of an entity
 const groupOf = Effect.fn(function* (entityType: LibraryEntityType, entityId: string) {
   const db = yield* Database;
@@ -101,12 +118,9 @@ const groupOf = Effect.fn(function* (entityType: LibraryEntityType, entityId: st
     .select({ mergedIntoId: table.mergedIntoId })
     .from(table)
     .where(eq(table.id, entityId));
-  const root = row?.mergedIntoId ?? entityId;
-  const members = yield* db
-    .select({ id: table.id })
-    .from(table)
-    .where(or(eq(table.id, root), eq(table.mergedIntoId, root)));
-  return [...new Set([entityId, root, ...members.map((member) => member.id)])];
+  return [
+    ...new Set([entityId, ...(yield* membersOf(entityType, [row?.mergedIntoId ?? entityId]))]),
+  ];
 });
 
 // The newest user row decides. Else an import decides: favorite if one is, else saved.
@@ -127,9 +141,10 @@ const effectiveMark = (
   return rows.some((row) => row.mark === "favorite") ? "favorite" : "saved";
 };
 
-/** The effective mark of each marked song, by merge root, with the marked recording IDs */
-export const recordingMarks = Effect.gen(function* () {
+// The effective mark of each marked entity, by merge root, with the marked entity IDs
+const entityMarks = Effect.fn(function* (entityType: LibraryEntityType) {
   const db = yield* Database;
+  const table = markTables[entityType];
   const rows = yield* db
     .select({
       entityId: libraryItem.entityId,
@@ -139,15 +154,15 @@ export const recordingMarks = Effect.gen(function* () {
       addedAt: libraryItem.addedAt,
     })
     .from(libraryItem)
-    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
+    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, entityType)));
   const ids = [...new Set(rows.map((row) => row.entityId))];
   const bound =
     ids.length === 0
       ? []
       : yield* db
-          .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
-          .from(recording)
-          .where(inArray(recording.id, ids));
+          .select({ id: table.id, mergedIntoId: table.mergedIntoId })
+          .from(table)
+          .where(inArray(table.id, ids));
   const rootOf = new Map(bound.map((row) => [row.id, row.mergedIntoId ?? row.id]));
   const groups = Arr.groupBy(rows, (row) => rootOf.get(row.entityId) ?? row.entityId);
   return new Map(
@@ -162,17 +177,84 @@ export const recordingMarks = Effect.gen(function* () {
   );
 });
 
-/** The recordings of the merge groups of the disliked songs */
+/** The effective mark of each marked song, by merge root, with the marked recording IDs */
+export const recordingMarks = entityMarks("recording");
+
+// The mark of each ID of the marked merge groups
+const marksById = Effect.fn(function* (entityType: LibraryEntityType) {
+  const db = yield* Database;
+  const table = markTables[entityType];
+  const marks = yield* entityMarks(entityType);
+  const roots = [...marks.keys()];
+  const members =
+    roots.length === 0
+      ? []
+      : yield* db
+          .select({ id: table.id, mergedIntoId: table.mergedIntoId })
+          .from(table)
+          .where(or(inArray(table.id, roots), inArray(table.mergedIntoId, roots)));
+  return new Map([
+    ...[...marks].flatMap(([root, group]) =>
+      [root, ...group.entityIds].map((id) => [id, group.mark] as const),
+    ),
+    ...members.flatMap((row) => {
+      const group = marks.get(row.mergedIntoId ?? row.id);
+      return group === undefined ? [] : [[row.id, group.mark] as const];
+    }),
+  ]);
+});
+
+/**
+ * The recordings of the disliked songs, and of the songs of disliked albums and artists, with
+ * all recordings of their merge groups
+ */
 export const dislikedRecordings = Effect.gen(function* () {
   const db = yield* Database;
-  const roots = [...(yield* recordingMarks)].flatMap(([root, group]) =>
-    group.mark === "disliked" ? [root] : [],
-  );
-  if (roots.length === 0) return [];
+  const disliked = (marks: Map<string, { readonly mark: LibraryMark }>) =>
+    [...marks].flatMap(([root, group]) => (group.mark === "disliked" ? [root] : []));
+  const albums = yield* membersOf("album", disliked(yield* entityMarks("album")));
+  const artists = yield* membersOf("artist", disliked(yield* entityMarks("artist")));
+  const ofAlbums =
+    albums.length === 0
+      ? []
+      : yield* db
+          .select({ id: recording.id })
+          .from(recording)
+          .where(inArray(recording.albumId, albums));
+  const ofArtists =
+    artists.length === 0
+      ? []
+      : yield* db
+          .select({ id: songArtist.recordingId })
+          .from(songArtist)
+          .where(inArray(songArtist.artistId, artists));
+  const ids = yield* membersOf("recording", [
+    ...new Set([
+      ...disliked(yield* recordingMarks),
+      ...[...ofAlbums, ...ofArtists].map((row) => row.id),
+    ]),
+  ]);
+  if (ids.length === 0) return [];
   return yield* db
     .select({ id: recording.id, title: recording.title, artist: recording.artistName })
     .from(recording)
-    .where(or(inArray(recording.id, roots), inArray(recording.mergedIntoId, roots)));
+    .where(inArray(recording.id, ids));
+});
+
+/** The owner's marks, by each ID of the marked merge groups */
+export const listMarks = Effect.gen(function* () {
+  const [recordings, albums, artists, disliked] = yield* Effect.all([
+    marksById("recording"),
+    marksById("album"),
+    marksById("artist"),
+    dislikedRecordings,
+  ]);
+  return new LibraryMarks({
+    recordings: Object.fromEntries(recordings),
+    albums: Object.fromEntries(albums),
+    artists: Object.fromEntries(artists),
+    disliked: disliked.map((row) => RecordingId.make(row.id)),
+  });
 });
 
 /** Whether a mark puts the entity in the library */

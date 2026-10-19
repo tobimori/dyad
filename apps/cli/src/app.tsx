@@ -156,7 +156,6 @@ export function App(props: {
   const webLinks = useWebLinks({ connection: client, run: props.run });
   const playFrom = usePlayFrom(props.atoms);
   const libraryMarks = useLibraryMarks({
-    atoms: props.atoms,
     replica: props.replica,
     run: props.run,
   });

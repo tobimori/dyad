@@ -99,6 +99,15 @@ export const PartialDate = Schema.String.check(Schema.isPattern(/^\d{4}(-\d{2}(-
 export const ReleaseType = Schema.Literals(["album", "single", "ep"]);
 export const SecondaryType = Schema.Literals(["compilation", "live"]);
 
+/** The owner's marks by each ID of the marked merge groups */
+export class LibraryMarks extends Schema.Class<LibraryMarks>("LibraryMarks")({
+  recordings: Schema.Record(Schema.String, LibraryMark),
+  albums: Schema.Record(Schema.String, LibraryMark),
+  artists: Schema.Record(Schema.String, LibraryMark),
+  /** Also the songs of disliked albums and artists */
+  disliked: Schema.Array(RecordingId),
+}) {}
+
 export class AlbumCard extends Schema.Class<AlbumCard>("AlbumCard")({
   ref: AlbumRef,
   title: Schema.String,
@@ -945,8 +954,7 @@ const OwnerRpc = RpcGroup.make(
     error: PlaylistNotFound,
   }),
   Rpc.make("removePlaylistEntry", { payload: { entryId: Schema.String } }),
-  /** The recordings of the disliked songs, with all recordings of their merge groups */
-  Rpc.make("listDisliked", { success: Schema.Array(RecordingId) }),
+  Rpc.make("listMarks", { success: LibraryMarks }),
   /**
    * `null` clears the owner's mark, so that the imports decide again. `sourceId`: the copy that the
    * owner marked, so that a search result enters the catalog.

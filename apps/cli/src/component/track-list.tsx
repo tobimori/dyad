@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
-import { useDisliked } from "../context/disliked.tsx";
+import { markerOf, useMarks } from "../context/marks.tsx";
 
 export class ListItem extends Data.Class<{
   /** Unique in the list, also when a source is in the list twice */
@@ -104,6 +104,7 @@ export const videoMark = " video";
 
 function Columns(props: {
   readonly marker: string;
+  readonly markerColor: string;
   readonly title: string;
   readonly video: boolean;
   readonly artist: string;
@@ -116,7 +117,6 @@ function Columns(props: {
   readonly fg: string;
   /** Color of all columns after the title */
   readonly secondary: string;
-  readonly accent: string;
   readonly attributes: number;
 }) {
   const theme = useTheme();
@@ -124,7 +124,7 @@ function Columns(props: {
 
   return (
     <>
-      <text width={markerWidth} fg={props.accent}>
+      <text width={markerWidth} fg={props.markerColor}>
         {props.marker}
       </text>
       <text width={widths.title} fg={props.fg} attributes={props.attributes}>
@@ -178,12 +178,14 @@ export function TrackList(props: {
   readonly playing: (item: TrackItem) => boolean;
   /** Rows above this index are history and show dimmed */
   readonly historyRows: number;
+  /** `false` in a list of saved songs, where only favorites show a marker */
+  readonly markSaved?: boolean;
   readonly empty: string;
   readonly onSelect: (index: number) => void;
   readonly onActivate: (index: number) => void;
 }) {
   const theme = useTheme();
-  const isDisliked = useDisliked();
+  const marks = useMarks();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const offset = useRef(0);
   const click = useRowClick(props.onSelect, props.onActivate);
@@ -213,6 +215,7 @@ export function TrackList(props: {
       <box flexDirection="row" gap={gap} paddingX={1} height={1} flexShrink={0}>
         <Columns
           marker=" "
+          markerColor={theme.muted}
           title="Title"
           video={false}
           artist="Artist"
@@ -224,7 +227,6 @@ export function TrackList(props: {
           wide={wide}
           fg={theme.muted}
           secondary={theme.muted}
-          accent={theme.muted}
           attributes={TextAttributes.BOLD}
         />
       </box>
@@ -247,7 +249,8 @@ export function TrackList(props: {
           const played = index < props.historyRows;
           const unavailable = item instanceof UnavailableItem;
           const track = unavailable ? item.entry : item.source;
-          const dim = unavailable || isDisliked(item.source);
+          const dim = unavailable || marks.disliked(item.source);
+          const mark = unavailable ? undefined : marks.song(item.source);
           const color = dim ? theme.faint : rowColor(played);
 
           return (
@@ -261,7 +264,8 @@ export function TrackList(props: {
               onMouseDown={() => click(index)}
             >
               <Columns
-                marker={playing ? "▶" : " "}
+                marker={playing ? "▶" : markerOf(mark, props.markSaved ?? true)}
+                markerColor={playing || mark === "favorite" ? theme.accent : theme.muted}
                 title={titleOf(track)}
                 video={!unavailable && item.source.video}
                 artist={track.artist ?? ""}
@@ -274,7 +278,6 @@ export function TrackList(props: {
                 wide={wide}
                 fg={playing ? theme.accent : color}
                 secondary={selected || dim ? color : theme.muted}
-                accent={theme.accent}
                 attributes={selected ? TextAttributes.BOLD : TextAttributes.NONE}
               />
             </box>
