@@ -25,6 +25,7 @@ import { and, asc, count, eq, inArray, isNull, notInArray, sql } from "drizzle-o
 import { HlcClock } from "@dyad/sync";
 import { Clock, Data, Effect, Equal, Layer, Option, Schema } from "effect";
 
+import { queueEditions } from "./albums.ts";
 import { boundRecordingId, uuidV5 } from "./ids.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
 import { PlaylistPushPayload, playlistPushKind, queuePlaylistPush } from "./playlist-push.ts";
@@ -215,6 +216,10 @@ const writeSongs = (
     const sources = songs.flatMap((song) => (song.source === null ? [] : [song.source]));
     yield* cacheProviderSources(provider, sources);
     yield* touchGroups(changed);
+    yield* queueEditions(
+      provider,
+      sources.flatMap((source) => source.albumId ?? []),
+    );
 
     return recordingIds;
   });

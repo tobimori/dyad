@@ -1,13 +1,14 @@
-import { catalogAssertion, recording } from "@dyad/db";
+import { album, catalogAssertion, edition, editionTrack, recording } from "@dyad/db";
 import { Database, ReplicaDatabase } from "@dyad/db/node";
 import { CreditedArtist } from "@dyad/plugin";
 import type { Provider } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
 import type { editionFields } from "./albums.ts";
-import { AlbumType, ReleaseDate, shownAlbum } from "./editions.ts";
+import { AlbumType, ReleaseDate } from "./editions.ts";
 import { projectArtists } from "./artists.ts";
 import { assertionId } from "./ids.ts";
 import { Providers } from "./providers.ts";
@@ -289,8 +290,18 @@ export const resolvedValues = <F extends keyof typeof fields>(
     return values;
   });
 
+// The album line of a song: an album before an EP and a single, then other types
+const albumRank = (type: typeof album.$inferSelect.type) => {
+  if (type === "album") return 0;
+  if (type === null) return 1;
+  if (type === "ep") return 2;
+  if (type === "single") return 3;
+  return 4;
+};
+
 /**
- * Makes the canonical fields of each recording from the assertions. A root resolves over the
+ * Makes the canonical fields of each recording from the assertions. The album and artwork come
+ * from the album of the song when an edition has it as a track. A root resolves over the
  * assertions of all recordings merged into it; a merged recording keeps its own fields.
  */
 export const projectRecordings = (recordingIds: Iterable<string>) =>
@@ -321,15 +332,39 @@ export const projectRecordings = (recordingIds: Iterable<string>) =>
         ),
       );
 
+    // The albums that have a member as an edition track
+    const rootAlbum = alias(album, "root_album");
+    const appearances = yield* db
+      .select({
+        recordingId: editionTrack.recordingId,
+        albumId: rootAlbum.id,
+        title: rootAlbum.title,
+        type: rootAlbum.type,
+        year: rootAlbum.year,
+        artworkUrl: rootAlbum.artworkUrl,
+      })
+      .from(editionTrack)
+      .innerJoin(edition, eq(edition.id, editionTrack.editionId))
+      .innerJoin(album, eq(album.id, edition.albumId))
+      .innerJoin(rootAlbum, eq(rootAlbum.id, sql`coalesce(${album.mergedIntoId}, ${album.id})`))
+      .where(inArray(editionTrack.recordingId, [...ids, ...merged.map((member) => member.id)]));
+
     const changed = yield* Effect.forEach(rows, (row) => {
       const members = new Set(membersOf.get(row.id));
       const own = assertions.filter((assertion) => members.has(assertion.entityId));
-      const shown = shownAlbum(own, compareAssertions(providers));
+      const [shown] = appearances
+        .filter((appearance) => members.has(appearance.recordingId) && appearance.title !== null)
+        .toSorted(
+          (a, b) =>
+            albumRank(a.type) - albumRank(b.type) ||
+            (a.year ?? Infinity) - (b.year ?? Infinity) ||
+            a.albumId.localeCompare(b.albumId),
+        );
       const resolved = {
         title: resolveField(providers, own, "title", fields.title),
         artistName:
           resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
-        album: shown?.album ?? resolveField(providers, own, "album", fields.album),
+        album: shown?.title ?? resolveField(providers, own, "album", fields.album),
         durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
         artworkUrl:
           shown?.artworkUrl ?? resolveField(providers, own, "artwork_url", fields.artwork_url),

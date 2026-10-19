@@ -419,6 +419,43 @@ class PageInput<A> extends Data.Class<{
   readonly state: PageState;
 }> {}
 
+/** Fetches a provider page, then caches it with its tracks and writes its facts */
+export const fetchProviderPage = <A, E, R>(
+  kind: "artist" | "album" | "home",
+  parts: { readonly provider: string; readonly externalId: string },
+  schema: Schema.Codec<A, E>,
+  fetch: Effect.Effect<A, ProviderError>,
+  options: {
+    readonly tracks: (data: A) => ReadonlyArray<ProviderTrack>;
+    readonly facts?: (data: A) => Effect.Effect<void, never, R>;
+  },
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    // Before the tracks, so that every track of the page is at least as new as the page
+    const fetchedAt = yield* Clock.currentTimeMillis;
+    const data = yield* fetch.pipe(Effect.timeout(fetchTimeout));
+    yield* cacheProviderSources(
+      parts.provider,
+      options.tracks(data).map((track) => track.source),
+    );
+    const values = {
+      ...parts,
+      kind,
+      data: yield* Schema.encodeEffect(schema)(data).pipe(Effect.orDie),
+      fetchedAt,
+    };
+    yield* db
+      .insert(providerPage)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [providerPage.provider, providerPage.kind, providerPage.externalId],
+        set: values,
+      });
+    if (options.facts !== undefined) yield* options.facts(data);
+    return { data, fetchedAt };
+  });
+
 /** The cached page at once, then the fetched page when the cache is older than a day */
 export const providerPageStream = <A, E, Page, R>(
   kind: "artist" | "album" | "home",
@@ -490,33 +527,16 @@ export const providerPageStream = <A, E, Page, R>(
           reason: `Cannot reach ${providerName}`,
         }),
       );
-      const refresh = Effect.gen(function* () {
-        // Before the tracks, so that every track of the page is at least as new as the page
-        const fetchedAt = yield* Clock.currentTimeMillis;
-        const data = yield* fetch(externalId, usable.credentials).pipe(
-          Effect.timeout(fetchTimeout),
-        );
-        yield* cacheProviderSources(
-          provider,
-          options.tracks(data).map((track) => track.source),
-        );
-        const values = {
-          provider,
-          kind,
-          externalId,
-          data: yield* Schema.encodeEffect(schema)(data).pipe(Effect.orDie),
-          fetchedAt,
-        };
-        yield* db
-          .insert(providerPage)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [providerPage.provider, providerPage.kind, providerPage.externalId],
-            set: values,
-          });
-        if (options.facts !== undefined) yield* options.facts(data);
-        return yield* emit(data, new PageState({ status: "fresh", fetchedAt, reason: null }));
-      }).pipe(
+      const refresh = fetchProviderPage(
+        kind,
+        parts,
+        schema,
+        fetch(externalId, usable.credentials),
+        options,
+      ).pipe(
+        Effect.flatMap(({ data, fetchedAt }) =>
+          emit(data, new PageState({ status: "fresh", fetchedAt, reason: null })),
+        ),
         Effect.catchTags({
           ProviderError: (error) =>
             Effect.logWarning("Provider page failed", error.reason).pipe(

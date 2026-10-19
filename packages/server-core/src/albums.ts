@@ -8,17 +8,20 @@ import {
   entityMerge,
   recording,
 } from "@dyad/db";
-import { Database } from "@dyad/db/node";
-import type { ProviderAlbum } from "@dyad/plugin";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
+import { ProviderAlbum } from "@dyad/plugin";
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
-import { Array as Arr, Effect, Schema } from "effect";
+import { Array as Arr, Effect, Layer, Schema } from "effect";
 
 import { creditNames, creditedArtists, projectArtistRows, sameNames } from "./artists.ts";
-import { ArtistCredit, assertFields, resolveField } from "./assertions.ts";
+import { ArtistCredit, assertFields, projectRecordings, resolveField } from "./assertions.ts";
 import { AlbumType, ReleaseDate } from "./editions.ts";
 import { boundRecordingId, upcEditionId, uuidV5 } from "./ids.ts";
 import { effectiveTarget, followEdges, writeSystemMerge } from "./matching.ts";
-import { Providers } from "./providers.ts";
+import { Jobs } from "./jobs.ts";
+// `pages.ts` imports this module, so use its exports only inside functions
+import { fetchProviderPage } from "./pages.ts";
+import { Providers, usableProviders } from "./providers.ts";
 
 const EditionTrack = Schema.Struct({
   disc: Schema.Int,
@@ -251,6 +254,15 @@ const projectAlbums = (albumIds: Iterable<string>) =>
         }),
       { discard: true },
     );
+
+    // The album line of the songs comes from their albums
+    const songs = yield* db
+      .selectDistinct({ id: editionTrack.recordingId, root: recording.mergedIntoId })
+      .from(editionTrack)
+      .innerJoin(edition, eq(edition.id, editionTrack.editionId))
+      .leftJoin(recording, eq(recording.id, editionTrack.recordingId))
+      .where(inArray(edition.albumId, [...rootOf.keys(), ...merged]));
+    yield* projectRecordings(songs.flatMap((song) => [song.id, song.root ?? song.id]));
   });
 
 /**
@@ -529,3 +541,72 @@ export const assertEdition = (provider: string, data: ProviderAlbum) =>
     const albumMerges = (yield* Effect.forEach(albums, matchAlbum)).flat();
     yield* deriveAlbums({ editions: [], albumMerges, editionMerges });
   });
+
+const editionKind = "catalog.edition";
+
+const EditionPayload = Schema.Struct({ provider: Schema.String, albumId: Schema.String });
+
+/** Queues a read of each provider album that has no track list yet */
+export const queueEditions = (provider: string, albumIds: Iterable<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const jobs = yield* Jobs;
+    const unique = [...new Set(albumIds)];
+    const ids = new Map(
+      yield* Effect.forEach(unique, (albumId) =>
+        uuidV5(`${provider}:edition:${albumId}`).pipe(Effect.map((id) => [albumId, id] as const)),
+      ),
+    );
+    const known = new Set(
+      (yield* Effect.forEach(Arr.chunksOf([...ids.values()], 500), (chunk) =>
+        db
+          .select({ id: catalogAssertion.entityId })
+          .from(catalogAssertion)
+          .where(
+            and(
+              eq(catalogAssertion.entityType, "edition"),
+              inArray(catalogAssertion.entityId, [...chunk]),
+              eq(catalogAssertion.field, "tracks"),
+            ),
+          ),
+      ))
+        .flat()
+        .map((row) => row.id),
+    );
+    yield* Effect.forEach(
+      unique.filter((albumId) => !known.has(ids.get(albumId) ?? "")),
+      (albumId) =>
+        jobs.enqueue(
+          editionKind,
+          `${provider}:${albumId}`,
+          { provider, albumId },
+          { priority: -1 },
+        ),
+      { discard: true },
+    );
+  });
+
+// The album page of the provider, so that the page opens from the cache
+const readEdition = ({ provider, albumId }: typeof EditionPayload.Type) =>
+  Effect.gen(function* () {
+    const plugin = (yield* Providers).get(provider);
+    const usable = (yield* usableProviders).get(provider);
+    if (plugin?.album === undefined || usable === undefined) return;
+    yield* fetchProviderPage(
+      "album",
+      { provider, externalId: albumId },
+      ProviderAlbum,
+      plugin.album(albumId, usable.credentials),
+      {
+        tracks: (data) => data.tracks,
+        facts: (data) => assertEdition(provider, data).pipe(orDieOnDatabaseError("assertEdition")),
+      },
+    );
+  });
+
+export const editionsLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const jobs = yield* Jobs;
+    yield* jobs.register(editionKind, EditionPayload, readEdition);
+  }),
+);
