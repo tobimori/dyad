@@ -2,7 +2,7 @@ import { playbackSession, providerItem, providerPage, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { RecordingId, SourceSummary } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
-import { and, eq, lt, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Layer, Option, Schema } from "effect";
 
 import { boundRecordingId, sourceId } from "./ids.ts";
@@ -97,7 +97,31 @@ export const cacheProviderSources = (provider: string, sources: ReadonlyArray<Pr
     const db = yield* Database;
     const fetchedAt = yield* Clock.currentTimeMillis;
 
-    const cached = yield* Effect.forEach(sources, (source) => toCachedSource(provider, source));
+    // Some lists give no duration, for example the YouTube home shelves. The known one stays.
+    const missing = sources.flatMap((source) =>
+      source.durationMs === null ? [source.externalId] : [],
+    );
+    const known = new Map(
+      missing.length === 0
+        ? []
+        : (yield* db
+            .select({
+              externalId: providerItem.externalId,
+              durationMs: sql<number | null>`json_extract(${providerItem.data}, '$.durationMs')`,
+            })
+            .from(providerItem)
+            .where(
+              and(eq(providerItem.provider, provider), inArray(providerItem.externalId, missing)),
+            )).map((row) => [row.externalId, row.durationMs]),
+    );
+    const cached = yield* Effect.forEach(sources, (source) =>
+      toCachedSource(
+        provider,
+        source.durationMs === null
+          ? new ProviderSource({ ...source, durationMs: known.get(source.externalId) ?? null })
+          : source,
+      ),
+    );
     const rows = yield* Effect.forEach(cached, (item) =>
       Effect.gen(function* () {
         const data = yield* Schema.encodeEffect(ProviderSource)(item.source).pipe(Effect.orDie);
