@@ -32,6 +32,8 @@ const configuration = Effect.gen(function* () {
   const path = yield* Path.Path;
   return {
     appEnv: values.appEnv,
+    // Speakers on the LAN open stream URLs
+    host: "0.0.0.0",
     port,
     allowedOrigins: [...new Set(allowedOrigins)],
     dataDirectory: path.resolve(values.dataDirectory),

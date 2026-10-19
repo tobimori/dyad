@@ -54,7 +54,7 @@ const builtinPlugins: ReadonlyArray<Plugin> = [
 export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
   Layer.unwrap(
     Effect.gen(function* () {
-      const { dataDirectory, port, allowedOrigins, mediaCacheBytes } = yield* ServerConfig;
+      const { dataDirectory, host, port, allowedOrigins, mediaCacheBytes } = yield* ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
 
@@ -110,8 +110,7 @@ export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
         HttpRouter.serve(allRoutes).pipe(
           Layer.provide(
             NodeHttpServer.layer(() => createServer(), {
-              // Speakers on the LAN open stream URLs
-              host: "0.0.0.0",
+              host,
               port,
               // RPC WebSockets stay open, so the default 20 second grace period always runs out
               gracefulShutdownTimeout: "500 millis",

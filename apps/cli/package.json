@@ -16,11 +16,14 @@
   "dependencies": {
     "@dyad/audio": "workspace:*",
     "@dyad/client-runtime": "workspace:*",
+    "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
+    "@dyad/host": "workspace:*",
     "@dyad/media": "workspace:*",
     "@dyad/plugin": "workspace:*",
     "@dyad/plugin-discord-presence": "workspace:*",
     "@dyad/plugin-media-controls": "workspace:*",
+    "@dyad/server-core": "workspace:*",
     "@dyad/visualizer": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@effect/platform-node": "catalog:",
@@ -31,6 +34,7 @@
     "@opentui/react": "catalog:",
     "effect": "catalog:",
     "env-paths": "catalog:",
+    "node-av": "catalog:",
     "react": "catalog:"
   },
   "devDependencies": {

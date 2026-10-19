@@ -136,7 +136,8 @@ export const authCodesLayer = Layer.effect(
   }).pipe(Effect.orDie),
 );
 
-const createDevice = (userId: UserId, name: string) =>
+/** Adds a device of `userId` and returns its token */
+export const createDevice = (userId: UserId, name: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;

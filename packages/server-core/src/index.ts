@@ -57,6 +57,7 @@ export { hlcClockFromDatabase } from "./clock.ts";
 export { librarySyncLayer } from "./library-sync.ts";
 export { MediaCacheConfig } from "./media-cache.ts";
 export { StreamPort } from "./outputs.ts";
+export { createDevice } from "./auth.ts";
 export { JoinFailed, joinWorkspace, peerSyncLayer } from "./peers.ts";
 export { pluginLayer } from "./plugin.ts";
 export { recommendationsLayer } from "./recommenders.ts";

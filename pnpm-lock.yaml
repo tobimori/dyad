@@ -175,9 +175,15 @@ importers:
       '@dyad/client-runtime':
         specifier: workspace:*
         version: link:../../packages/client-runtime
+      '@dyad/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@dyad/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@dyad/host':
+        specifier: workspace:*
+        version: link:../../packages/host
       '@dyad/media':
         specifier: workspace:*
         version: link:../../packages/media
@@ -190,6 +196,9 @@ importers:
       '@dyad/plugin-media-controls':
         specifier: workspace:*
         version: link:../../plugins/media-controls
+      '@dyad/server-core':
+        specifier: workspace:*
+        version: link:../../packages/server-core
       '@dyad/visualizer':
         specifier: workspace:*
         version: link:../../packages/visualizer
@@ -220,6 +229,9 @@ importers:
       env-paths:
         specifier: 'catalog:'
         version: 4.0.0
+      node-av:
+        specifier: 'catalog:'
+        version: 6.1.1(patch_hash=d6494eadf38f46cb13ee00969694f4ba9689b2c21f8eede8e148722c22f98042)
       react:
         specifier: 'catalog:'
         version: 19.3.1

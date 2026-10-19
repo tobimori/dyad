@@ -99,6 +99,8 @@ export default defineConfig({
     target: "node26",
     format: ["esm"],
     plugins: [videoWorker],
+    // Workspace packages export their sources under `development`; their `dist` builds can be stale
+    inputOptions: { resolve: { conditionNames: ["development", "node", "import", "default"] } },
     ...(target === undefined
       ? { sourcemap: true, deps: { alwaysBundle: [/^@dyad\//] } }
       : executable(target)),

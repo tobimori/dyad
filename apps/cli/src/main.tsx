@@ -33,6 +33,7 @@ import {
   serverUrl as serverUrlConfig,
 } from "./commands/auth.ts";
 import { pluginCommands } from "./commands/plugins.ts";
+import { replicaCommand } from "./commands/replica.ts";
 import { serverCommand } from "./commands/server.ts";
 import { createKeymap } from "./context/keymap.ts";
 import { startPluginHost } from "./context/plugin-host.ts";
@@ -255,7 +256,13 @@ const dyad = Command.make(
   ({ controller }) => Effect.scoped(player(controller)).pipe(reportFailures),
 ).pipe(
   Command.withDescription("Play the library of a Dyad server"),
-  Command.withSubcommands([...authCommands, ...accountCommands, ...pluginCommands, serverCommand]),
+  Command.withSubcommands([
+    ...authCommands,
+    ...accountCommands,
+    ...pluginCommands,
+    serverCommand,
+    replicaCommand,
+  ]),
 );
 
 Command.run(dyad, { version: "0.0.0" }).pipe(
