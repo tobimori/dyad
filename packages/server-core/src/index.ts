@@ -124,10 +124,11 @@ export const serverRoutes = Layer.unwrap(
           // Only database errors remain
           search(query).pipe(Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search")))),
           // A device never asks providers itself, so offline it searches only its catalog
-          searchCatalog(query).pipe(
-            Stream.catch(() => Stream.fromEffect(dieOnDatabaseError("search"))),
-          ),
+          Stream.fromEffect(searchCatalog(query).pipe(orDieOnDatabaseError("search"))),
         ),
+      // Every replica has the same catalog, so a device answers it itself
+      searchCatalog: ({ query }) =>
+        searchCatalog(query).pipe(orDieOnDatabaseError("searchCatalog")),
       artistPage: ({ ref }) => forwardStream((home) => home.artistPage({ ref }), artistPage(ref)),
       albumPage: ({ ref }) => forwardStream((home) => home.albumPage({ ref }), albumPage(ref)),
       homePage: () => forwardStream((home) => home.homePage(), homePage),

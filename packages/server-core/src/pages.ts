@@ -273,7 +273,7 @@ const followedArtistCards = Effect.fn(function* (shown: ReadonlySet<string>) {
 });
 
 // The card types of an album type. A DJ mix and a broadcast have no card type yet.
-const cardTypes = (type: typeof album.$inferSelect.type) => {
+export const cardTypes = (type: typeof album.$inferSelect.type) => {
   if (type === "compilation" || type === "live") {
     return { primaryType: "album" as const, secondaryTypes: [type] };
   }

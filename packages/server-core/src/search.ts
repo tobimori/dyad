@@ -9,6 +9,7 @@ import { Array as Arr, Clock, Data, Effect, Option, Ref, Schema, Stream } from "
 
 import { normalizeIsrc, spellings } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
+import { catalogEntities, rankedEntities } from "./search-entities.ts";
 import { Popularities, Providers, callProvider, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { withSeries } from "./sets.ts";
@@ -202,7 +203,11 @@ const loadPlays = Effect.fn(function* (candidates: ReadonlyArray<Candidate>, now
   return rows.map((row) => new Play(row));
 });
 
-const rankAnswers = Effect.fn(function* (query: string, answer: Answer) {
+const rankAnswers = Effect.fn(function* (
+  query: string,
+  catalog: Effect.Success<ReturnType<typeof catalogEntities>>,
+  answer: Answer,
+) {
   const now = yield* Clock.currentTimeMillis;
 
   // A played provider source is also a local result. The local copy has the canonical fields,
@@ -219,23 +224,23 @@ const rankAnswers = Effect.fn(function* (query: string, answer: Answer) {
   const plays = yield* loadPlays(candidates, now);
 
   const ranked = rank(query, candidates, answer.hits, plays, now, yield* providerOrder);
+  const sources = ranked.map((result) => result.summary);
   return new SearchResults({
-    sources: ranked.map((result) => result.summary),
+    sources,
+    ...(yield* rankedEntities(query, catalog, sources)),
     unavailable: answer.unavailable,
   });
 });
 
-/** The ranked sources on this replica, without providers */
-export const searchCatalog = (query: string) =>
-  Stream.fromEffect(
-    Effect.gen(function* () {
-      const local = yield* searchLocalSources(query);
-      return yield* rankAnswers(
-        query,
-        new Answer({ candidates: local, hits: [], unavailable: [] }),
-      );
-    }),
+/** The ranked results on this replica, without providers */
+export const searchCatalog = Effect.fn("searchCatalog")(function* (query: string) {
+  const local = yield* searchLocalSources(query);
+  return yield* rankAnswers(
+    query,
+    yield* catalogEntities(query),
+    new Answer({ candidates: local, hits: [], unavailable: [] }),
   );
+});
 
 /**
  * The ranked sources on this replica first, then the complete ranked list again each time that a
@@ -248,6 +253,7 @@ export const search = (query: string) =>
       const providers = yield* usableProviders;
 
       const local = yield* searchLocalSources(query);
+      const catalog = yield* catalogEntities(query);
 
       const providerAnswers = [...providers].flatMap(([id, { provider, credentials }]) => {
         if (provider.search === undefined) return [];
@@ -273,7 +279,7 @@ export const search = (query: string) =>
               unavailable: [...all.unavailable, ...next.unavailable],
             }),
         ),
-        Stream.mapEffect((all) => rankAnswers(query, all)),
+        Stream.mapEffect((all) => rankAnswers(query, catalog, all)),
         Stream.tap((results) =>
           Ref.set(
             last,

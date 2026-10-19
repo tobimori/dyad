@@ -415,6 +415,10 @@ export class LibrarySyncStatus extends Schema.Class<LibrarySyncStatus>("LibraryS
 /** Search results, best first */
 export class SearchResults extends Schema.Class<SearchResults>("SearchResults")({
   sources: Schema.Array(SourceSummary),
+  /** Best name match first */
+  artists: Schema.Array(ArtistCard),
+  /** Best title match first, then the albums of the artist that the query names */
+  albums: Schema.Array(AlbumCard),
   /** Names of the providers that failed or did not answer in time, for example `Apple Music` */
   unavailable: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 }) {}
@@ -873,6 +877,11 @@ const OwnerRpc = RpcGroup.make(
   Rpc.make("getLibrarySyncStatus", { success: Schema.Array(LibrarySyncStatus) }),
   // Returns at once; does nothing without a linked account
   Rpc.make("syncLibrary", { payload: { provider: Schema.String } }),
+  // The results of the catalog of this replica, without providers. For a lookup by name.
+  Rpc.make("searchCatalog", {
+    payload: { query: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)) },
+    success: SearchResults,
+  }),
   // Streams the complete ranked list again each time that a provider answers; the last list is
   // final. Clients replace their list. Every result can play at once with `preparePlayback`.
   Rpc.make("search", {
