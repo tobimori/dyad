@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
+import { useDisliked } from "../context/disliked.tsx";
 
 export class ListItem extends Data.Class<{
   /** Unique in the list, also when a source is in the list twice */
@@ -182,6 +183,7 @@ export function TrackList(props: {
   readonly onActivate: (index: number) => void;
 }) {
   const theme = useTheme();
+  const isDisliked = useDisliked();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const offset = useRef(0);
   const click = useRowClick(props.onSelect, props.onActivate);
@@ -245,7 +247,8 @@ export function TrackList(props: {
           const played = index < props.historyRows;
           const unavailable = item instanceof UnavailableItem;
           const track = unavailable ? item.entry : item.source;
-          const color = unavailable ? theme.faint : rowColor(played);
+          const dim = unavailable || isDisliked(item.source);
+          const color = dim ? theme.faint : rowColor(played);
 
           return (
             <box
@@ -270,7 +273,7 @@ export function TrackList(props: {
                 width={width}
                 wide={wide}
                 fg={playing ? theme.accent : color}
-                secondary={selected || unavailable ? color : theme.muted}
+                secondary={selected || dim ? color : theme.muted}
                 accent={theme.accent}
                 attributes={selected ? TextAttributes.BOLD : TextAttributes.NONE}
               />

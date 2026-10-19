@@ -53,6 +53,7 @@ import { continueRadio } from "./radio.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { TimedDesired, driveTimedOutputs } from "./timed-output.ts";
 import type { TimedDriver } from "./timed-output.ts";
+import { isDisliked, loadDisliked } from "./taste.ts";
 import { UrlDesired, driveUrlOutput } from "./url-output.ts";
 import type { OutputReport, UrlDriver } from "./url-output.ts";
 
@@ -498,6 +499,7 @@ const makeSession = (
       deviceId: DeviceId,
       command: Command,
       sources: ReadonlyMap<string, SourceSummary>,
+      disliked: ReadonlySet<string>,
       now: number,
     ) => {
       const playback = state.playback;
@@ -540,12 +542,16 @@ const makeSession = (
               const listed = command.sourceIds.map((id) => sources.get(id));
               const kept = listed.flatMap((summary, index) => {
                 if (summary === undefined) return [];
+                if (index === command.index) return [{ summary, index }];
                 const before = listed[index - 1];
-                const repeats =
-                  index !== command.index && before !== undefined && isSameSong(before, summary);
-                return repeats ? [] : [{ summary, index }];
+                const repeats = before !== undefined && isSameSong(before, summary);
+                return repeats || disliked.has(summary.id) ? [] : [{ summary, index }];
               });
-              const selected = kept.find((item) => item.index >= command.index) ?? kept.at(-1);
+              if (kept.length === 0) return yield* fail("nothing_to_play");
+              const selected =
+                command.index === null
+                  ? kept[yield* Random.nextIntBetween(0, kept.length, { halfOpen: true })]
+                  : (kept.find((item) => item.index >= (command.index ?? 0)) ?? kept.at(-1));
               if (selected === undefined) return yield* fail("nothing_to_play");
 
               // With shuffle, the whole list plays in random order, not only the part after `index`
@@ -879,6 +885,8 @@ const makeSession = (
         readonly ifQueueVersion: number | null;
       },
       sources: ReadonlyMap<string, SourceSummary>,
+      /** The IDs of the sources that are disliked songs */
+      disliked: ReadonlySet<string>,
     ) =>
       modify((now) =>
         Effect.gen(function* () {
@@ -895,7 +903,7 @@ const makeSession = (
                 return yield* fail("stale_queue");
               }
 
-              const entryIds = yield* apply(deviceId, request.command, sources, now);
+              const entryIds = yield* apply(deviceId, request.command, sources, disliked, now);
               return new SessionCommandResult({
                 queueVersion: state.queueVersion,
                 revision: state.playback.revision,
@@ -1488,7 +1496,13 @@ export const controlSession = (request: Parameters<Session["control"]>[1]) =>
       SessionCommand.guards.Play(command) || SessionCommand.guards.Enqueue(command)
         ? yield* sourceSummaries(command.sourceIds)
         : new Map<string, SourceSummary>();
-    return yield* session.control(principal.deviceId, request, sources);
+    const dislikes = SessionCommand.guards.Play(command) ? yield* loadDisliked : new Set<string>();
+    const disliked = new Set(
+      [...sources.values()].flatMap((summary) =>
+        isDisliked(dislikes, summary) ? [summary.id] : [],
+      ),
+    );
+    return yield* session.control(principal.deviceId, request, sources, disliked);
   });
 
 export const reportPlayback = (report: Parameters<Session["report"]>[1]) =>

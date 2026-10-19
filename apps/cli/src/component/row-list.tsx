@@ -12,6 +12,7 @@ import { useRef, useState } from "react";
 
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
+import { useDisliked } from "../context/disliked.tsx";
 import { scrollOffset, useRowClick, videoMark } from "./track-list.tsx";
 
 /** A heading or the empty row above it. The cursor skips it. */
@@ -157,6 +158,7 @@ function RowCells(props: {
   readonly playing: boolean;
 }) {
   const theme = useTheme();
+  const isDisliked = useDisliked();
   const row = props.row;
   const bold = props.selected;
   const secondary = props.selected ? theme.text : theme.muted;
@@ -170,7 +172,9 @@ function RowCells(props: {
     const source = row.track.source;
     const flexible = Math.max(0, props.width - markerWidth - numberWidth - timeWidth - gap * 4);
     const titleWidth = Math.floor(flexible * 0.6);
-    const fg = row.track.playable ? theme.text : theme.faint;
+    // A disliked song shows dim like one that cannot play
+    const dim = !row.track.playable || isDisliked(source);
+    const fg = dim ? theme.faint : theme.text;
     return (
       <>
         {marker}
@@ -193,7 +197,7 @@ function RowCells(props: {
           <Cell
             text={source.artist ?? ""}
             width={flexible - titleWidth}
-            fg={row.track.playable ? secondary : theme.faint}
+            fg={dim ? theme.faint : secondary}
             bold={bold}
           />
         ) : (
@@ -208,7 +212,7 @@ function RowCells(props: {
         <Cell
           text={formatDuration(source.durationMs)}
           width={timeWidth}
-          fg={row.track.playable ? secondary : theme.faint}
+          fg={dim ? theme.faint : secondary}
           bold={bold}
           align="right"
         />

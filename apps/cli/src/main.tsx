@@ -41,6 +41,7 @@ import { startPluginHost } from "./context/plugin-host.ts";
 import { loadDeviceToken } from "./commands/devices.ts";
 import { startLocalReplica } from "./context/replica.ts";
 import { Settings, defaultSettings, loadSettings, updateSettings } from "./context/settings.ts";
+import { DislikedProvider } from "./context/disliked.tsx";
 import { ThemeProvider } from "./context/theme-provider.tsx";
 import { fileLogging, processErrorLogging } from "./log.ts";
 import { Engine, engineLayer } from "./playback/engine.ts";
@@ -225,19 +226,21 @@ const player = (controller: boolean) =>
               <ErrorBoundary onError={logCrash} onQuit={() => renderer.destroy()}>
                 <ToastProvider>
                   <DialogProvider>
-                    <App
-                      serverUrl={serverUrl}
-                      atoms={atoms}
-                      session={session}
-                      engine={engine}
-                      listen={timed.feed}
-                      run={run}
-                      plugins={plugins}
-                      downloads={downloads}
-                      downloadQuality={settings.downloadQuality ?? "high"}
-                      saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
-                      replica={replica}
-                    />
+                    <DislikedProvider atoms={atoms}>
+                      <App
+                        serverUrl={serverUrl}
+                        atoms={atoms}
+                        session={session}
+                        engine={engine}
+                        listen={timed.feed}
+                        run={run}
+                        plugins={plugins}
+                        downloads={downloads}
+                        downloadQuality={settings.downloadQuality ?? "high"}
+                        saveDownloadQuality={(quality) => run(saveDownloadQuality(quality))}
+                        replica={replica}
+                      />
+                    </DislikedProvider>
                   </DialogProvider>
                 </ToastProvider>
               </ErrorBoundary>

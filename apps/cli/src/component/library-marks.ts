@@ -7,6 +7,7 @@ import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
+import { useDisliked } from "../context/disliked.tsx";
 import { commands } from "../context/keymap.ts";
 import { useToast } from "../ui/toast.tsx";
 import { Action } from "./dialog-actions.tsx";
@@ -19,6 +20,7 @@ export function useLibraryMarks(props: {
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
 }) {
   const toast = useToast();
+  const isDisliked = useDisliked();
   const library = useAtomValue(props.atoms.library);
   // An entry has the merge root; a source of the song can have another recording of the group
   const marks = useMemo(
@@ -68,7 +70,7 @@ export function useLibraryMarks(props: {
         : new Action({
             command: commands.removeFromLibrary,
             label: "Remove from library",
-            run: set(null, `Removed ${name} from the library`),
+            run: set("removed", `Removed ${name} from the library`),
           }),
       mark === "favorite"
         ? new Action({
@@ -81,11 +83,17 @@ export function useLibraryMarks(props: {
             label: "Favorite",
             run: set("favorite", `Added ${name} to the favorites`),
           }),
-      new Action({
-        command: commands.dislike,
-        label: "Dislike",
-        run: set("disliked", `Disliked ${name}`),
-      }),
+      isDisliked(source)
+        ? new Action({
+            command: commands.dislike,
+            label: "Remove dislike",
+            run: set(null, `Removed the dislike of ${name}`),
+          })
+        : new Action({
+            command: commands.dislike,
+            label: "Dislike",
+            run: set("disliked", `Disliked ${name}. Radio and shuffle skip it.`),
+          }),
     ];
   };
 }

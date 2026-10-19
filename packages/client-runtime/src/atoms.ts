@@ -76,6 +76,7 @@ export const serverAtoms = (
     status: runtime.subscriptionRef(() => Effect.service(ConnectionStatus)),
     sources: live((client) => client.listSources()),
     library: live((client) => client.listLibrary()),
+    disliked: live((client) => client.listDisliked()),
     playlists: live((client) => client.listPlaylists()),
     playlistEntries: Atom.family((playlistId: string) =>
       live((client) => client.listPlaylistEntries({ playlistId })).pipe(

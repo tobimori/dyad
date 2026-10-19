@@ -1,5 +1,11 @@
 import { dieOnDatabaseError, orDieOnDatabaseError } from "@dyad/db/node";
-import { CurrentPrincipal, ServerDescriptor, ServerRpc, SourceCopies } from "@dyad/domain";
+import {
+  CurrentPrincipal,
+  RecordingId,
+  ServerDescriptor,
+  ServerRpc,
+  SourceCopies,
+} from "@dyad/domain";
 import { Context, Effect, Layer, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
@@ -60,7 +66,12 @@ import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer 
 import { syncHubLayer, watchChanges } from "./sync.ts";
 import { timedRoute } from "./timed-route.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
-import { listLibrary, listPlaylistEntries, setLibraryMark } from "./user-library.ts";
+import {
+  dislikedRecordings,
+  listLibrary,
+  listPlaylistEntries,
+  setLibraryMark,
+} from "./user-library.ts";
 import { prepareVideo, videoRoute } from "./video.ts";
 import { webLinks } from "./web-links.ts";
 
@@ -171,6 +182,11 @@ export const serverRoutes = Layer.unwrap(
         editPlaylist(playlistId, edit).pipe(orDieOnDatabaseError("editPlaylist")),
       removePlaylistEntry: ({ entryId }) =>
         removePlaylistEntry(entryId).pipe(orDieOnDatabaseError("removePlaylistEntry")),
+      listDisliked: () =>
+        dislikedRecordings.pipe(
+          Effect.map((rows) => rows.map((row) => RecordingId.make(row.id))),
+          orDieOnDatabaseError("listDisliked"),
+        ),
       setLibraryMark: ({ entityType, entityId, mark, sourceId }) =>
         setLibraryMark(entityType, entityId, mark, sourceId).pipe(
           orDieOnDatabaseError("setLibraryMark"),

@@ -710,9 +710,11 @@ const SourceIds = Schema.NonEmptyArray(Schema.String.check(Schema.isUUID())).che
 
 export const SessionCommand = Schema.TaggedUnion({
   /** Replaces the queue and plays `sourceIds[index]` */
+  /** Disliked songs do not go into the queue, except the one at `index` */
   Play: {
     sourceIds: SourceIds,
-    index: Schema.Int,
+    /** The source that the owner chose. `null`: a random start, for "Shuffle all". */
+    index: Schema.NullOr(Schema.Int),
     context: PlayContext,
     shuffle: Schema.Boolean,
     /** `QueueEntry.reason` by source ID, from `radio` */
@@ -943,9 +945,11 @@ const OwnerRpc = RpcGroup.make(
     error: PlaylistNotFound,
   }),
   Rpc.make("removePlaylistEntry", { payload: { entryId: Schema.String } }),
+  /** The recordings of the disliked songs, with all recordings of their merge groups */
+  Rpc.make("listDisliked", { success: Schema.Array(RecordingId) }),
   /**
-   * `null` takes the entity out of the library. `sourceId`: the copy that the owner marked, so that
-   * a search result enters the catalog.
+   * `null` clears the owner's mark, so that the imports decide again. `sourceId`: the copy that the
+   * owner marked, so that a search result enters the catalog.
    */
   Rpc.make("setLibraryMark", {
     payload: {

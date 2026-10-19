@@ -8,6 +8,7 @@ import { Clock, Data, Effect } from "effect";
 
 import { normalizeArtist, normalizeTitle } from "./normalize.ts";
 import { playHistoryMs, playValue, saturate } from "./ranking.ts";
+import { dislikedRecordings } from "./user-library.ts";
 
 /** One key for the versions of a song: the title without version parts, and the first artist */
 export const songKey = (title: string | null, artist: string | null) =>
@@ -34,7 +35,28 @@ export class Taste extends Data.Class<{
   readonly artists: ReadonlyMap<string, ArtistTaste>;
   /** Song keys and source IDs of the last 14 days */
   readonly recent: ReadonlySet<string>;
+  /** Of `loadDisliked` */
+  readonly disliked: ReadonlySet<string>;
 }> {}
+
+/**
+ * The recordings of the merge groups of the disliked songs, and their song keys, so that a copy
+ * that no merge joined is disliked too
+ */
+export const loadDisliked = Effect.gen(function* () {
+  const rows = yield* dislikedRecordings;
+  return new Set(
+    rows.flatMap((row) => [
+      row.id,
+      ...(row.title === null ? [] : [songKey(row.title, row.artist)]),
+    ]),
+  );
+});
+
+/** A disliked song plays only when the owner chooses it */
+export const isDisliked = (disliked: ReadonlySet<string>, summary: SourceSummary) =>
+  (summary.recordingId !== null && disliked.has(summary.recordingId)) ||
+  (summary.title !== null && disliked.has(songKey(summary.title, summary.artist)));
 
 const bound = alias(recording, "bound");
 const canonical = alias(recording, "canonical");
@@ -79,6 +101,7 @@ export const loadTaste = Effect.gen(function* () {
       ]),
     ),
     recent,
+    disliked: yield* loadDisliked,
   });
 });
 
@@ -91,8 +114,8 @@ export class Pick extends Data.Class<{
 }> {}
 
 /**
- * Best first by score and artist affinity, at most 2 per artist, without recent songs, `exclude`
- * (song keys and source IDs) and repeats. With `explainArtist`, a liked artist gives the reason.
+ * Best first by score and artist affinity, at most 2 per artist, without recent and disliked
+ * songs, `exclude` (song keys and source IDs) and repeats. With `explainArtist`, a liked artist gives the reason.
  */
 export const choose = (
   taste: Taste,
@@ -124,6 +147,7 @@ export const choose = (
     const key = songKey(pick.summary.title, pick.summary.artist);
     const ids = [key, pick.summary.id];
     if (ids.some((id) => seen.has(id) || taste.recent.has(id))) continue;
+    if (isDisliked(taste.disliked, pick.summary)) continue;
     const count = artistCounts.get(artistKey) ?? 0;
     if (count === perArtist) continue;
 

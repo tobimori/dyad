@@ -164,12 +164,26 @@ export const recordingMarks = Effect.gen(function* () {
   );
 });
 
+/** The recordings of the merge groups of the disliked songs */
+export const dislikedRecordings = Effect.gen(function* () {
+  const db = yield* Database;
+  const roots = [...(yield* recordingMarks)].flatMap(([root, group]) =>
+    group.mark === "disliked" ? [root] : [],
+  );
+  if (roots.length === 0) return [];
+  return yield* db
+    .select({ id: recording.id, title: recording.title, artist: recording.artistName })
+    .from(recording)
+    .where(or(inArray(recording.id, roots), inArray(recording.mergedIntoId, roots)));
+});
+
 /** Whether a mark puts the entity in the library */
 export const inLibrary = (mark: LibraryMark) => mark === "saved" || mark === "favorite";
 
 /**
- * Sets the owner's mark of an entity. `null` takes it out of the library: a `removed` row when an
- * import has the entity, so that the next import does not add it again, else no user row.
+ * Sets the owner's mark of an entity. `null` clears it, so that the imports decide again. `removed`
+ * takes the entity out of the library: a row only when an import has it, so that the next import
+ * does not add it again.
  */
 export const setLibraryMark = (
   entityType: LibraryEntityType,
@@ -190,7 +204,8 @@ export const setLibraryMark = (
     const ownRows = rows.filter((row) => row.origin === "user");
     const changeSeq = yield* nextChangeSeq;
 
-    if (mark === null && !rows.some((row) => row.origin !== "user" && !row.deleted)) {
+    const imported = rows.some((row) => row.origin !== "user" && !row.deleted);
+    if (mark === null || (mark === "removed" && !imported)) {
       yield* Effect.forEach(
         ownRows.filter((row) => !row.deleted),
         (row) =>
@@ -215,7 +230,7 @@ export const setLibraryMark = (
         entityType,
         entityId,
         origin: "user",
-        mark: mark ?? "removed",
+        mark,
         addedAt: own === undefined || own.deleted ? yield* Clock.currentTimeMillis : own.addedAt,
         hlc: yield* clock.next,
         deleted: false,

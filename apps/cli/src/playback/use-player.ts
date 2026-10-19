@@ -168,6 +168,8 @@ export function usePlayer(props: {
     context: typeof PlayContext.Type,
     shuffle: boolean,
     reasons: Readonly<Record<string, string>> = {},
+    // A random start of "Shuffle all" is no choice of the owner, so the server picks it
+    chosen = true,
   ) => {
     const selected = window(sources, index);
     const [first, ...others] = selected.sourceIds;
@@ -175,7 +177,7 @@ export function usePlayer(props: {
     send(
       SessionCommand.cases.Play.make({
         sourceIds: [first, ...others],
-        index: selected.index,
+        index: chosen ? selected.index : null,
         context,
         shuffle,
         reasons,
@@ -247,7 +249,7 @@ export function usePlayer(props: {
     ) => playList(sources, index, context, playback.shuffle, reasons),
     shuffleList: (sources: ReadonlyArray<SourceSummary>, context: typeof PlayContext.Type) => {
       const index = Effect.runSync(Random.nextIntBetween(0, sources.length, { halfOpen: true }));
-      playList(sources, index, context, true);
+      playList(sources, index, context, true, {}, false);
     },
     playEntry: (index: number) => {
       const entry = entries[index];
