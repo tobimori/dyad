@@ -11,11 +11,10 @@ import {
   PlaybackCapabilities,
   PlaybackPlan,
   PlaybackUnavailable,
-  UserId,
 } from "@dyad/domain";
 import { MediaStream, encodeFlac, remuxAudio } from "@dyad/media/node";
 import { ProviderAudio, ProviderError, ProviderLink } from "@dyad/plugin";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   Clock,
   Context,
@@ -62,7 +61,7 @@ export class StreamKey extends Context.Service<
 export const streamKeyLayer = Layer.effect(StreamKey, generateStreamKey);
 
 /**
- * Recent attempts by user and source. `resolved`: the audio of a resolve in the last minute, so
+ * Recent attempts by source. `resolved`: the audio of a resolve in the last minute, so
  * that the stream after a plan does not resolve again. `failed`: the time of the last failure
  * before the first byte, so that the next plan tries another copy.
  */
@@ -84,15 +83,13 @@ const resolvedLifetimeMs = 60_000;
 // A provider that refuses a source now often refuses it for some minutes
 const failedLifetimeMs = 10 * 60_000;
 
-const attemptKey = (userId: UserId, sourceId: string) => `${userId} ${sourceId}`;
-
 /** Records a failure before the first byte, so that the next plan skips the source for a while */
-export const markFailed = (userId: UserId, sourceId: string) =>
+export const markFailed = (sourceId: string) =>
   Effect.gen(function* () {
     const { failed } = yield* CopyAttempts;
     const now = yield* Clock.currentTimeMillis;
     for (const [key, at] of failed) if (now - at > failedLifetimeMs) failed.delete(key);
-    failed.set(attemptKey(userId, sourceId), now);
+    failed.set(sourceId, now);
   });
 
 // Long enough for a queue that starts the URL later. A started stream continues after expiry.
@@ -101,9 +98,8 @@ const streamLifetimeMs = 6 * 60 * 60 * 1000;
 class StreamGrant extends Data.Class<{
   readonly sourceId: string;
   readonly format: AudioFormat;
-  readonly userId: UserId;
   // The device that prepared the stream, or the output that plays it. The stream route checks that
-  // the device still exists or that the user's session still holds the output.
+  // the device still exists or that the session still holds the output.
   readonly holder: DeviceId | OutputId;
   readonly expiresAt: number;
 }> {}
@@ -138,14 +134,14 @@ export const verifyGrant = (
     return valid && expiresAt >= (yield* Clock.currentTimeMillis);
   });
 
-/** True when the device still exists and belongs to the user */
-export const hasDevice = (userId: UserId, deviceId: DeviceId) =>
+/** True when the device is still paired */
+export const hasDevice = (deviceId: DeviceId) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const rows = yield* db
       .select({ id: device.id })
       .from(device)
-      .where(and(eq(device.id, deviceId), eq(device.userId, userId)))
+      .where(eq(device.id, deviceId))
       .limit(1);
     return rows.length > 0;
   });
@@ -154,7 +150,6 @@ const grantLines = (grant: StreamGrant) => [
   grant.sourceId,
   grant.format.container,
   grant.format.codec,
-  grant.userId,
   grant.holder,
   grant.expiresAt,
 ];
@@ -191,33 +186,30 @@ const selectSource = (sourceId: string) =>
     return row;
   });
 
-const providerPlayback = (
-  item: {
-    readonly sourceId: string;
-    readonly provider: string;
-    readonly externalId: string;
-    readonly kind: string;
-    readonly variantId: string;
-    readonly container: string;
-    readonly codec: string;
-    readonly encrypted: boolean;
-  },
-  userId: UserId,
-) =>
+const providerPlayback = (item: {
+  readonly sourceId: string;
+  readonly provider: string;
+  readonly externalId: string;
+  readonly kind: string;
+  readonly variantId: string;
+  readonly container: string;
+  readonly codec: string;
+  readonly encrypted: boolean;
+}) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
     if (!providers.has(item.provider)) {
       return yield* new PlaybackUnavailable({ reason: "not_found" });
     }
 
-    const usableByUser = yield* usableProviders(userId);
+    const usableByUser = yield* usableProviders;
     const usable = usableByUser.get(item.provider);
     if (usable === undefined) {
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
 
     const { resolved } = yield* CopyAttempts;
-    const key = attemptKey(userId, item.sourceId);
+    const key = item.sourceId;
     const fresh = Effect.gen(function* () {
       const audio = yield* usable.provider.resolve(item.externalId, usable.credentials);
       if (!(audio instanceof ProviderLink)) return audio;
@@ -261,7 +253,7 @@ const providerPlayback = (
 
 // How the user can play the source. A search result is not in the catalog yet, so it comes with
 // its cached search result.
-export const findPlayableSource = (sourceId: string, userId: UserId) =>
+export const findPlayableSource = (sourceId: string) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
 
@@ -270,19 +262,16 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
       const cached = yield* cachedProviderSource(sourceId);
       if (Option.isNone(cached)) return yield* new PlaybackUnavailable({ reason: "not_found" });
 
-      const playable = yield* providerPlayback(
-        {
-          sourceId,
-          provider: cached.value.provider,
-          externalId: cached.value.source.externalId,
-          kind: "stream",
-          variantId: yield* variantId(sourceId),
-          container: cached.value.source.container,
-          codec: cached.value.source.codec,
-          encrypted: cached.value.source.encrypted,
-        },
-        userId,
-      );
+      const playable = yield* providerPlayback({
+        sourceId,
+        provider: cached.value.provider,
+        externalId: cached.value.source.externalId,
+        kind: "stream",
+        variantId: yield* variantId(sourceId),
+        container: cached.value.source.container,
+        codec: cached.value.source.codec,
+        encrypted: cached.value.source.encrypted,
+      });
       const { codec, lossless, bitrate } = cached.value.source;
       const audio = new AudioQuality({
         codec,
@@ -303,19 +292,16 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
             }),
             path: path.join(row.root, row.file),
           })
-        : yield* providerPlayback(
-            {
-              sourceId,
-              provider: row.source.provider,
-              externalId: row.source.externalId,
-              kind: row.source.kind,
-              variantId: row.variant.id,
-              container: row.variant.container,
-              codec: row.variant.codec,
-              encrypted: row.variant.encrypted,
-            },
-            userId,
-          );
+        : yield* providerPlayback({
+            sourceId,
+            provider: row.source.provider,
+            externalId: row.source.externalId,
+            kind: row.source.kind,
+            variantId: row.variant.id,
+            container: row.variant.container,
+            codec: row.variant.codec,
+            encrypted: row.variant.encrypted,
+          });
     const { codec, lossless, sampleRate, bitDepth, bitrate } = row.variant;
     const audio = new AudioQuality({ codec, lossless, sampleRate, bitDepth, bitrate });
     return { playable, audio, searchResult: Option.none() };
@@ -326,13 +312,9 @@ export const findPlayableSource = (sourceId: string, userId: UserId) =>
  * the shared catalog here, but only when the user can play it. A possible match of `searchCopy`
  * plays from the provider cache and does not enter the catalog.
  */
-export const choosePlayableSource = (
-  sourceId: string,
-  userId: UserId,
-  capabilities: PlaybackCapabilities,
-) =>
+export const choosePlayableSource = (sourceId: string, capabilities: PlaybackCapabilities) =>
   Effect.gen(function* () {
-    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId, userId);
+    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId);
     const choice = yield* choosePlayback(playable.format, capabilities);
 
     const searches = yield* CopySearches;
@@ -340,24 +322,24 @@ export const choosePlayableSource = (
     if (Option.isSome(searchResult) && !possibleMatch) {
       yield* addProviderSource(searchResult.value);
     }
-    yield* queueTracklistRead(sourceId, userId);
+    yield* queueTracklistRead(sourceId);
     return { playable, audio, choice };
   });
 
 // A copy plays when it gives audio before the first byte: a file, a complete cache file or a
 // resolve. A source that failed a moment ago fails again without a request.
-const tryCopy = (sourceId: string, userId: UserId, capabilities: PlaybackCapabilities) =>
+const tryCopy = (sourceId: string, capabilities: PlaybackCapabilities) =>
   Effect.gen(function* () {
     const { failed } = yield* CopyAttempts;
-    const failedAt = failed.get(attemptKey(userId, sourceId));
+    const failedAt = failed.get(sourceId);
     if (failedAt !== undefined && (yield* Clock.currentTimeMillis) - failedAt < failedLifetimeMs) {
       return yield* new ProviderError({ reason: "The source failed a moment ago" });
     }
-    const chosen = yield* choosePlayableSource(sourceId, userId, capabilities);
+    const chosen = yield* choosePlayableSource(sourceId, capabilities);
     if (chosen.playable instanceof ProviderPlayback) {
       const cached = yield* cachedAudio(chosen.playable);
       if (Option.isNone(cached)) {
-        yield* chosen.playable.resolve.pipe(Effect.tapError(() => markFailed(userId, sourceId)));
+        yield* chosen.playable.resolve.pipe(Effect.tapError(() => markFailed(sourceId)));
       }
     }
     return { sourceId, ...chosen };
@@ -374,18 +356,14 @@ const tryCopy = (sourceId: string, userId: UserId, capabilities: PlaybackCapabil
  * the order of `playableCopies`, else a possible match of `searchCopy`. A source of a provider
  * without its own audio comes after the other sources of its recording.
  */
-export const choosePlayableCopy = (
-  sourceId: string,
-  userId: UserId,
-  capabilities: PlaybackCapabilities,
-) =>
+export const choosePlayableCopy = (sourceId: string, capabilities: PlaybackCapabilities) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const [own] = yield* playableSources(userId, eq(source.id, sourceId));
+    const [own] = yield* playableSources(eq(source.id, sourceId));
     const ownProvider =
       own?.source.provider ??
       Option.getOrUndefined(yield* cachedProviderSource(sourceId))?.provider;
-    const copies = yield* playableCopies(sourceId, userId);
+    const copies = yield* playableCopies(sourceId);
     const linked = ownProvider !== undefined && providers.get(ownProvider)?.links === true;
     const candidates = linked
       ? [...copies.map((row) => row.source.id), sourceId]
@@ -393,14 +371,14 @@ export const choosePlayableCopy = (
 
     const failures: Array<PlaybackUnavailable | ProviderError> = [];
     for (const candidate of candidates) {
-      const result = yield* tryCopy(candidate, userId, capabilities);
+      const result = yield* tryCopy(candidate, capabilities);
       if (Result.isSuccess(result)) return { ...result.success, possibleMatch: false };
       failures.push(result.failure);
     }
 
-    const found = yield* searchCopy(sourceId, userId, candidates);
+    const found = yield* searchCopy(sourceId, candidates);
     if (found !== undefined) {
-      const result = yield* tryCopy(found, userId, capabilities);
+      const result = yield* tryCopy(found, capabilities);
       if (Result.isSuccess(result)) return { ...result.success, possibleMatch: true };
     }
 
@@ -412,10 +390,10 @@ export const choosePlayableCopy = (
   });
 
 // The source that plays, when it is not the requested source
-const copySummary = (sourceId: string, copyId: string, userId: UserId) =>
+const copySummary = (sourceId: string, copyId: string) =>
   Effect.gen(function* () {
     if (copyId === sourceId) return null;
-    const [row] = yield* playableSources(userId, eq(source.id, copyId));
+    const [row] = yield* playableSources(eq(source.id, copyId));
     if (row !== undefined) return sourceSummary(row);
     const cached = yield* cachedProviderSource(copyId);
     if (Option.isNone(cached)) return null;
@@ -425,32 +403,28 @@ const copySummary = (sourceId: string, copyId: string, userId: UserId) =>
 
 /**
  * A signed stream URL for `holder`, of the source or of the copy that plays for it. It stops
- * working when the device is removed, or when the user's session no longer holds the output.
+ * working when the device is removed, or when the session no longer holds the output.
  */
 export const streamPlan = (
   requestedId: string,
-  userId: UserId,
   holder: DeviceId | OutputId,
   capabilities: PlaybackCapabilities,
 ) =>
   Effect.gen(function* () {
     const { sourceId, audio, choice, possibleMatch } = yield* choosePlayableCopy(
       requestedId,
-      userId,
       capabilities,
     );
 
     const grant = new StreamGrant({
       sourceId,
       format: choice.format,
-      userId,
       holder,
       expiresAt: (yield* Clock.currentTimeMillis) + streamLifetimeMs,
     });
     const search = new URLSearchParams({
       container: grant.format.container,
       codec: grant.format.codec,
-      user: grant.userId,
       holder: grant.holder,
       expires: String(grant.expiresAt),
       signature: yield* signGrant(grantLines(grant)),
@@ -460,7 +434,7 @@ export const streamPlan = (
       path: `/stream/${sourceId}?${search}`,
       analysis: yield* sourceAnalysis(sourceId),
       source: audio,
-      copy: yield* copySummary(requestedId, sourceId, userId),
+      copy: yield* copySummary(requestedId, sourceId),
       possibleMatch,
     });
   });
@@ -468,7 +442,7 @@ export const streamPlan = (
 export const preparePlayback = (sourceId: string, capabilities: PlaybackCapabilities) =>
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
-    return yield* streamPlan(sourceId, principal.userId, principal.deviceId, capabilities);
+    return yield* streamPlan(sourceId, principal.deviceId, capabilities);
   });
 
 class SourceAudio extends Data.Class<{
@@ -547,12 +521,12 @@ export const providerStream = <E>(
  * Replaces the hint of `session` with the sources that it plays next. The media cache downloads
  * them. It skips sources that the user cannot play and sources that it does not keep.
  */
-export const hintPrefetch = (session: string, userId: UserId, sourceIds: ReadonlyArray<string>) =>
+export const hintPrefetch = (session: string, sourceIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const cache = yield* MediaCache;
 
     const items = yield* Effect.forEach(sourceIds, (sourceId) =>
-      findPlayableSource(sourceId, userId).pipe(
+      findPlayableSource(sourceId).pipe(
         Effect.map(({ playable }) =>
           playable instanceof ProviderPlayback && playable.cacheId !== null
             ? [
@@ -581,7 +555,6 @@ const StreamRequest = Schema.Struct({
   sourceId: Schema.String.check(Schema.isUUID()),
   container: AudioContainer,
   codec: AudioCodec,
-  user: UserId,
   holder: Schema.Union([DeviceId, OutputId]),
   expires: Schema.FiniteFromString,
   signature: Schema.String,
@@ -602,7 +575,6 @@ export const streamRoute = HttpRouter.add(
     const grant = new StreamGrant({
       sourceId: request.sourceId,
       format: new AudioFormat({ container: request.container, codec: request.codec }),
-      userId: request.user,
       holder: request.holder,
       expiresAt: request.expires,
     });
@@ -610,14 +582,13 @@ export const streamRoute = HttpRouter.add(
       return HttpServerResponse.empty({ status: 403 });
     }
     const holds = Schema.is(DeviceId)(grant.holder)
-      ? yield* hasDevice(grant.userId, grant.holder)
-      : (yield* Outputs).heldBy(grant.holder) === grant.userId;
+      ? yield* hasDevice(grant.holder)
+      : (yield* Outputs).isHeld(grant.holder);
     if (!holds) return HttpServerResponse.empty({ status: 403 });
 
     // A stream URL is stateless. Recheck the selected output against the current source.
     const { playable, choice } = yield* choosePlayableSource(
       request.sourceId,
-      grant.userId,
       new PlaybackCapabilities({ formats: [grant.format] }),
     );
     const contentType = contentTypes[choice.format.container];
@@ -636,7 +607,7 @@ export const streamRoute = HttpRouter.add(
         ? encodeFlac(media, startMs)
         : remuxAudio(media, choice.format.container, startMs);
 
-    const failed = markFailed(grant.userId, request.sourceId).pipe(
+    const failed = markFailed(request.sourceId).pipe(
       Effect.provideService(CopyAttempts, yield* CopyAttempts),
     );
     const body =

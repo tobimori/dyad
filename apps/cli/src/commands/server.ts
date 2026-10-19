@@ -6,7 +6,6 @@ import { Argument, Command } from "effect/cli";
 import { deviceConnection, fail, reportFailures } from "./auth.ts";
 
 const failureMessages = {
-  not_admin: "Only an admin can pair servers",
   invalid_code: "The code is wrong or expired",
   workspace_mismatch:
     "The servers are in different workspaces. A new server joins with `vp run --filter @dyad/server join`.",
@@ -26,11 +25,15 @@ const reportPairing = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 const codeCommand = Command.make("code", {}, () =>
   Effect.gen(function* () {
     const connection = yield* ServerConnection;
-    const pairing = yield* connection.createServerPairingCode();
+    const pairing = yield* connection.createPairingCode();
     const minutes = Math.round((pairing.expiresAt - (yield* Clock.currentTimeMillis)) / 60_000);
-    yield* Console.log(`${pairing.code} (use it on the other server in ${minutes} minutes)`);
+    yield* Console.log(
+      `${pairing.code} (use it on the other device or replica in ${minutes} minutes)`,
+    );
   }).pipe(reportPairing, Effect.provide(deviceConnection), reportFailures),
-).pipe(Command.withDescription("Show a code that pairs another server with this server"));
+).pipe(
+  Command.withDescription("Show a code that pairs another device or replica with this server"),
+);
 
 const pairCommand = Command.make(
   "pair",
@@ -49,9 +52,7 @@ const pairCommand = Command.make(
       const peer = yield* connection.pairServer({ url, code });
       yield* Console.log(`Paired with ${peer.replicaId}`);
     }).pipe(reportPairing, Effect.provide(deviceConnection), reportFailures),
-).pipe(
-  Command.withDescription("Pair this server with another server of the same workspace (admin)"),
-);
+).pipe(Command.withDescription("Pair this server with another server of the same workspace"));
 
 const peersCommand = Command.make("peers", {}, () =>
   Effect.gen(function* () {

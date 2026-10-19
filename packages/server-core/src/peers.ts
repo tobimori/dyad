@@ -1,10 +1,7 @@
-import { catalogAssertion, replicaIdentity, serverPeer, user } from "@dyad/db";
+import { catalogAssertion, replicaIdentity, serverPeer } from "@dyad/db";
 import { Database, ReplicaDatabase, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   CurrentPeer,
-  CurrentPrincipal,
-  PairingCode,
-  PeerAdmin,
   PeerAuthentication,
   PeerCursor,
   PeerLink,
@@ -18,41 +15,23 @@ import {
   ServerPeer,
   Unauthorized,
   UpgradeRequired,
-  UserId,
   WorkspaceId,
   syncProtocolVersion,
 } from "@dyad/domain";
 import { and, eq, isNotNull } from "drizzle-orm";
-import { Clock, Context, Crypto, Data, Duration, Effect, Layer, PubSub, Ref } from "effect";
+import { Clock, Context, Crypto, Data, Duration, Effect, Layer, PubSub } from "effect";
 import { FetchHttpClient, Headers } from "effect/http";
 import { RpcClient, RpcMiddleware, RpcSerialization, RpcServer } from "effect/rpc";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 
-import { hashPassword, normalizeCode, randomBytes, randomCode, sha256 } from "./auth.ts";
+import { randomBytes, redeemCode, sha256 } from "./auth.ts";
 import { hex } from "./ids.ts";
 import { mergePeerRows, readChanges } from "./replication.ts";
 import { SyncHub } from "./sync.ts";
 
 const pageLimit = 500;
-const codeLifetimeMs = 10 * 60 * 1000;
 const roundIntervalMs = 5000;
 const maxBackoffMs = 60_000;
-
-class PendingServerPairing extends Data.Class<{
-  readonly userId: UserId;
-  readonly expiresAt: number;
-}> {}
-
-/** Server pairing codes stay in memory, like device pairing codes */
-export class ServerPairingCodes extends Context.Service<
-  ServerPairingCodes,
-  Ref.Ref<ReadonlyMap<string, PendingServerPairing>>
->()("@dyad/server-core/ServerPairingCodes") {}
-
-export const serverPairingCodesLayer = Layer.effect(
-  ServerPairingCodes,
-  Ref.make<ReadonlyMap<string, PendingServerPairing>>(new Map()),
-);
 
 /**
  * Per peer, the `change_seq` values of rows that this replica took unchanged from that peer. They
@@ -79,32 +58,6 @@ const echoesAfter = (peer: string, cursor: PeerCursor) =>
     return [...echoes];
   });
 
-const requireAdmin = Effect.gen(function* () {
-  const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
-  const [row] = yield* db
-    .select({ role: user.role })
-    .from(user)
-    .where(eq(user.id, principal.userId));
-  if (row?.role !== "admin") return yield* new ServerPairingFailed({ reason: "not_admin" });
-  return principal;
-});
-
-export const createServerPairingCode = Effect.gen(function* () {
-  const principal = yield* requireAdmin;
-  const codes = yield* ServerPairingCodes;
-  const now = yield* Clock.currentTimeMillis;
-  const code = yield* randomCode;
-  const expiresAt = now + codeLifetimeMs;
-
-  yield* Ref.update(codes, (pending) => {
-    const next = new Map([...pending].filter(([, pairing]) => pairing.expiresAt > now));
-    next.set(code, new PendingServerPairing({ userId: principal.userId, expiresAt }));
-    return next;
-  });
-  return new PairingCode({ code, expiresAt });
-});
-
 const checkVersion = (protocolVersion: number) =>
   protocolVersion === syncProtocolVersion
     ? Effect.void
@@ -116,17 +69,8 @@ const redeem = (request: PeerRedeemRequest) =>
     yield* checkVersion(request.protocolVersion);
     const db = yield* Database;
     const identity = yield* ReplicaDatabase;
-    const codes = yield* ServerPairingCodes;
     const now = yield* Clock.currentTimeMillis;
-    const code = normalizeCode(request.code);
-
-    // A code works once
-    const pairing = yield* Ref.modify(codes, (pending) => {
-      const next = new Map(pending);
-      next.delete(code);
-      return [pending.get(code), next];
-    });
-    if (pairing === undefined || pairing.expiresAt <= now) {
+    if (!(yield* redeemCode(request.code))) {
       return yield* new ServerPairingFailed({ reason: "invalid_code" });
     }
     if (request.replicaId === identity.replicaId) {
@@ -136,9 +80,6 @@ const redeem = (request: PeerRedeemRequest) =>
     if (request.workspaceId !== null && request.workspaceId !== identity.workspaceId) {
       return yield* new ServerPairingFailed({ reason: "workspace_mismatch" });
     }
-
-    const [admin] = yield* db.select().from(user).where(eq(user.id, pairing.userId));
-    if (admin === undefined) return yield* new ServerPairingFailed({ reason: "invalid_code" });
 
     const token = hex(yield* randomBytes(32));
     const tokenHash = yield* sha256(token);
@@ -151,11 +92,6 @@ const redeem = (request: PeerRedeemRequest) =>
       token,
       replicaId: ReplicaId.make(identity.replicaId),
       workspaceId: WorkspaceId.make(identity.workspaceId),
-      admin: new PeerAdmin({
-        id: UserId.make(admin.id),
-        username: admin.username,
-        role: admin.role,
-      }),
     });
   });
 
@@ -286,47 +222,31 @@ const redeemAt = (url: string, workspaceId: WorkspaceId | null, code: string) =>
     ),
   );
 
-/** Only a server without users can join a workspace */
+/** Only a replica that is not paired yet can join a workspace */
 export class JoinFailed extends Data.TaggedError("JoinFailed")<{
-  readonly reason: "has_users" | ServerPairingFailed["reason"];
+  readonly reason: "already_joined" | ServerPairingFailed["reason"];
 }> {}
 
 // The peer at the URL is another server now
 class OtherServer extends Data.TaggedError("OtherServer")<{}> {}
 
-/**
- * Joins the workspace of the server at `url` before this server starts for the first time. This
- * server takes its workspace and makes its first admin with the ID of the admin who made the
- * code, with a password of this server.
- */
-export const joinWorkspace = (options: {
-  readonly url: URL;
-  readonly code: string;
-  readonly password: string;
-}) =>
+/** Joins the workspace of the replica at `url` before this replica starts for the first time */
+export const joinWorkspace = (options: { readonly url: URL; readonly code: string }) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const users = yield* db.$count(user);
-    if (users > 0) return yield* new JoinFailed({ reason: "has_users" });
+    if ((yield* db.$count(serverPeer)) > 0)
+      return yield* new JoinFailed({ reason: "already_joined" });
 
     const url = options.url.origin;
     const link = yield* redeemAt(url, null, options.code).pipe(
       Effect.mapError((error) => new JoinFailed({ reason: error.reason })),
     );
     const now = yield* Clock.currentTimeMillis;
-    const passwordHash = yield* hashPassword(options.password);
 
     yield* db.transaction(() =>
       Effect.gen(function* () {
         yield* db.update(replicaIdentity).set({ workspaceId: link.workspaceId });
         yield* db.update(catalogAssertion).set({ workspaceId: link.workspaceId });
-        yield* db.insert(user).values({
-          id: link.admin.id,
-          username: link.admin.username,
-          passwordHash,
-          role: link.admin.role,
-          createdAt: now,
-        });
         yield* db.insert(serverPeer).values({
           replicaId: link.replicaId,
           url,
@@ -351,7 +271,6 @@ const peerSummary = (row: typeof serverPeer.$inferSelect) =>
 /** Pairs with a server of the same workspace, for example again after an unpair */
 export const pairServer = (options: { readonly url: URL; readonly code: string }) =>
   Effect.gen(function* () {
-    yield* requireAdmin;
     const db = yield* Database;
     const identity = yield* ReplicaDatabase;
     const url = options.url.origin;
@@ -378,7 +297,6 @@ export const pairServer = (options: { readonly url: URL; readonly code: string }
   });
 
 export const listServerPeers = Effect.gen(function* () {
-  yield* requireAdmin;
   const db = yield* Database;
   const rows = yield* db.select().from(serverPeer);
   return rows.map(peerSummary);
@@ -387,7 +305,6 @@ export const listServerPeers = Effect.gen(function* () {
 /** Removes the pairing here, and on the peer when this server connects to it and reaches it */
 export const unpairServer = (replicaId: ReplicaId) =>
   Effect.gen(function* () {
-    yield* requireAdmin;
     const db = yield* Database;
     const [row] = yield* db.select().from(serverPeer).where(eq(serverPeer.replicaId, replicaId));
     if (row === undefined) return yield* new ServerPairingFailed({ reason: "not_found" });

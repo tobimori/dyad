@@ -7,7 +7,7 @@ import {
   recording,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, PageNotFound } from "@dyad/domain";
+import { PageNotFound } from "@dyad/domain";
 import type { ArtistRef } from "@dyad/domain";
 import type { Provider } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
@@ -350,8 +350,7 @@ export const artistPageRef = (ref: ArtistRef) =>
     if (Option.isNone(id)) return ref;
 
     const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
-    const usable = yield* usableProviders(principal.userId);
+    const usable = yield* usableProviders;
     const members = yield* db
       .select({ provider: identifier.scheme, externalId: identifier.value })
       .from(artist)

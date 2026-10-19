@@ -36,7 +36,7 @@ export const providerPage = sqliteTable(
   {
     provider: text("provider").notNull(),
     kind: text("kind", { enum: ["artist", "album", "home", "personal"] }).notNull(),
-    // The user ID for `personal`, the shelves of a recommender
+    // Empty for `home` and `personal`, the shelves of a recommender
     externalId: text("external_id").notNull(),
     // The plugin's `ProviderArtist`, `ProviderAlbum`, home shelves or `SuggestionShelf` list
     data: text("data", { mode: "json" }).notNull(),

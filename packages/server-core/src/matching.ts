@@ -1,6 +1,6 @@
-import { entityMerge, isrcLookup, job, recording, user } from "@dyad/db";
+import { entityMerge, isrcLookup, job, recording } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, MergeFailed } from "@dyad/domain";
+import { MergeFailed } from "@dyad/domain";
 import type { MusicBrainzLookup, MusicBrainzRecording } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
 import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
@@ -74,7 +74,6 @@ export const writeSystemMerge = (edge: {
       id,
       ...edge,
       origin: "system" as const,
-      authorUserId: null,
       hlc: yield* clock.next,
     };
     yield* db.transaction(() =>
@@ -442,13 +441,7 @@ export const decideMerge = (
   Effect.gen(function* () {
     const db = yield* Database;
     const clock = yield* HlcClock;
-    const principal = yield* CurrentPrincipal;
 
-    const [author] = yield* db
-      .select({ role: user.role })
-      .from(user)
-      .where(eq(user.id, principal.userId));
-    if (author?.role !== "admin") return yield* new MergeFailed({ reason: "not_admin" });
     if (pair.fromId === pair.intoId) return yield* new MergeFailed({ reason: "same_recording" });
 
     const found = yield* db
@@ -466,7 +459,6 @@ export const decideMerge = (
       method: "manual" as const,
       confidence: 1,
       evidence: null,
-      authorUserId: principal.userId,
       hlc: yield* clock.next,
     };
     yield* db.transaction(() =>

@@ -19,7 +19,7 @@ export class Candidate extends Data.Class<{
   readonly upload: boolean;
 }> {}
 
-/** One play of the user who searches */
+/** One play of the owner */
 export class Play extends Data.Class<{
   readonly sourceId: string;
   /** Normalized with `normalizeIsrc` */

@@ -8,14 +8,13 @@ import {
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
-  CurrentPrincipal,
   PlaylistEntryRow,
   PlaylistNotFound,
   PlaylistRow,
   RecordingId,
   libraryView,
 } from "@dyad/domain";
-import type { PlaylistLink, PlaylistLinkState, UserId } from "@dyad/domain";
+import type { PlaylistLink, PlaylistLinkState } from "@dyad/domain";
 import { HlcClock, libraryItemId, patchRow } from "@dyad/sync";
 import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { Array as Arr, Clock, Effect, Option, Schema } from "effect";
@@ -33,7 +32,6 @@ import { readRow, writeRow } from "./replication.ts";
  * removed. A removed item in `removedInDyad` stays removed: the removal in Dyad wins.
  */
 export const setMembership = (
-  userId: string,
   origin: string,
   recordingIds: ReadonlySet<string>,
   complete: boolean,
@@ -44,13 +42,12 @@ export const setMembership = (
     const clock = yield* HlcClock;
     const now = yield* Clock.currentTimeMillis;
 
-    const rows = yield* db
-      .select()
-      .from(libraryItem)
-      .where(and(eq(libraryItem.userId, userId), eq(libraryItem.origin, origin)));
+    const rows = yield* db.select().from(libraryItem).where(eq(libraryItem.origin, origin));
     const live = new Set(rows.filter((row) => !row.deleted).map((row) => row.entityId));
 
-    const removedRows = new Set(rows.filter((row) => row.deleted).map((row) => row.entityId));
+    const removedRows = new Map(
+      rows.filter((row) => row.deleted).map((row) => [row.entityId, row.id]),
+    );
     const added = [...recordingIds].filter(
       (id) => !live.has(id) && !(removedRows.has(id) && removedInDyad.has(id)),
     );
@@ -64,12 +61,15 @@ export const setMembership = (
       added,
       (entityId) =>
         Effect.gen(function* () {
-          const id = yield* libraryItemId({ userId, entityType: "recording", entityId, origin });
+          // A row from before single user has another ID
+          const id =
+            removedRows.get(entityId) ??
+            (yield* libraryItemId({ entityType: "recording", entityId, origin }));
           const change = { addedAt: now, hlc: yield* clock.next, deleted: false, changeSeq };
 
           yield* db
             .insert(libraryItem)
-            .values({ id, userId, entityType: "recording", entityId, origin, ...change })
+            .values({ id, entityType: "recording", entityId, origin, ...change })
             .onConflictDoUpdate({ target: libraryItem.id, set: change });
         }),
       { discard: true },
@@ -87,19 +87,12 @@ export const setMembership = (
   });
 
 /** Adds a playlist of a remote playlist, linked to it */
-export const addLinkedPlaylist = (
-  ownerId: UserId,
-  id: string,
-  name: string,
-  origin: string,
-  link: PlaylistLink,
-) =>
+export const addLinkedPlaylist = (id: string, name: string, origin: string, link: PlaylistLink) =>
   Effect.gen(function* () {
     const clock = yield* HlcClock;
     const row = new PlaylistRow({
       table: "playlist",
       id,
-      ownerId,
       name,
       origin,
       link,
@@ -285,7 +278,7 @@ export const mergeRemoteEntries = (
  * Unlinks the playlists of `provider` whose remote playlist is not in `keep`. The playlists stay.
  * Returns their IDs.
  */
-export const unlinkPlaylists = (ownerId: string, provider: string, keep: ReadonlySet<string>) =>
+export const unlinkPlaylists = (provider: string, keep: ReadonlySet<string>) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const rows = yield* db
@@ -293,7 +286,6 @@ export const unlinkPlaylists = (ownerId: string, provider: string, keep: Readonl
       .from(playlist)
       .where(
         and(
-          eq(playlist.ownerId, ownerId),
           eq(playlist.deleted, false),
           sql`json_extract(${playlist.link}, '$.provider') = ${provider}`,
         ),
@@ -309,7 +301,7 @@ export const unlinkPlaylists = (ownerId: string, provider: string, keep: Readonl
   });
 
 // The canonical recording is `coalesce(merged_into_id, id)`
-const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
+const loadLibraryView = (boundIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const db = yield* Database;
 
@@ -327,7 +319,6 @@ const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
       .where(or(inArray(recording.id, roots), inArray(recording.mergedIntoId, roots)));
 
     const sources = yield* playableSources(
-      userId,
       inArray(source.recordingId, [...new Set([...boundIds, ...recordings.map((row) => row.id)])]),
     );
     const remoteTracks = yield* db
@@ -335,7 +326,6 @@ const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
       .from(libraryRemoteTrack)
       .where(
         and(
-          eq(libraryRemoteTrack.userId, userId),
           inArray(libraryRemoteTrack.recordingId, boundIds),
           eq(libraryRemoteTrack.deleted, false),
         ),
@@ -349,25 +339,18 @@ const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
         summary: sourceSummary(row),
       })),
       remoteTracks,
-      providerOrder: yield* providerOrder(userId),
+      providerOrder: yield* providerOrder,
     });
   });
 
 export const listPlaylistEntries = (playlistId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
 
     const [owned] = yield* db
       .select({ link: playlist.link })
       .from(playlist)
-      .where(
-        and(
-          eq(playlist.id, playlistId),
-          eq(playlist.ownerId, principal.userId),
-          eq(playlist.deleted, false),
-        ),
-      );
+      .where(and(eq(playlist.id, playlistId), eq(playlist.deleted, false)));
     if (owned === undefined) return yield* new PlaylistNotFound();
 
     const entries = yield* db
@@ -375,10 +358,7 @@ export const listPlaylistEntries = (playlistId: string) =>
       .from(playlistEntry)
       .where(and(eq(playlistEntry.playlistId, playlistId), eq(playlistEntry.deleted, false)))
       .orderBy(asc(playlistEntry.position), asc(playlistEntry.id));
-    const view = yield* loadLibraryView(
-      principal.userId,
-      entries.map((entry) => entry.recordingId),
-    );
+    const view = yield* loadLibraryView(entries.map((entry) => entry.recordingId));
     return view.playlistEntries(
       entries,
       owned.link?.direction === "two-way" ? owned.link.provider : null,
@@ -388,20 +368,10 @@ export const listPlaylistEntries = (playlistId: string) =>
 /** The saved songs */
 export const listLibrary = Effect.gen(function* () {
   const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
   const items = yield* db
     .select({ entityId: libraryItem.entityId, addedAt: libraryItem.addedAt })
     .from(libraryItem)
-    .where(
-      and(
-        eq(libraryItem.userId, principal.userId),
-        eq(libraryItem.deleted, false),
-        eq(libraryItem.entityType, "recording"),
-      ),
-    );
-  const view = yield* loadLibraryView(
-    principal.userId,
-    items.map((item) => item.entityId),
-  );
+    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
+  const view = yield* loadLibraryView(items.map((item) => item.entityId));
   return view.libraryEntries(items);
 });

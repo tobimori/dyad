@@ -1,7 +1,7 @@
 import { recording, source, sourceSegment } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, RadioStart } from "@dyad/domain";
-import type { QueueEntry, SourceSummary, UserId } from "@dyad/domain";
+import { RadioStart } from "@dyad/domain";
+import type { QueueEntry, SourceSummary } from "@dyad/domain";
 import { RadioSeed } from "@dyad/plugin";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { Clock, Data, Effect, Option } from "effect";
@@ -31,16 +31,16 @@ class Seed extends Data.Class<{
   readonly externalId: string | null;
 }> {}
 
-const sourceSeed = (userId: UserId, sourceId: string) =>
+const sourceSeed = (sourceId: string) =>
   Effect.gen(function* () {
-    const [row] = yield* playableSources(userId, eq(source.id, sourceId), 1);
+    const [row] = yield* playableSources(eq(source.id, sourceId), 1);
     if (row !== undefined) {
       const summary = sourceSummary(row);
       return Option.some({ summary, externalId: row.source.externalId });
     }
     const cached = yield* cachedProviderSource(sourceId);
     const name = Option.isSome(cached)
-      ? (yield* linkedProviders(userId)).get(cached.value.provider)?.name
+      ? (yield* linkedProviders).get(cached.value.provider)?.name
       : undefined;
     return Option.map(
       Option.filter(cached, () => name !== undefined),
@@ -51,7 +51,7 @@ const sourceSeed = (userId: UserId, sourceId: string) =>
     );
   });
 
-const seedOf = (userId: UserId, start: typeof RadioStart.Type) =>
+const seedOf = (start: typeof RadioStart.Type) =>
   RadioStart.match(start, {
     Artist: ({ name }) =>
       Effect.succeed(
@@ -60,7 +60,7 @@ const seedOf = (userId: UserId, start: typeof RadioStart.Type) =>
         ),
       ),
     Source: ({ sourceId }) =>
-      Effect.map(sourceSeed(userId, sourceId), (found) =>
+      Effect.map(sourceSeed(sourceId), (found) =>
         Option.flatMap(found, ({ summary, externalId }) =>
           summary.artist === null
             ? Option.none()
@@ -78,7 +78,7 @@ const seedOf = (userId: UserId, start: typeof RadioStart.Type) =>
   });
 
 // The songs before and after the seed in DJ sets, or the songs of a seed that is a set
-const setNeighbours = (userId: UserId, seed: Seed) =>
+const setNeighbours = (seed: Seed) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const summary = seed.summary;
@@ -156,7 +156,6 @@ const setNeighbours = (userId: UserId, seed: Seed) =>
       .where(inArray(root, [...reasonOfRoot.keys()]));
     const rootOf = new Map(members.map((member) => [member.id, member.root]));
     const rows = yield* playableSources(
-      userId,
       inArray(
         source.recordingId,
         members.map((member) => member.id),
@@ -181,7 +180,6 @@ const setNeighbours = (userId: UserId, seed: Seed) =>
  * sets, ranked by the user's plays. A recommender that fails or does not answer in time is skipped.
  */
 const radioTracks = (
-  userId: UserId,
   seed: Seed,
   options: { readonly exclude: ReadonlySet<string>; readonly limit: number },
 ) =>
@@ -193,7 +191,7 @@ const radioTracks = (
         Effect.gen(function* () {
           const radio = recommender.radio;
           if (radio === undefined) return [];
-          const account = yield* recommenderAccount(userId, id);
+          const account = yield* recommenderAccount(id);
           const credentials = Option.match(account, {
             onNone: () => new Map(),
             onSome: (linked) => linked.credentials,
@@ -224,19 +222,19 @@ const radioTracks = (
       { concurrency: "unbounded" },
     );
     const items = answers.flat().toSorted((a, b) => b.score - a.score);
-    const found = yield* resolveSuggestions(userId, items, radioSearches);
+    const found = yield* resolveSuggestions(items, radioSearches);
     const picks = items.flatMap((item, index) => {
       const summary = found[index];
       return summary === undefined ? [] : [new Pick({ ...item, summary })];
     });
-    const neighbours = yield* setNeighbours(userId, seed);
+    const neighbours = yield* setNeighbours(seed);
 
     const exclude = new Set(options.exclude);
     if (seed.summary !== null) {
       exclude.add(seed.summary.id);
       exclude.add(songKey(seed.summary.title, seed.summary.artist));
     }
-    return choose(yield* loadTaste(userId), [...picks, ...neighbours], {
+    return choose(yield* loadTaste, [...picks, ...neighbours], {
       exclude,
       limit: options.limit,
       explainArtist: false,
@@ -246,16 +244,15 @@ const radioTracks = (
 /** The same start gives the same songs for 10 minutes, without new provider requests */
 export const radio = (start: typeof RadioStart.Type) =>
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
     const memory = yield* RecommendationMemory;
     const now = yield* Clock.currentTimeMillis;
-    const key = `${principal.userId}:${JSON.stringify(start)}`;
+    const key = JSON.stringify(start);
     const earlier = memory.radios.get(key);
     if (earlier !== undefined && now - earlier.at < radioLifetimeMs) return earlier.tracks;
 
-    const seed = yield* seedOf(principal.userId, start);
+    const seed = yield* seedOf(start);
     if (Option.isNone(seed)) return [];
-    const tracks = yield* radioTracks(principal.userId, seed.value, {
+    const tracks = yield* radioTracks(seed.value, {
       exclude: new Set(),
       limit: startLimit,
     });
@@ -268,11 +265,11 @@ export const radio = (start: typeof RadioStart.Type) =>
   });
 
 /** More songs after the last entry of a queue, without the songs of the queue */
-export const continueRadio = (userId: UserId, entries: ReadonlyArray<QueueEntry>) =>
+export const continueRadio = (entries: ReadonlyArray<QueueEntry>) =>
   Effect.gen(function* () {
     const last = entries.at(-1);
     if (last === undefined) return [];
-    const seed = yield* seedOf(userId, RadioStart.cases.Source.make({ sourceId: last.source.id }));
+    const seed = yield* seedOf(RadioStart.cases.Source.make({ sourceId: last.source.id }));
     if (Option.isNone(seed)) return [];
 
     const exclude = new Set(
@@ -281,5 +278,5 @@ export const continueRadio = (userId: UserId, entries: ReadonlyArray<QueueEntry>
         songKey(entry.source.title, entry.source.artist),
       ]),
     );
-    return yield* radioTracks(userId, seed.value, { exclude, limit: refillLimit });
+    return yield* radioTracks(seed.value, { exclude, limit: refillLimit });
   });

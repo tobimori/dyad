@@ -1,8 +1,8 @@
 import { playEvent, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import type { SourceSummary, UserId } from "@dyad/domain";
+import type { SourceSummary } from "@dyad/domain";
 import type { ProviderSource, Suggestion } from "@dyad/plugin";
-import { and, count, eq, gte, inArray, sql } from "drizzle-orm";
+import { count, eq, gte, inArray, sql } from "drizzle-orm";
 import { Clock, Effect, Option } from "effect";
 
 import { cacheProviderSources, cachedProviderSource, cachedSummary } from "./provider-cache.ts";
@@ -20,52 +20,49 @@ const searchTimeout = "8 seconds";
  * A search of the usable provider that the user plays most, so that suggestions play where the
  * user listens; ties go to the curated catalog. It gives the first result with the song key.
  */
-const searchOfUser = (userId: UserId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const now = yield* Clock.currentTimeMillis;
-    const providers = yield* usableProviders(userId);
-    const counts = yield* db
-      .select({ provider: source.provider, plays: count() })
-      .from(playEvent)
-      .innerJoin(source, eq(source.id, playEvent.sourceId))
-      .where(and(eq(playEvent.userId, userId), gte(playEvent.startedAt, now - playHistoryMs)))
-      .groupBy(source.provider);
-    const plays = new Map(counts.map((row) => [row.provider, row.plays]));
+const searchOfUser = Effect.gen(function* () {
+  const db = yield* Database;
+  const now = yield* Clock.currentTimeMillis;
+  const providers = yield* usableProviders;
+  const counts = yield* db
+    .select({ provider: source.provider, plays: count() })
+    .from(playEvent)
+    .innerJoin(source, eq(source.id, playEvent.sourceId))
+    .where(gte(playEvent.startedAt, now - playHistoryMs))
+    .groupBy(source.provider);
+  const plays = new Map(counts.map((row) => [row.provider, row.plays]));
 
-    const [chosen] = [...providers].toSorted(
-      ([a, first], [b, second]) =>
-        Number(second.provider.search !== undefined) -
-          Number(first.provider.search !== undefined) ||
-        (plays.get(b) ?? 0) - (plays.get(a) ?? 0) ||
-        (second.provider.metadataPriority ?? 0) - (first.provider.metadataPriority ?? 0),
-    );
-    const search = chosen?.[1].provider.search;
-    if (chosen === undefined || search === undefined) return undefined;
-    const [id, usable] = chosen;
+  const [chosen] = [...providers].toSorted(
+    ([a, first], [b, second]) =>
+      Number(second.provider.search !== undefined) - Number(first.provider.search !== undefined) ||
+      (plays.get(b) ?? 0) - (plays.get(a) ?? 0) ||
+      (second.provider.metadataPriority ?? 0) - (first.provider.metadataPriority ?? 0),
+  );
+  const search = chosen?.[1].provider.search;
+  if (chosen === undefined || search === undefined) return undefined;
+  const [id, usable] = chosen;
 
-    // A failure or a timeout finds nothing
-    return (query: string, key: string) =>
-      Effect.gen(function* () {
-        const results = yield* search(query, usable.credentials).pipe(
-          Effect.timeout(searchTimeout),
-          Effect.catchTags({
-            ProviderError: (error) =>
-              Effect.logWarning("Suggestion search failed", error.reason).pipe(Effect.as([])),
-            TimeoutError: () =>
-              Effect.logWarning("Suggestion search timed out").pipe(Effect.as([])),
-          }),
-          Effect.catchDefect((defect) =>
-            Effect.logError("Suggestion search crashed", defect).pipe(Effect.as([])),
-          ),
-          Effect.annotateLogs("provider", id),
-        );
-        const cached = yield* cacheProviderSources(id, results);
-        return cached
-          .map((item) => cachedSummary(item, usable.provider.name))
-          .find((summary) => songKey(summary.title, summary.artist) === key);
-      });
-  });
+  // A failure or a timeout finds nothing
+  return (query: string, key: string) =>
+    Effect.gen(function* () {
+      const results = yield* search(query, usable.credentials).pipe(
+        Effect.timeout(searchTimeout),
+        Effect.catchTags({
+          ProviderError: (error) =>
+            Effect.logWarning("Suggestion search failed", error.reason).pipe(Effect.as([])),
+          TimeoutError: () => Effect.logWarning("Suggestion search timed out").pipe(Effect.as([])),
+        }),
+        Effect.catchDefect((defect) =>
+          Effect.logError("Suggestion search crashed", defect).pipe(Effect.as([])),
+        ),
+        Effect.annotateLogs("provider", id),
+      );
+      const cached = yield* cacheProviderSources(id, results);
+      return cached
+        .map((item) => cachedSummary(item, usable.provider.name))
+        .find((summary) => songKey(summary.title, summary.artist) === key);
+    });
+});
 
 /**
  * A playable source for each suggestion, or `undefined`: the recommender's own source, else a
@@ -73,13 +70,12 @@ const searchOfUser = (userId: UserId) =>
  * most `searches` of the others search one provider, in order.
  */
 export const resolveSuggestions = (
-  userId: UserId,
   items: ReadonlyArray<{ readonly suggestion: Suggestion; readonly recommender: string }>,
   searches: number,
 ) =>
   Effect.gen(function* () {
     const memory = yield* RecommendationMemory;
-    const providers = yield* usableProviders(userId);
+    const providers = yield* usableProviders;
     const now = yield* Clock.currentTimeMillis;
     const found: Array<SourceSummary | undefined> = items.map(() => undefined);
     const nameOf = (provider: string) => providers.get(provider)?.provider.name ?? provider;
@@ -109,7 +105,7 @@ export const resolveSuggestions = (
     const rows =
       titles.length === 0
         ? []
-        : yield* playableSources(userId, inArray(sql`lower(${source.rawTitle})`, titles));
+        : yield* playableSources(inArray(sql`lower(${source.rawTitle})`, titles));
     const local = new Map(
       rows.map((row) => {
         const summary = sourceSummary(row);
@@ -135,7 +131,7 @@ export const resolveSuggestions = (
       if (found[item.index] === undefined && !fresh && !searchedBefore) unknown.push(item);
     }
 
-    const search = unknown.length === 0 || searches === 0 ? undefined : yield* searchOfUser(userId);
+    const search = unknown.length === 0 || searches === 0 ? undefined : yield* searchOfUser;
     if (search !== undefined) {
       for (const item of unknown.slice(0, searches)) {
         const summary = yield* search(

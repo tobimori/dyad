@@ -1,14 +1,12 @@
 import { source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
-  CurrentPrincipal,
   RecordingId,
   SourceCopy,
   SourceSummary,
   compareCopies,
   compareSources,
 } from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
 import type { ProviderSource } from "@dyad/plugin";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Clock, Context, Effect, Layer, Option } from "effect";
@@ -47,19 +45,18 @@ const groupOf = (sourceId: string) =>
  * The other sources of the recording that the user can play, best first: the user's provider
  * order, then a local file, then a stream in the media cache, then quality
  */
-export const playableCopies = (sourceId: string, userId: UserId) =>
+export const playableCopies = (sourceId: string) =>
   Effect.gen(function* () {
     const cache = yield* MediaCache;
     const { group } = yield* groupOf(sourceId);
     if (group.length === 0) return [];
     const rows = yield* playableSources(
-      userId,
       and(inArray(source.recordingId, group), ne(source.id, sourceId)),
     );
     const cached = new Set(
       yield* Effect.filter(rows, (row) => Effect.map(cache.find(row.variant.id), Option.isSome)),
     );
-    const compare = compareSources(yield* providerOrder(userId));
+    const compare = compareSources(yield* providerOrder);
     return rows.toSorted(
       (a, b) =>
         compare(
@@ -78,12 +75,11 @@ export const playableCopies = (sourceId: string, userId: UserId) =>
 export const sourceCopies = (sourceId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
     const providers = yield* Providers;
-    const linked = yield* linkedProviders(principal.userId);
+    const linked = yield* linkedProviders;
     const { group, cached } = yield* groupOf(sourceId);
 
-    const playable = yield* playableSources(principal.userId, inArray(source.recordingId, group));
+    const playable = yield* playableSources(inArray(source.recordingId, group));
     const playableIds = new Set(playable.map((row) => row.source.id));
     // The other sources only need the provider and the quality
     const others = (yield* db
@@ -152,7 +148,7 @@ export const sourceCopies = (sourceId: string) =>
       }),
     ];
 
-    return copies.toSorted(compareCopies(yield* providerOrder(principal.userId)));
+    return copies.toSorted(compareCopies(yield* providerOrder));
   });
 
 /** The search result that a provider search found for each source, or `null` */
@@ -187,7 +183,7 @@ const sameText = (
  * provider cache. A text match does not prove the same recording, so nothing records it as
  * identity. `undefined` when no provider has one.
  */
-export const searchCopy = (sourceId: string, userId: UserId, tried: ReadonlyArray<string>) =>
+export const searchCopy = (sourceId: string, tried: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const searches = yield* CopySearches;
     const now = yield* Clock.currentTimeMillis;
@@ -196,14 +192,14 @@ export const searchCopy = (sourceId: string, userId: UserId, tried: ReadonlyArra
       return earlier.found === null || tried.includes(earlier.found) ? undefined : earlier.found;
     }
 
-    const [row] = yield* playableSources(userId, eq(source.id, sourceId));
+    const [row] = yield* playableSources(eq(source.id, sourceId));
     if (row === undefined) return undefined;
     const { title, artist, durationMs } = sourceSummary(row);
     if (title === null || artist === null || durationMs === null) return undefined;
     const text = { title, artist, durationMs };
 
-    const compare = compareSources(yield* providerOrder(userId));
-    const searchable = [...(yield* usableProviders(userId))].flatMap(([id, usable]) => {
+    const compare = compareSources(yield* providerOrder);
+    const searchable = [...(yield* usableProviders)].flatMap(([id, usable]) => {
       const search = usable.provider.search;
       return search === undefined || usable.provider.links === true ? [] : [{ id, search, usable }];
     });

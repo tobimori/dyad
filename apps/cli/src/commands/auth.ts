@@ -1,7 +1,6 @@
 import { hostname } from "node:os";
 
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
-import type { DeviceSession } from "@dyad/domain";
 import {
   AccountLinkFailed,
   AuthenticationFailed,
@@ -9,7 +8,7 @@ import {
   HttpUrl,
   Unauthorized,
 } from "@dyad/domain";
-import { Clock, Config, Console, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
+import { Config, Console, Data, Effect, Layer, Option, Schema } from "effect";
 import { Argument, Command, Prompt } from "effect/cli";
 
 import { CookieImportError } from "./cookie-import.ts";
@@ -23,7 +22,8 @@ export const serverUrl = Config.schema(HttpUrl, "DYAD_SERVER_URL").pipe(
 
 export class NotSignedIn extends Data.TaggedError("NotSignedIn")<{}> {}
 
-const notSignedIn = "Not signed in. Use `dyad login`, `dyad pair` or `dyad setup`.";
+const notSignedIn =
+  "Not paired. Use `dyad pair <code>` with a code from `dyad server code` or from the server log.";
 
 const publicConnection = Layer.unwrap(
   Effect.gen(function* () {
@@ -46,11 +46,7 @@ export const deviceConnection = Layer.unwrap(
   }),
 );
 
-const failureMessages = {
-  invalid_credentials: "Wrong username or password",
-  invalid_code: "The code is wrong or expired",
-  already_set_up: "The server already has a user. Use `dyad login`.",
-};
+const failureMessages = { invalid_code: "The code is wrong or expired" };
 
 export const fail = (message: string) =>
   Console.error(message).pipe(
@@ -77,50 +73,6 @@ export const reportFailures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const deviceNamePrompt = Prompt.String({ message: "Device name", default: hostname() });
 
-const saveSession = (session: DeviceSession, username: string) =>
-  Effect.gen(function* () {
-    yield* saveDeviceToken(yield* serverUrl, session.token);
-    yield* Console.log(`Signed in as ${username}`);
-  });
-
-const setupCommand = Command.make("setup", {}, () =>
-  Effect.gen(function* () {
-    const setupCode = yield* Prompt.String({ message: "Setup code from the server log" });
-    const username = yield* Prompt.String({ message: "Username" });
-    const password = yield* Prompt.Password({ message: "Password (at least 8 characters)" });
-    const repeated = yield* Prompt.Password({ message: "Repeat the password" });
-    if (Redacted.value(password) !== Redacted.value(repeated)) {
-      return yield* fail("The passwords are not the same");
-    }
-    const deviceName = yield* deviceNamePrompt;
-
-    const connection = yield* ServerConnection;
-    const session = yield* connection.setup({
-      setupCode,
-      username,
-      password: Redacted.value(password),
-      deviceName,
-    });
-    yield* saveSession(session, username);
-  }).pipe(Effect.provide(publicConnection), reportFailures),
-).pipe(Command.withDescription("Create the first admin of a new server"));
-
-const loginCommand = Command.make("login", {}, () =>
-  Effect.gen(function* () {
-    const username = yield* Prompt.String({ message: "Username" });
-    const password = yield* Prompt.Password({ message: "Password" });
-    const deviceName = yield* deviceNamePrompt;
-
-    const connection = yield* ServerConnection;
-    const session = yield* connection.login({
-      username,
-      password: Redacted.value(password),
-      deviceName,
-    });
-    yield* saveSession(session, username);
-  }).pipe(Effect.provide(publicConnection), reportFailures),
-).pipe(Command.withDescription("Sign in with a username and password"));
-
 const pairCommand = Command.make("pair", { code: Argument.String("code") }, ({ code }) =>
   Effect.gen(function* () {
     const deviceName = yield* deviceNamePrompt;
@@ -129,17 +81,9 @@ const pairCommand = Command.make("pair", { code: Argument.String("code") }, ({ c
     yield* saveDeviceToken(yield* serverUrl, session.token);
     yield* Console.log("Paired");
   }).pipe(Effect.provide(publicConnection), reportFailures),
-).pipe(Command.withDescription("Sign in with a pairing code from another device"));
-
-const pairingCodeCommand = Command.make("pairing-code", {}, () =>
-  Effect.gen(function* () {
-    const connection = yield* ServerConnection;
-    const pairing = yield* connection.createPairingCode();
-    const now = yield* Clock.currentTimeMillis;
-    const minutes = Math.round((pairing.expiresAt - now) / 60_000);
-    yield* Console.log(`${pairing.code} (use it with \`dyad pair\` in ${minutes} minutes)`);
-  }).pipe(Effect.provide(deviceConnection), reportFailures),
-).pipe(Command.withDescription("Show a code that signs in another device"));
+).pipe(
+  Command.withDescription("Pair this device with a code from another device or the server log"),
+);
 
 const devicesCommand = Command.make("devices", {}, () =>
   Effect.gen(function* () {
@@ -149,7 +93,7 @@ const devicesCommand = Command.make("devices", {}, () =>
       yield* Console.log(`${device.id}  ${device.name}${device.current ? " (this device)" : ""}`);
     }
   }).pipe(Effect.provide(deviceConnection), reportFailures),
-).pipe(Command.withDescription("List the devices of your account"));
+).pipe(Command.withDescription("List the paired devices"));
 
 const removeDeviceCommand = Command.make(
   "remove-device",
@@ -178,10 +122,7 @@ const logoutCommand = Command.make("logout", {}, () =>
 ).pipe(Command.withDescription("Sign out this device"));
 
 export const authCommands = [
-  setupCommand,
-  loginCommand,
   pairCommand,
-  pairingCodeCommand,
   devicesCommand,
   removeDeviceCommand,
   logoutCommand,

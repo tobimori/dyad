@@ -6,15 +6,15 @@ import { changeSeq } from "./change-seq.ts";
 const fieldHlc = () => text("field_hlc", { mode: "json" }).$type<Record<string, string>>();
 
 /**
- * User data for later replication: deterministic IDs, an HLC, tombstones and no foreign keys. The
- * user's library is the rows that are not deleted, of any origin.
+ * Owner data for replication: deterministic IDs, an HLC, tombstones and no foreign keys. The
+ * library is the rows that are not deleted, of any origin.
  */
 export const libraryItem = sqliteTable(
   "library_item",
   {
-    // UUIDv5 of `library_item:<user_id>:<entity_type>:<entity_id>:<origin>`
+    // UUIDv5 of `library_item:<entity_type>:<entity_id>:<origin>`. Rows from before single user
+    // keep their old ID, so writers reuse the ID of an existing row.
     id: text("id").primaryKey(),
-    userId: text("user_id").notNull(),
     entityType: text("entity_type", { enum: ["recording", "release", "artist"] }).notNull(),
     // The bound recording of what the user saved, not the canonical recording. Views resolve
     // `coalesce(merged_into_id, entity_id)`, so that merges and splits follow what the user saved.
@@ -29,9 +29,8 @@ export const libraryItem = sqliteTable(
     changeSeq,
   },
   (table) => [
-    index("library_item_user_idx").on(table.userId, table.deleted),
+    index("library_item_origin_idx").on(table.origin, table.deleted),
     index("library_item_entity_idx").on(table.entityId),
-    index("library_item_change_idx").on(table.userId, table.changeSeq),
     index("library_item_seq_idx").on(table.changeSeq),
   ],
 );
@@ -39,9 +38,8 @@ export const libraryItem = sqliteTable(
 export const playlist = sqliteTable(
   "playlist",
   {
-    // UUIDv5 of `playlist:<owner_id>:<provider>:<remote_id>` for an imported playlist
+    // UUIDv5 of `playlist:<provider>:<remote_id>` for an imported playlist
     id: text("id").primaryKey(),
-    ownerId: text("owner_id").notNull(),
     name: text("name").notNull(),
     // `account:<provider>` for a playlist that the import added
     origin: text("origin"),
@@ -61,10 +59,7 @@ export const playlist = sqliteTable(
     deleted: integer("deleted", { mode: "boolean" }).notNull(),
     changeSeq,
   },
-  (table) => [
-    index("playlist_owner_idx").on(table.ownerId, table.deleted),
-    index("playlist_seq_idx").on(table.changeSeq),
-  ],
+  (table) => [index("playlist_seq_idx").on(table.changeSeq)],
 );
 
 export const playlistEntry = sqliteTable(
@@ -91,15 +86,14 @@ export const playlistEntry = sqliteTable(
 );
 
 /**
- * How the user orders the sources of a recording. LWW per row: each write sets all fields. Only
+ * How the owner orders the sources of a recording. LWW per row: each write sets all fields. Only
  * the `global` scope exists now.
  */
 export const sourcePreference = sqliteTable(
   "source_preference",
   {
-    // UUIDv5 of `source_preference:<user_id>:<scope>`
+    // UUIDv5 of `source_preference:<scope>`
     id: text("id").primaryKey(),
-    userId: text("user_id").notNull(),
     scope: text("scope", { enum: ["global"] }).notNull(),
     // Provider IDs, best first, with `local` for files. Providers that it leaves out come after.
     providerRanking: text("provider_ranking", { mode: "json" })
@@ -108,19 +102,15 @@ export const sourcePreference = sqliteTable(
     hlc: text("hlc").notNull(),
     changeSeq,
   },
-  (table) => [
-    index("source_preference_change_idx").on(table.userId, table.changeSeq),
-    index("source_preference_seq_idx").on(table.changeSeq),
-  ],
+  (table) => [index("source_preference_seq_idx").on(table.changeSeq)],
 );
 
-/** The user loves an entity. LWW per row: each write sets all fields. */
+/** The owner loves an entity. LWW per row: each write sets all fields. */
 export const rating = sqliteTable(
   "rating",
   {
-    // UUIDv5 of `rating:<user_id>:<entity_type>:<entity_id>`
+    // UUIDv5 of `rating:<entity_type>:<entity_id>`
     id: text("id").primaryKey(),
-    userId: text("user_id").notNull(),
     entityType: text("entity_type", { enum: ["recording", "release", "artist"] }).notNull(),
     // As in `library_item`
     entityId: text("entity_id").notNull(),
@@ -129,8 +119,7 @@ export const rating = sqliteTable(
     changeSeq,
   },
   (table) => [
-    index("rating_user_idx").on(table.userId, table.favorite),
-    index("rating_change_idx").on(table.userId, table.changeSeq),
+    index("rating_favorite_idx").on(table.favorite),
     index("rating_seq_idx").on(table.changeSeq),
   ],
 );

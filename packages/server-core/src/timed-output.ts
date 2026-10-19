@@ -1,5 +1,5 @@
 import { AudioFormat, OutputId, PlaybackCapabilities, positionAt } from "@dyad/domain";
-import type { EntryId, Playback, QueueEntry, UserId } from "@dyad/domain";
+import type { EntryId, Playback, QueueEntry } from "@dyad/domain";
 import { encodeFlac, remuxAudio } from "@dyad/media/node";
 import type { MediaStream } from "@dyad/media/node";
 import { Loudness } from "@dyad/player";
@@ -35,12 +35,11 @@ const renderCapabilities = new PlaybackCapabilities({
   ],
 });
 
-const renderInput = (userId: UserId, entry: QueueEntry) =>
+const renderInput = (entry: QueueEntry) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const { sourceId, playable, choice } = yield* choosePlayableCopy(
       entry.source.id,
-      userId,
       renderCapabilities,
     );
     const convert = (media: string | MediaStream) =>
@@ -98,7 +97,6 @@ const delayed = (output: TimedOutput, delayMs: number) =>
  * Outputs open when the session plays; an output that fails joins again at the next command.
  */
 export const driveTimedOutputs = (options: {
-  readonly userId: UserId;
   readonly desired: TimedDesired;
   readonly report: (report: OutputReport) => Effect.Effect<void>;
   /** Another session took the output. Not used with `open`. */
@@ -117,7 +115,7 @@ export const driveTimedOutputs = (options: {
     const services = yield* Effect.context<Effect.Services<ReturnType<typeof renderInput>>>();
     const desired = yield* SubscriptionRef.make(options.desired);
     const renderer = yield* openSessionRenderer((entry) =>
-      renderInput(options.userId, entry).pipe(Effect.provideContext(services)),
+      renderInput(entry).pipe(Effect.provideContext(services)),
     ).pipe(Scope.provide(scope));
 
     const members = new Map<OutputId, Member>();
@@ -152,10 +150,9 @@ export const driveTimedOutputs = (options: {
         const taken = options.taken ?? (() => Effect.void);
         const opening =
           options.open?.(id) ??
-          (receivers.has(options.userId, id)
-            ? receivers.open(options.userId, id)
+          (receivers.has(id)
+            ? receivers.open(id)
             : outputs.openTimed(id, {
-                userId: options.userId,
                 taken: closeMember(id).pipe(Effect.andThen(taken(id))),
               }));
         const exit = yield* Effect.andThen(options.after ?? Effect.void, opening).pipe(
@@ -315,9 +312,9 @@ export const driveTimedOutputs = (options: {
         write: (playAtUs, pcm) => {
           const { outputId } = SubscriptionRef.getUnsafe(desired).playback;
           const delayMs = outputId === null ? 0 : outputs.delayOf(outputId);
-          return receivers.feed(options.userId, playAtUs + delayMs * 1000, pcm);
+          return receivers.feed(playAtUs + delayMs * 1000, pcm);
         },
-        flush: receivers.flushListeners(options.userId),
+        flush: receivers.flushListeners,
         setVolume: () => Effect.void,
         setMedia: () => Effect.void,
         closed: Effect.never,

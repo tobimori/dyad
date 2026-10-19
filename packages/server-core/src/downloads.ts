@@ -12,7 +12,6 @@ import {
   DownloadQuality,
   DownloadUnavailable,
   PlaybackCapabilities,
-  UserId,
 } from "@dyad/domain";
 import { encodeAudio } from "@dyad/media/encode";
 import { remuxAudio } from "@dyad/media/node";
@@ -131,12 +130,11 @@ const chooseDownload = (
 // A search result enters the shared catalog here.
 const downloadSource = (
   sourceId: string,
-  userId: UserId,
   quality: typeof DownloadQuality.Type,
   capabilities: PlaybackCapabilities,
 ) =>
   Effect.gen(function* () {
-    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId, userId).pipe(
+    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId).pipe(
       Effect.catchTag("PlaybackUnavailable", (error) =>
         // Only a plan fails with `failed`, after it tried the copies
         Effect.fail(
@@ -167,7 +165,6 @@ class DownloadGrant extends Data.Class<{
   readonly sourceId: string;
   readonly quality: typeof DownloadQuality.Type;
   readonly format: AudioFormat;
-  readonly userId: UserId;
   readonly deviceId: DeviceId;
   readonly expiresAt: number;
 }> {}
@@ -178,7 +175,6 @@ const grantLines = (grant: DownloadGrant) => [
   grant.quality,
   grant.format.container,
   grant.format.codec,
-  grant.userId,
   grant.deviceId,
   grant.expiresAt,
 ];
@@ -191,12 +187,7 @@ export const prepareDownload = (
   Effect.gen(function* () {
     const db = yield* Database;
     const principal = yield* CurrentPrincipal;
-    const { audio, choice, leaseDays } = yield* downloadSource(
-      sourceId,
-      principal.userId,
-      quality,
-      capabilities,
-    );
+    const { audio, choice, leaseDays } = yield* downloadSource(sourceId, quality, capabilities);
 
     const now = yield* Clock.currentTimeMillis;
     const leaseExpiresAt = leaseDays === null ? null : now + leaseDays * dayMs;
@@ -212,7 +203,6 @@ export const prepareDownload = (
       sourceId,
       quality,
       format: choice.format,
-      userId: principal.userId,
       deviceId: principal.deviceId,
       expiresAt: now + urlLifetimeMs,
     });
@@ -220,7 +210,6 @@ export const prepareDownload = (
       quality,
       container: grant.format.container,
       codec: grant.format.codec,
-      user: grant.userId,
       device: grant.deviceId,
       expires: String(grant.expiresAt),
       signature: yield* signGrant(grantLines(grant)),
@@ -254,7 +243,7 @@ export const checkInDownloads = (sourceIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const principal = yield* CurrentPrincipal;
-    const usable = yield* usableProviders(principal.userId);
+    const usable = yield* usableProviders;
     const now = yield* Clock.currentTimeMillis;
 
     const records = yield* db
@@ -285,18 +274,15 @@ export const checkInDownloads = (sourceIds: ReadonlyArray<string>) =>
     );
   });
 
-/** The devices of the user drop the files of `provider` at their next check-in */
-export const forgetDownloads = (userId: string, provider: string) =>
+/** The devices drop the files of `provider` at their next check-in */
+export const forgetDownloads = (provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     yield* db
       .delete(deviceDownload)
       .where(
         and(
-          inArray(
-            deviceDownload.deviceId,
-            db.select({ id: device.id }).from(device).where(eq(device.userId, userId)),
-          ),
+          inArray(deviceDownload.deviceId, db.select({ id: device.id }).from(device)),
           inArray(
             deviceDownload.sourceId,
             db.select({ id: source.id }).from(source).where(eq(source.provider, provider)),
@@ -317,7 +303,6 @@ const DownloadRequest = Schema.Struct({
   quality: DownloadQuality,
   container: AudioContainer,
   codec: AudioCodec,
-  user: UserId,
   device: DeviceId,
   expires: Schema.FiniteFromString,
   signature: Schema.String,
@@ -332,13 +317,12 @@ export const downloadRoute = HttpRouter.add(
       sourceId: request.sourceId,
       quality: request.quality,
       format: new AudioFormat({ container: request.container, codec: request.codec }),
-      userId: request.user,
       deviceId: request.device,
       expiresAt: request.expires,
     });
     if (
       !(yield* verifyGrant(grantLines(grant), grant.expiresAt, request.signature)) ||
-      !(yield* hasDevice(grant.userId, grant.deviceId))
+      !(yield* hasDevice(grant.deviceId))
     ) {
       return HttpServerResponse.empty({ status: 403 });
     }
@@ -346,7 +330,6 @@ export const downloadRoute = HttpRouter.add(
     // The URL is stateless, so the choice repeats against the current source and policy
     const { playable, choice } = yield* downloadSource(
       grant.sourceId,
-      grant.userId,
       grant.quality,
       new PlaybackCapabilities({ formats: [grant.format] }),
     );

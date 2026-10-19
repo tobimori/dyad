@@ -1,7 +1,6 @@
 import { outputSetting } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import { Output, OutputId } from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
 import {
   OutputError,
   TimedOutput,
@@ -25,7 +24,6 @@ class Found extends Data.Class<{
 }> {}
 
 class Holder extends Data.Class<{
-  readonly userId: UserId;
   /** Runs when another session opens the output */
   readonly taken: Effect.Effect<void>;
   readonly released: Deferred.Deferred<void>;
@@ -152,10 +150,7 @@ const makeOutputs = Effect.gen(function* () {
 
   // The last holder wins. The earlier holder closes without a stop, so that its last commands come
   // before ours.
-  const hold = (
-    id: OutputId,
-    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
-  ) =>
+  const hold = (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) =>
     Effect.gen(function* () {
       const { registration, nativeId } = locate(id);
       const outputs = registrations.get(registration);
@@ -184,11 +179,8 @@ const makeOutputs = Effect.gen(function* () {
 
   const kindError = new OutputError({ reason: "The output is of another kind" });
 
-  /** Opens the URL output for the session of `userId` until the scope closes */
-  const open = (
-    id: OutputId,
-    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
-  ) =>
+  /** Opens the URL output for a session until the scope closes */
+  const open = (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) =>
     Effect.gen(function* () {
       const { outputs, nativeId } = yield* hold(id, holder);
       if (!(outputs instanceof UrlOutputs)) return yield* kindError;
@@ -212,12 +204,12 @@ const makeOutputs = Effect.gen(function* () {
 
   /**
    * Makes the URL output play what `coordinator` plays, until the scope closes. The output belongs
-   * to the session of `userId` like after `open`.
+   * to the session like after `open`.
    */
   const join = (
     id: OutputId,
     coordinator: OutputId,
-    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
+    holder: { readonly taken: Effect.Effect<void> },
   ) =>
     Effect.gen(function* () {
       const { outputs, nativeId } = yield* hold(id, holder);
@@ -234,10 +226,7 @@ const makeOutputs = Effect.gen(function* () {
    * Opens the timed output, or the timed twin of a URL output, like `open`. A timed device reports
    * no volume, so the volume that the core set last applies again.
    */
-  const openTimed = (
-    id: OutputId,
-    holder: { readonly userId: UserId; readonly taken: Effect.Effect<void> },
-  ) =>
+  const openTimed = (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) =>
     Effect.gen(function* () {
       const target = isTimed(id) ? id : twinOf(id);
       if (target === undefined) return yield* kindError;
@@ -306,14 +295,14 @@ const makeOutputs = Effect.gen(function* () {
     setDelay,
     addLiveStream,
     liveStream: (id: string) => liveStreams.get(id),
-    /** The user whose session holds the output */
-    heldBy: (id: OutputId) => holders.get(id)?.userId,
+    /** Whether a session holds the output */
+    isHeld: (id: OutputId) => holders.has(id),
     /** Emits after each change of `list` */
     changes: Stream.fromPubSub(changed),
   };
 });
 
-/** The outputs that plugins add, for the sessions of all users */
+/** The outputs that plugins add */
 export class Outputs extends Context.Service<Outputs, Effect.Success<typeof makeOutputs>>()(
   "@dyad/server-core/Outputs",
 ) {}

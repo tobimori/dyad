@@ -4,8 +4,6 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 
 export const libraryRoot = sqliteTable("library_root", {
   id: text("id").primaryKey(),
-  // Imports go to this user's library. Null: the files are only in the catalog.
-  ownerId: text("owner_id"),
   path: text("path").notNull().unique(),
   createdAt: integer("created_at").notNull(),
 });

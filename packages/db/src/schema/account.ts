@@ -1,17 +1,13 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import { user } from "./auth.ts";
 import { changeSeq } from "./change-seq.ts";
 
-// A user links at most one account per provider. Replicated, so that every replica knows the linked
+// At most one account per provider. Replicated, so that every replica knows the linked
 // providers; only the replica that linked it has the credential. Each write sets all fields.
 export const providerAccount = sqliteTable(
   "provider_account",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     displayName: text("display_name").notNull(),
     createdAt: integer("created_at").notNull(),
@@ -20,7 +16,7 @@ export const providerAccount = sqliteTable(
     changeSeq,
   },
   (table) => [
-    uniqueIndex("provider_account_user_idx").on(table.userId, table.provider),
+    uniqueIndex("provider_account_provider_idx").on(table.provider),
     index("provider_account_seq_idx").on(table.changeSeq),
   ],
 );

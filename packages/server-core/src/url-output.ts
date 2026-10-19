@@ -1,7 +1,7 @@
 import { orDieOnDatabaseError } from "@dyad/db/node";
 import { PlaybackCapabilities, positionAt } from "@dyad/domain";
 import { Playback } from "@dyad/domain";
-import type { EntryId, OutputId, QueueEntry, UserId } from "@dyad/domain";
+import type { EntryId, OutputId, QueueEntry } from "@dyad/domain";
 import { OutputError, UrlMedia } from "@dyad/plugin";
 import type { UrlOutput, UrlStatus } from "@dyad/plugin";
 import {
@@ -90,7 +90,6 @@ class Live extends Data.Class<{
  * When the output fails, it opens it again.
  */
 export const driveUrlOutput = (options: {
-  readonly userId: UserId;
   readonly outputId: OutputId;
   readonly desired: UrlDesired;
   readonly report: (report: OutputReport) => Effect.Effect<void>;
@@ -122,7 +121,6 @@ export const driveUrlOutput = (options: {
       yield* options.after;
       const runScope = yield* Effect.scope;
       const output = yield* outputs.open(options.outputId, {
-        userId: options.userId,
         taken: options.taken,
       });
       yield* Effect.addFinalizer(() =>
@@ -165,7 +163,6 @@ export const driveUrlOutput = (options: {
         Effect.gen(function* () {
           const plan = yield* streamPlan(
             entry.source.id,
-            options.userId,
             options.outputId,
             new PlaybackCapabilities({ formats: output.formats }),
           ).pipe(
@@ -234,7 +231,6 @@ export const driveUrlOutput = (options: {
               const memberScope = yield* Scope.fork(runScope);
               const exit = yield* outputs
                 .join(id, options.outputId, {
-                  userId: options.userId,
                   taken: options.memberTaken(id),
                 })
                 .pipe(Scope.provide(memberScope), Effect.exit);
@@ -276,7 +272,6 @@ export const driveUrlOutput = (options: {
           local.expected = Option.none();
           const liveScope = yield* Scope.fork(runScope);
           const driver = yield* driveTimedOutputs({
-            userId: options.userId,
             desired: timedDesired(new UrlDesired({ ...current, playback: stopped })),
             report: options.report,
             open: () =>

@@ -3,11 +3,10 @@ import { Database } from "@dyad/db/node";
 import {
   AccountLinkFailed,
   AccountProviderSummary,
-  CurrentPrincipal,
   ProviderAccountSummary,
   TokenLogin,
 } from "@dyad/domain";
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { HlcClock, uuidV5, wallTimeOf } from "@dyad/sync";
 import { Effect, Schema } from "effect";
 
@@ -39,11 +38,7 @@ export const listAccountProviders = Effect.gen(function* () {
 
 export const listAccounts = Effect.gen(function* () {
   const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
-  const rows = yield* db
-    .select()
-    .from(providerAccount)
-    .where(and(eq(providerAccount.userId, principal.userId), eq(providerAccount.deleted, false)));
+  const rows = yield* db.select().from(providerAccount).where(eq(providerAccount.deleted, false));
 
   return rows.map(
     (row) => new ProviderAccountSummary({ provider: row.provider, displayName: row.displayName }),
@@ -54,7 +49,6 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
   Effect.gen(function* () {
     const db = yield* Database;
     const clock = yield* HlcClock;
-    const principal = yield* CurrentPrincipal;
 
     const account = yield* accountOf(provider);
     if (account === undefined) {
@@ -82,7 +76,8 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
     const displayName = yield* account.link(toCredentials(stored));
 
     // The same ID on every replica, so that two links of one provider are one row
-    const newId = yield* uuidV5(`provider_account:${principal.userId}:${provider}`);
+    // A row from before single user keeps its ID; the upsert finds it by provider
+    const newId = yield* uuidV5(`provider_account:${provider}`);
     const hlc = yield* clock.next;
     yield* db.transaction(() =>
       Effect.gen(function* () {
@@ -90,9 +85,9 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
         const row = { displayName, createdAt: wallTimeOf(hlc), deleted: false, hlc, changeSeq };
         const [linked] = yield* db
           .insert(providerAccount)
-          .values({ id: newId, userId: principal.userId, provider, ...row })
+          .values({ id: newId, provider, ...row })
           .onConflictDoUpdate({
-            target: [providerAccount.userId, providerAccount.provider],
+            target: providerAccount.provider,
             set: row,
           })
           .returning({ id: providerAccount.id });
@@ -103,8 +98,8 @@ export const linkAccount = (provider: string, values: Readonly<Record<string, st
           .onConflictDoUpdate({ target: credential.providerAccountId, set: { values: stored } });
       }),
     );
-    yield* queueLibrarySync(principal.userId, provider);
-    yield* queueScrobbles(principal.userId, provider);
+    yield* queueLibrarySync(provider);
+    yield* queueScrobbles(provider);
 
     return new ProviderAccountSummary({ provider, displayName });
   });
@@ -113,26 +108,20 @@ export const unlinkAccount = (provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const clock = yield* HlcClock;
-    const principal = yield* CurrentPrincipal;
     const hlc = yield* clock.next;
     yield* db.transaction(() =>
       Effect.gen(function* () {
         const [account] = yield* db
           .update(providerAccount)
           .set({ deleted: true, hlc, changeSeq: yield* nextChangeSeq })
-          .where(
-            and(
-              eq(providerAccount.userId, principal.userId),
-              eq(providerAccount.provider, provider),
-            ),
-          )
+          .where(eq(providerAccount.provider, provider))
           .returning({ id: providerAccount.id });
         if (account !== undefined) {
           yield* db.delete(credential).where(eq(credential.providerAccountId, account.id));
         }
-        yield* forgetLibrary(principal.userId, provider);
-        yield* forgetDownloads(principal.userId, provider);
-        yield* forgetRecommendations(principal.userId, provider);
+        yield* forgetLibrary(provider);
+        yield* forgetDownloads(provider);
+        yield* forgetRecommendations(provider);
       }),
     );
 

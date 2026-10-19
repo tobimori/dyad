@@ -11,14 +11,7 @@ import {
   source,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import {
-  CurrentPrincipal,
-  LibrarySyncStatus,
-  PlaylistLink,
-  PlaylistLinkState,
-  UserId,
-  accountOrigin,
-} from "@dyad/domain";
+import { LibrarySyncStatus, PlaylistLink, PlaylistLinkState, accountOrigin } from "@dyad/domain";
 import type { PlaylistRow } from "@dyad/domain";
 import { LibraryError, ProviderPlaylists } from "@dyad/plugin";
 import type {
@@ -56,9 +49,7 @@ const fullReadIntervalMs = 24 * 60 * 60 * 1000;
 const throttleBaseSeconds = 15 * 60;
 const throttleLimitSeconds = 6 * 60 * 60;
 
-const SyncPayload = Schema.Struct({ userId: UserId, provider: Schema.String });
-
-const jobKey = (userId: string, provider: string) => `${userId}:${provider}`;
+const SyncPayload = Schema.Struct({ provider: Schema.String });
 
 // A new link queues its own run
 class AccountChanged extends Data.TaggedError("AccountChanged")<{}> {}
@@ -67,26 +58,24 @@ class LinkedAccount extends Data.Class<{
   readonly id: string;
   // Changes with each link, so that a read can tell a new link of the same provider
   readonly hlc: string;
-  readonly userId: string;
   readonly provider: string;
   readonly credentials: Credentials;
 }> {}
 
-const loadAccount = (userId: string, provider: string) =>
+const loadAccount = (provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const [row] = yield* db
       .select({ id: providerAccount.id, hlc: providerAccount.hlc, values: credential.values })
       .from(providerAccount)
       .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id))
-      .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, provider)));
+      .where(eq(providerAccount.provider, provider));
     if (row === undefined) return Option.none();
 
     return Option.some(
       new LinkedAccount({
         id: row.id,
         hlc: row.hlc,
-        userId,
         provider,
         credentials: toCredentials(row.values),
       }),
@@ -104,12 +93,7 @@ const writeIfLinked = <A, E, R>(account: LinkedAccount, write: Effect.Effect<A, 
         const [current] = yield* db
           .select({ hlc: providerAccount.hlc })
           .from(providerAccount)
-          .where(
-            and(
-              eq(providerAccount.userId, account.userId),
-              eq(providerAccount.provider, account.provider),
-            ),
-          );
+          .where(eq(providerAccount.provider, account.provider));
         if (current?.hlc !== account.hlc) return yield* new AccountChanged();
 
         return yield* write;
@@ -119,15 +103,15 @@ const writeIfLinked = <A, E, R>(account: LinkedAccount, write: Effect.Effect<A, 
 
 const writeState = (
   account: LinkedAccount,
-  values: Omit<typeof librarySyncState.$inferInsert, "userId" | "provider">,
+  values: Omit<typeof librarySyncState.$inferInsert, "provider">,
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
     yield* db
       .insert(librarySyncState)
-      .values({ userId: account.userId, provider: account.provider, ...values })
+      .values({ provider: account.provider, ...values })
       .onConflictDoUpdate({
-        target: [librarySyncState.userId, librarySyncState.provider],
+        target: librarySyncState.provider,
         set: values,
       });
   });
@@ -135,19 +119,15 @@ const writeState = (
 const writeRemotePlaylist = (
   account: LinkedAccount,
   remoteId: string,
-  values: Omit<typeof libraryRemotePlaylist.$inferInsert, "userId" | "provider" | "remoteId">,
+  values: Omit<typeof libraryRemotePlaylist.$inferInsert, "provider" | "remoteId">,
 ) =>
   Effect.gen(function* () {
     const db = yield* Database;
     yield* db
       .insert(libraryRemotePlaylist)
-      .values({ userId: account.userId, provider: account.provider, remoteId, ...values })
+      .values({ provider: account.provider, remoteId, ...values })
       .onConflictDoUpdate({
-        target: [
-          libraryRemotePlaylist.userId,
-          libraryRemotePlaylist.provider,
-          libraryRemotePlaylist.remoteId,
-        ],
+        target: [libraryRemotePlaylist.provider, libraryRemotePlaylist.remoteId],
         set: values,
       });
   });
@@ -165,12 +145,7 @@ const writeSongs = (
       (yield* db
         .select()
         .from(libraryRemoteTrack)
-        .where(
-          and(
-            eq(libraryRemoteTrack.userId, account.userId),
-            eq(libraryRemoteTrack.provider, provider),
-          ),
-        )).map((row) => [row.recordingId, row]),
+        .where(eq(libraryRemoteTrack.provider, provider))).map((row) => [row.recordingId, row]),
     );
     const clock = yield* HlcClock;
     const changed: Array<string> = [];
@@ -191,7 +166,6 @@ const writeSongs = (
         }
 
         const row = {
-          userId: account.userId,
           provider,
           recordingId,
           remoteId: song.remoteId,
@@ -224,17 +198,13 @@ const writeSongs = (
         yield* db
           .insert(libraryRemoteTrack)
           .values({
-            id: `${account.userId}:${provider}:${recordingId}`,
+            id: `${provider}:${recordingId}`,
             ...row,
             seenAt: songsReadAt ?? 0,
             ...version,
           })
           .onConflictDoUpdate({
-            target: [
-              libraryRemoteTrack.userId,
-              libraryRemoteTrack.provider,
-              libraryRemoteTrack.recordingId,
-            ],
+            target: [libraryRemoteTrack.provider, libraryRemoteTrack.recordingId],
             set: { ...row, ...seen, ...version },
           });
         return recordingId;
@@ -256,12 +226,7 @@ const songsOfLastRead = (account: LinkedAccount) =>
     const [state] = yield* db
       .select({ lastFullReadAt: librarySyncState.lastFullReadAt })
       .from(librarySyncState)
-      .where(
-        and(
-          eq(librarySyncState.userId, account.userId),
-          eq(librarySyncState.provider, account.provider),
-        ),
-      );
+      .where(eq(librarySyncState.provider, account.provider));
     if (state?.lastFullReadAt == null) return new Set<string>();
 
     const rows = yield* db
@@ -269,7 +234,6 @@ const songsOfLastRead = (account: LinkedAccount) =>
       .from(libraryRemoteTrack)
       .where(
         and(
-          eq(libraryRemoteTrack.userId, account.userId),
           eq(libraryRemoteTrack.provider, account.provider),
           eq(libraryRemoteTrack.seenAt, state.lastFullReadAt),
           eq(libraryRemoteTrack.deleted, false),
@@ -309,7 +273,6 @@ const importSongs = (account: LinkedAccount, library: ProviderLibrary, before: L
         const lastRead = yield* songsOfLastRead(account);
         const recordingIds = yield* writeSongs(account, snapshot.items, now);
         const changes = yield* setMembership(
-          account.userId,
           accountOrigin(account.provider),
           new Set(recordingIds),
           complete,
@@ -337,7 +300,6 @@ const importSongs = (account: LinkedAccount, library: ProviderLibrary, before: L
 
 const remotePlaylistOf = (account: LinkedAccount, remoteId: string) =>
   and(
-    eq(libraryRemotePlaylist.userId, account.userId),
     eq(libraryRemotePlaylist.provider, account.provider),
     eq(libraryRemotePlaylist.remoteId, remoteId),
   );
@@ -411,19 +373,16 @@ const pullPlaylist = (
 const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const userId = UserId.make(account.userId);
     const list = yield* library.playlists(account.credentials);
 
     const known = new Map(
       (yield* db
         .select()
         .from(libraryRemotePlaylist)
-        .where(
-          and(
-            eq(libraryRemotePlaylist.userId, account.userId),
-            eq(libraryRemotePlaylist.provider, account.provider),
-          ),
-        )).map((row) => [row.remoteId, row]),
+        .where(eq(libraryRemotePlaylist.provider, account.provider))).map((row) => [
+        row.remoteId,
+        row,
+      ]),
     );
 
     yield* Effect.forEach(
@@ -432,8 +391,7 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
         Effect.gen(function* () {
           const state = known.get(remote.remoteId);
           const playlistId =
-            state?.playlistId ??
-            (yield* uuidV5(`playlist:${account.userId}:${account.provider}:${remote.remoteId}`));
+            state?.playlistId ?? (yield* uuidV5(`playlist:${account.provider}:${remote.remoteId}`));
           const now = yield* Clock.currentTimeMillis;
           const link = new PlaylistLink({
             provider: account.provider,
@@ -449,7 +407,6 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
               const row = yield* readRow("playlist", playlistId);
               if (row === undefined) {
                 yield* addLinkedPlaylist(
-                  userId,
                   playlistId,
                   remote.name,
                   accountOrigin(account.provider),
@@ -512,16 +469,11 @@ const importPlaylists = (account: LinkedAccount, library: ProviderLibrary) =>
       account,
       Effect.gen(function* () {
         const remoteIds = list.items.map((remote) => remote.remoteId);
-        const unlinked = yield* unlinkPlaylists(
-          account.userId,
-          account.provider,
-          new Set(remoteIds),
-        );
+        const unlinked = yield* unlinkPlaylists(account.provider, new Set(remoteIds));
         yield* db
           .delete(libraryRemotePlaylist)
           .where(
             and(
-              eq(libraryRemotePlaylist.userId, account.userId),
               eq(libraryRemotePlaylist.provider, account.provider),
               notInArray(libraryRemotePlaylist.remoteId, remoteIds),
             ),
@@ -689,7 +641,7 @@ const runPlaylistPush = (payload: typeof PlaylistPushPayload.Type) =>
     const setError = (error: string) =>
       patchPlaylist(row.id, { linkState: new PlaylistLinkState({ differs: true, error }) });
 
-    const account = yield* loadAccount(row.ownerId, providerId);
+    const account = yield* loadAccount(providerId);
     if (Option.isNone(account)) {
       yield* setError(`Link the ${provider.name} account to send the changes`);
       return;
@@ -728,12 +680,7 @@ const importLibrary = (account: LinkedAccount, library: ProviderLibrary) =>
     const [state] = yield* db
       .select()
       .from(librarySyncState)
-      .where(
-        and(
-          eq(librarySyncState.userId, account.userId),
-          eq(librarySyncState.provider, account.provider),
-        ),
-      );
+      .where(eq(librarySyncState.provider, account.provider));
 
     const probe = yield* library.probe(account.credentials);
     const lastFullReadAt = state?.lastFullReadAt ?? null;
@@ -752,8 +699,8 @@ const importLibrary = (account: LinkedAccount, library: ProviderLibrary) =>
         yield* writeState(account, { status: "ok", error: null, throttleCount: 0 });
         yield* jobs.enqueue(
           jobKind,
-          jobKey(account.userId, account.provider),
-          { userId: account.userId, provider: account.provider },
+          account.provider,
+          { provider: account.provider },
           { runAt: finishedAt + runIntervalMs },
         );
       }),
@@ -783,12 +730,7 @@ const recordFailure = (account: LinkedAccount, error: LibraryError) =>
     const [state] = yield* db
       .select({ throttleCount: librarySyncState.throttleCount })
       .from(librarySyncState)
-      .where(
-        and(
-          eq(librarySyncState.userId, account.userId),
-          eq(librarySyncState.provider, account.provider),
-        ),
-      );
+      .where(eq(librarySyncState.provider, account.provider));
     const throttleCount = (state?.throttleCount ?? 0) + 1;
     yield* writeIfLinked(
       account,
@@ -808,7 +750,7 @@ const runLibrarySync = (payload: typeof SyncPayload.Type) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
 
-    const account = yield* loadAccount(payload.userId, payload.provider);
+    const account = yield* loadAccount(payload.provider);
     if (Option.isNone(account)) return;
 
     const library = providers.get(payload.provider)?.library;
@@ -824,69 +766,54 @@ const runLibrarySync = (payload: typeof SyncPayload.Type) =>
     );
   }).pipe(Effect.catchTag("AccountChanged", () => Effect.void));
 
-export const queueLibrarySync = (userId: string, provider: string) =>
+export const queueLibrarySync = (provider: string) =>
   Effect.gen(function* () {
     const jobs = yield* Jobs;
     const providers = yield* Providers;
     if (providers.get(provider)?.library === undefined) return;
 
-    yield* jobs.enqueue(jobKind, jobKey(userId, provider), { userId, provider });
+    yield* jobs.enqueue(jobKind, provider, { provider });
   });
 
 /**
  * Removes the imported library, its state and its job, and unlinks the playlists, which stay. Run
  * it in the unlink transaction.
  */
-export const forgetLibrary = (userId: string, provider: string) =>
+export const forgetLibrary = (provider: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const jobs = yield* Jobs;
 
-    yield* setMembership(userId, accountOrigin(provider), new Set(), true);
-    yield* unlinkPlaylists(userId, provider, new Set());
-    yield* db
-      .delete(librarySyncState)
-      .where(and(eq(librarySyncState.userId, userId), eq(librarySyncState.provider, provider)));
+    yield* setMembership(accountOrigin(provider), new Set(), true);
+    yield* unlinkPlaylists(provider, new Set());
+    yield* db.delete(librarySyncState).where(eq(librarySyncState.provider, provider));
     const clock = yield* HlcClock;
     const removed = yield* db
       .update(libraryRemoteTrack)
       .set({ deleted: true, hlc: yield* clock.next, changeSeq: yield* nextChangeSeq })
-      .where(
-        and(
-          eq(libraryRemoteTrack.userId, userId),
-          eq(libraryRemoteTrack.provider, provider),
-          eq(libraryRemoteTrack.deleted, false),
-        ),
-      )
+      .where(and(eq(libraryRemoteTrack.provider, provider), eq(libraryRemoteTrack.deleted, false)))
       .returning({ recordingId: libraryRemoteTrack.recordingId });
     yield* touchGroups(removed.map((row) => row.recordingId));
-    yield* db
-      .delete(libraryRemotePlaylist)
-      .where(
-        and(eq(libraryRemotePlaylist.userId, userId), eq(libraryRemotePlaylist.provider, provider)),
-      );
-    yield* jobs.cancel(jobKind, jobKey(userId, provider));
+    yield* db.delete(libraryRemotePlaylist).where(eq(libraryRemotePlaylist.provider, provider));
+    yield* jobs.cancel(jobKind, provider);
   });
 
 export const syncLibrary = (provider: string) =>
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    const account = yield* loadAccount(principal.userId, provider);
+    const account = yield* loadAccount(provider);
     if (Option.isNone(account)) return;
 
-    yield* queueLibrarySync(principal.userId, provider);
+    yield* queueLibrarySync(provider);
   });
 
 export const getLibrarySyncStatus = Effect.gen(function* () {
   const db = yield* Database;
   const providers = yield* Providers;
-  const principal = yield* CurrentPrincipal;
-  const userId = principal.userId;
 
   const accounts = yield* db
     .select({ provider: providerAccount.provider })
     .from(providerAccount)
-    .where(and(eq(providerAccount.userId, userId), eq(providerAccount.deleted, false)));
+    .where(eq(providerAccount.deleted, false));
   const linked = accounts.filter(({ provider }) => providers.get(provider)?.library !== undefined);
 
   return yield* Effect.forEach(linked, ({ provider }) =>
@@ -894,14 +821,13 @@ export const getLibrarySyncStatus = Effect.gen(function* () {
       const [state] = yield* db
         .select()
         .from(librarySyncState)
-        .where(and(eq(librarySyncState.userId, userId), eq(librarySyncState.provider, provider)));
+        .where(eq(librarySyncState.provider, provider));
       const [run] = yield* db
         .select({ nextRunAt: job.nextRunAt, startedAt: job.startedAt })
         .from(job)
-        .where(and(eq(job.kind, jobKind), eq(job.key, jobKey(userId, provider))));
+        .where(and(eq(job.kind, jobKind), eq(job.key, provider)));
 
       const liveItems = and(
-        eq(libraryItem.userId, userId),
         eq(libraryItem.origin, accountOrigin(provider)),
         eq(libraryItem.deleted, false),
       );
@@ -912,7 +838,6 @@ export const getLibrarySyncStatus = Effect.gen(function* () {
         .innerJoin(
           libraryRemoteTrack,
           and(
-            eq(libraryRemoteTrack.userId, libraryItem.userId),
             eq(libraryRemoteTrack.provider, provider),
             eq(libraryRemoteTrack.recordingId, libraryItem.entityId),
           ),
@@ -945,14 +870,12 @@ export const librarySyncLayer = Layer.effectDiscard(
     yield* jobs.register(playlistPushKind, PlaylistPushPayload, runPlaylistPush);
 
     const accounts = yield* db
-      .select({ userId: providerAccount.userId, provider: providerAccount.provider })
+      .select({ provider: providerAccount.provider })
       .from(providerAccount)
       // Only the replica with the credential reads the library
       .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id));
-    yield* Effect.forEach(
-      accounts,
-      (account) => queueLibrarySync(account.userId, account.provider),
-      { discard: true },
-    );
+    yield* Effect.forEach(accounts, (account) => queueLibrarySync(account.provider), {
+      discard: true,
+    });
   }).pipe(Effect.orDie),
 );

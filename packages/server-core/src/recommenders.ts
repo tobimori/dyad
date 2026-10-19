@@ -57,15 +57,15 @@ export const accountOf = (id: string) =>
     return providers.get(id)?.account ?? recommenders.get(id)?.account;
   });
 
-/** The user's linked account of the recommender, with the time of the link */
-export const recommenderAccount = (userId: string, id: string) =>
+/** The linked account of the recommender, with the time of the link */
+export const recommenderAccount = (id: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const [row] = yield* db
       .select({ createdAt: providerAccount.createdAt, values: credential.values })
       .from(providerAccount)
       .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id))
-      .where(and(eq(providerAccount.userId, userId), eq(providerAccount.provider, id)));
+      .where(eq(providerAccount.provider, id));
     return Option.fromNullishOr(row).pipe(
       Option.map((found) => ({
         linkedAt: found.createdAt,
@@ -75,8 +75,7 @@ export const recommenderAccount = (userId: string, id: string) =>
   });
 
 const scrobbleKind = "recommender.scrobble";
-const scrobbleKey = (userId: string, id: string) => `${userId}:${id}`;
-const ScrobblePayload = Schema.Struct({ userId: Schema.String, recommender: Schema.String });
+const ScrobblePayload = Schema.Struct({ recommender: Schema.String });
 
 const scrobbleIntervalMs = 5 * 60 * 1000;
 const scrobbleBatch = 100;
@@ -87,7 +86,7 @@ const bound = alias(recording, "bound");
 const canonical = alias(recording, "canonical");
 
 // Plays from before the link stay unsent. A DJ set would show as one long song.
-const waitingPlays = (userId: string, linkedAt: number) =>
+const waitingPlays = (linkedAt: number) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const title = sql<string>`coalesce(${canonical.title}, ${source.rawTitle})`;
@@ -107,7 +106,6 @@ const waitingPlays = (userId: string, linkedAt: number) =>
       .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
       .where(
         and(
-          eq(playEvent.userId, userId),
           eq(playEvent.scrobbled, false),
           gte(playEvent.startedAt, linkedAt),
           sql`${playEvent.playedMs} >= min(${listenMs}, coalesce(${source.rawDurationMs}, ${2 * listenMs}) / 2)`,
@@ -130,11 +128,11 @@ const runScrobble = (payload: typeof ScrobblePayload.Type) =>
     const db = yield* Database;
     const jobs = yield* Jobs;
     const recommender = (yield* Recommenders).get(payload.recommender);
-    const account = yield* recommenderAccount(payload.userId, payload.recommender);
+    const account = yield* recommenderAccount(payload.recommender);
     // Without a next run the job ends, until a new link queues it again
     if (recommender?.scrobble === undefined || Option.isNone(account)) return;
 
-    const plays = yield* waitingPlays(payload.userId, account.value.linkedAt);
+    const plays = yield* waitingPlays(account.value.linkedAt);
     if (plays.length > 0) {
       const sent = yield* recommender
         .scrobble(
@@ -177,32 +175,32 @@ const runScrobble = (payload: typeof ScrobblePayload.Type) =>
 
     const now = yield* Clock.currentTimeMillis;
     const runAt = plays.length === scrobbleBatch ? now : now + scrobbleIntervalMs;
-    yield* jobs.enqueue(scrobbleKind, scrobbleKey(payload.userId, payload.recommender), payload, {
+    yield* jobs.enqueue(scrobbleKind, payload.recommender, payload, {
       runAt,
     });
   });
 
 /** Starts the scrobbles of a linked account, if its recommender sends plays */
-export const queueScrobbles = (userId: string, id: string) =>
+export const queueScrobbles = (id: string) =>
   Effect.gen(function* () {
     const jobs = yield* Jobs;
     if ((yield* Recommenders).get(id)?.scrobble === undefined) return;
-    yield* jobs.enqueue(scrobbleKind, scrobbleKey(userId, id), { userId, recommender: id });
+    yield* jobs.enqueue(scrobbleKind, id, { recommender: id });
   });
 
 /** Stops the scrobbles and deletes the cached shelves. Run it in the unlink transaction. */
-export const forgetRecommendations = (userId: string, id: string) =>
+export const forgetRecommendations = (id: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const jobs = yield* Jobs;
-    yield* jobs.cancel(scrobbleKind, scrobbleKey(userId, id));
+    yield* jobs.cancel(scrobbleKind, id);
     yield* db
       .delete(providerPage)
       .where(
         and(
           eq(providerPage.provider, id),
           eq(providerPage.kind, "personal"),
-          eq(providerPage.externalId, userId),
+          eq(providerPage.externalId, ""),
         ),
       );
   });
@@ -216,11 +214,11 @@ export const recommendationsLayer = Layer.effectDiscard(
     yield* jobs.register(scrobbleKind, ScrobblePayload, runScrobble);
 
     const accounts = yield* db
-      .select({ userId: providerAccount.userId, provider: providerAccount.provider })
+      .select({ provider: providerAccount.provider })
       .from(providerAccount)
       // Only the replica with the credential scrobbles
       .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id));
-    yield* Effect.forEach(accounts, (account) => queueScrobbles(account.userId, account.provider), {
+    yield* Effect.forEach(accounts, (account) => queueScrobbles(account.provider), {
       discard: true,
     });
   }).pipe(Effect.orDie),

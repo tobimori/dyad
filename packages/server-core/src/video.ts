@@ -1,6 +1,6 @@
 import { source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
-import { CurrentPrincipal, DeviceId, PlaybackUnavailable, UserId, VideoPlan } from "@dyad/domain";
+import { CurrentPrincipal, DeviceId, PlaybackUnavailable, VideoPlan } from "@dyad/domain";
 import { eq } from "drizzle-orm";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
@@ -14,7 +14,6 @@ const videoLifetimeMs = 6 * 60 * 60 * 1000;
 
 class VideoGrant extends Data.Class<{
   readonly sourceId: string;
-  readonly userId: UserId;
   readonly deviceId: DeviceId;
   readonly expiresAt: number;
 }> {}
@@ -22,13 +21,12 @@ class VideoGrant extends Data.Class<{
 const grantLines = (grant: VideoGrant) => [
   "video",
   grant.sourceId,
-  grant.userId,
   grant.deviceId,
   grant.expiresAt,
 ];
 
 // A search result is not in the catalog yet, so it comes from the provider cache
-const findVideo = (sourceId: string, userId: UserId) =>
+const findVideo = (sourceId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const [row] = yield* db
@@ -46,7 +44,7 @@ const findVideo = (sourceId: string, userId: UserId) =>
       );
     if (item === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
 
-    const usable = (yield* usableProviders(userId)).get(item.provider);
+    const usable = (yield* usableProviders).get(item.provider);
     if (usable === undefined) {
       return yield* new PlaybackUnavailable({ reason: "account_required" });
     }
@@ -59,16 +57,14 @@ const findVideo = (sourceId: string, userId: UserId) =>
 export const prepareVideo = (sourceId: string, maxHeight: number) =>
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
-    yield* findVideo(sourceId, principal.userId);
+    yield* findVideo(sourceId);
 
     const grant = new VideoGrant({
       sourceId,
-      userId: principal.userId,
       deviceId: principal.deviceId,
       expiresAt: (yield* Clock.currentTimeMillis) + videoLifetimeMs,
     });
     const search = new URLSearchParams({
-      user: grant.userId,
       device: grant.deviceId,
       expires: String(grant.expiresAt),
       height: String(maxHeight),
@@ -79,7 +75,6 @@ export const prepareVideo = (sourceId: string, maxHeight: number) =>
 
 const VideoRequest = Schema.Struct({
   sourceId: Schema.String.check(Schema.isUUID()),
-  user: UserId,
   device: DeviceId,
   expires: Schema.FiniteFromString,
   signature: Schema.String,
@@ -101,18 +96,17 @@ export const videoRoute = HttpRouter.add(
     const request = yield* HttpRouter.schemaParams(VideoRequest);
     const grant = new VideoGrant({
       sourceId: request.sourceId,
-      userId: request.user,
       deviceId: request.device,
       expiresAt: request.expires,
     });
     if (
       !(yield* verifyGrant(grantLines(grant), grant.expiresAt, request.signature)) ||
-      !(yield* hasDevice(grant.userId, grant.deviceId))
+      !(yield* hasDevice(grant.deviceId))
     ) {
       return HttpServerResponse.empty({ status: 403 });
     }
 
-    const resolve = yield* findVideo(request.sourceId, grant.userId);
+    const resolve = yield* findVideo(request.sourceId);
     // The provider resolves before the response starts, so that a failure gives an error status
     const video = yield* resolve(request.height);
     const startMs = request.start ?? 0;

@@ -2,19 +2,18 @@ import { nodeDatabaseLayer } from "@dyad/db/node";
 import { HttpUrl } from "@dyad/domain";
 import { joinWorkspace } from "@dyad/server-core";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Config, Console, Effect, FileSystem, Layer, Option, Path, Redacted } from "effect";
-import { Argument, Command, Prompt } from "effect/cli";
+import { Console, Effect, FileSystem, Layer, Path } from "effect";
+import { Argument, Command } from "effect/cli";
 
 import { ServerConfig } from "@dyad/host";
 
 const failures = {
-  has_users: "This server already has users. An admin pairs it with `dyad server pair`.",
+  already_joined: "This server already joined. Pair it with `dyad server pair`.",
   invalid_code: "The code is wrong or expired",
   workspace_mismatch: "The servers are in different workspaces",
   same_server: "The code is from this server",
   unreachable: "Cannot reach the other server",
   upgrade_required: "The servers have different versions. Update both.",
-  not_admin: "Only an admin can pair servers",
   not_found: "The other server does not know this server",
 };
 
@@ -36,18 +35,10 @@ const join = Command.make(
       const path = yield* Path.Path;
       yield* fs.makeDirectory(dataDirectory, { recursive: true });
 
-      // For scripts; a person types it
-      const fromEnvironment = yield* Config.option(Config.Redacted("DYAD_JOIN_PASSWORD"));
-      const password = Option.isSome(fromEnvironment)
-        ? fromEnvironment.value
-        : yield* Prompt.Password({ message: "Password of your admin on this server" });
-
-      const link = yield* joinWorkspace({ url, code, password: Redacted.value(password) }).pipe(
+      const link = yield* joinWorkspace({ url, code }).pipe(
         Effect.provide(nodeDatabaseLayer(path.join(dataDirectory, "replica.sqlite"))),
       );
-      yield* Console.log(
-        `Joined the workspace of ${link.replicaId}. Start this server and sign in as ${link.admin.username}.`,
-      );
+      yield* Console.log(`Joined the workspace of ${link.replicaId}. Start this server.`);
     }).pipe(
       Effect.catchTag("JoinFailed", (error) =>
         Console.error(failures[error.reason]).pipe(

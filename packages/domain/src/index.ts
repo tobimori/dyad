@@ -1,14 +1,7 @@
 import { Context, Effect, Schema } from "effect";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 
-import {
-  DeviceId,
-  PlayContext,
-  RecordingId,
-  ReplicaId,
-  UserId,
-  WorkspaceId,
-} from "./primitives.ts";
+import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 import {
   PeerLink,
   PeerPullRequest,
@@ -276,7 +269,7 @@ export class PlaylistNotFound extends Schema.TaggedError<PlaylistNotFound>()(
 ) {}
 
 export class MergeFailed extends Schema.TaggedError<MergeFailed>()("MergeFailed", {
-  reason: Schema.Literals(["not_admin", "recording_not_found", "same_recording"]),
+  reason: Schema.Literals(["recording_not_found", "same_recording"]),
 }) {}
 
 /** One entry of the tracklist of a DJ set, in the time of its source */
@@ -355,7 +348,7 @@ export class SourceCopy extends Schema.Class<SourceCopy>("SourceCopy")({
 
 export class TracklistEditFailed extends Schema.TaggedError<TracklistEditFailed>()(
   "TracklistEditFailed",
-  { reason: Schema.Literals(["not_admin", "source_not_found"]) },
+  { reason: Schema.Literals(["source_not_found"]) },
 ) {}
 
 export class LibrarySyncStatus extends Schema.Class<LibrarySyncStatus>("LibrarySyncStatus")({
@@ -550,15 +543,10 @@ export class AccountLinkFailed extends Schema.TaggedError<AccountLinkFailed>()(
   { reason: Schema.String },
 ) {}
 
-const Username = Schema.String.check(Schema.isPattern(/^[a-z0-9._-]{1,64}$/));
 const DeviceName = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100));
-// The upper limit only bounds the request size. HMAC hashes a long password once, so the length
-// does not make each PBKDF2 iteration slower.
-const Password = Schema.String.check(Schema.isMinLength(8), Schema.isMaxLength(1024));
 
-/** The user and device of an authenticated request */
+/** The device of an authenticated request: a paired device, or a paired replica with its ID */
 export class Principal extends Schema.Class<Principal>("Principal")({
-  userId: UserId,
   deviceId: DeviceId,
 }) {}
 
@@ -570,9 +558,7 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()("Unauthoriz
 
 export class AuthenticationFailed extends Schema.TaggedError<AuthenticationFailed>()(
   "AuthenticationFailed",
-  {
-    reason: Schema.Literals(["invalid_credentials", "invalid_code", "already_set_up"]),
-  },
+  { reason: Schema.Literal("invalid_code") },
 ) {}
 
 /** Requires the `authorization: Bearer <device token>` header */
@@ -808,28 +794,8 @@ export class PlayerResume extends Schema.Class<PlayerResume>("PlayerResume")({
 
 const PublicRpc = RpcGroup.make(
   Rpc.make("describe", { success: ServerDescriptor }),
-  // Creates the first admin with the setup code from the server log
-  Rpc.make("setup", {
-    payload: {
-      setupCode: Schema.String,
-      username: Username,
-      password: Password,
-      deviceName: DeviceName,
-    },
-    success: DeviceSession,
-    error: AuthenticationFailed,
-  }),
-  Rpc.make("login", {
-    // Without the setup rules, so that a wrong input gives `invalid_credentials`
-    payload: {
-      username: Schema.String.check(Schema.isMaxLength(64)),
-      password: Schema.String.check(Schema.isMaxLength(1024)),
-      deviceName: DeviceName,
-    },
-    success: DeviceSession,
-    error: AuthenticationFailed,
-  }),
-  // Adds a device with a code from `createPairingCode` on a device of the same user
+  // Adds a device with a code from `createPairingCode`, or from the log of a replica that has no
+  // paired device or replica yet
   Rpc.make("pair", {
     payload: { code: Schema.String, deviceName: DeviceName },
     success: DeviceSession,
@@ -837,7 +803,7 @@ const PublicRpc = RpcGroup.make(
   }),
 );
 
-const UserRpc = RpcGroup.make(
+const OwnerRpc = RpcGroup.make(
   // The files on the server
   Rpc.make("listSources", { success: Schema.Array(SourceSummary) }),
   Rpc.make("listPlaylistEntries", {
@@ -1009,9 +975,10 @@ const UserRpc = RpcGroup.make(
     },
     success: Schema.Array(DownloadLease),
   }),
+  // A code that a device (`pair`) or a replica (`peerRedeem`) redeems once
   Rpc.make("createPairingCode", { success: PairingCode }),
   Rpc.make("listDevices", { success: Schema.Array(DeviceSummary) }),
-  // Removes a device of the current user, also the current device. Its stream URLs stop working.
+  // Removes a device, also the current device. Its stream URLs stop working.
   Rpc.make("removeDevice", { payload: { deviceId: DeviceId } }),
   Rpc.make("listAccountProviders", { success: Schema.Array(AccountProviderSummary) }),
   Rpc.make("listAccounts", { success: Schema.Array(ProviderAccountSummary) }),
@@ -1061,27 +1028,25 @@ const UserRpc = RpcGroup.make(
     payload: { sourceId: Schema.String.check(Schema.isUUID()) },
     success: Schema.Array(SourceCopy),
   }),
-  // Admin only. Hides the tracklists of the source for all users, or shows them again.
+  // Hides the tracklists of the source, or shows them again
   Rpc.make("hideTracklist", {
     payload: { sourceId: Schema.String.check(Schema.isUUID()), hidden: Schema.Boolean },
     error: TracklistEditFailed,
   }),
-  // Admin only. A code that another server redeems once to pair with this server.
-  Rpc.make("createServerPairingCode", { success: PairingCode, error: ServerPairingFailed }),
-  // Admin only. Redeems a code of the server at `url`, which must be in the same workspace. This
+  // Redeems a code of the server at `url`, which must be in the same workspace. This
   // server then pulls from and pushes to it.
   Rpc.make("pairServer", {
     payload: { url: HttpUrl, code: Schema.String.check(Schema.isMaxLength(20)) },
     success: ServerPeer,
     error: ServerPairingFailed,
   }),
-  Rpc.make("listServerPeers", { success: Schema.Array(ServerPeer), error: ServerPairingFailed }),
-  // Admin only. Removes the pairing on both servers when the peer is reachable. Replicated data
+  Rpc.make("listServerPeers", { success: Schema.Array(ServerPeer) }),
+  // Removes the pairing on both servers when the peer is reachable. Replicated data
   // stays.
   Rpc.make("unpairServer", { payload: { replicaId: ReplicaId }, error: ServerPairingFailed }),
 ).middleware(Authentication);
 
-export class ServerRpc extends PublicRpc.merge(UserRpc) {}
+export class ServerRpc extends PublicRpc.merge(OwnerRpc) {}
 
 /** The server replica of an authenticated peer request */
 export class CurrentPeer extends Context.Service<CurrentPeer, ReplicaId>()(

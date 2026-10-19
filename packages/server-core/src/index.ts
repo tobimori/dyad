@@ -6,14 +6,12 @@ import { RpcSerialization, RpcServer } from "effect/rpc";
 
 import { linkAccount, listAccountProviders, listAccounts, unlinkAccount } from "./accounts.ts";
 import {
-  authCodesLayer,
   authenticationLayer,
   createPairingCode,
   listDevices,
-  login,
   pair,
+  pairingCodesLayer,
   removeDevice,
-  setup,
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
@@ -47,15 +45,7 @@ import { heardInSets, listSets } from "./sets.ts";
 import { listProviderChoices, setProviderOrder } from "./source-preference.ts";
 import { copySearchesLayer, sourceCopies } from "./source-copies.ts";
 import { listSources } from "./sources.ts";
-import {
-  createServerPairingCode,
-  listServerPeers,
-  pairServer,
-  peerEchoesLayer,
-  peerRoutes,
-  serverPairingCodesLayer,
-  unpairServer,
-} from "./peers.ts";
+import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer } from "./peers.ts";
 import { syncHubLayer, watchChanges } from "./sync.ts";
 import { timedRoute } from "./timed-route.ts";
 import { hideTracklist, sourceSegments, tracklistsServiceLayer } from "./tracklists.ts";
@@ -87,7 +77,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       popularitiesLayer,
       recommendersLayer,
       streamKeyLayer,
-      authCodesLayer,
+      pairingCodesLayer,
       providerCacheSweepLayer,
       mediaCacheLayer,
       musicbrainzLookupsLayer,
@@ -97,7 +87,6 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
       receiversLayer,
       syncHubLayer,
       peerEchoesLayer,
-      serverPairingCodesLayer,
       tracklistsServiceLayer,
     ),
   ),
@@ -109,8 +98,6 @@ export const serverRoutes = Layer.unwrap(
     const descriptor = yield* ServerIdentity;
     const handlers = ServerRpc.toLayer({
       describe: () => Effect.succeed(descriptor),
-      setup: (payload) => setup(payload).pipe(orDieOnDatabaseError("setup")),
-      login: (payload) => login(payload).pipe(orDieOnDatabaseError("login")),
       pair: ({ code, deviceName }) => pair(code, deviceName).pipe(orDieOnDatabaseError("pair")),
       listSources: () => listSources.pipe(orDieOnDatabaseError("listSources")),
       listPlaylistEntries: ({ playlistId }) =>
@@ -177,7 +164,7 @@ export const serverRoutes = Layer.unwrap(
         ),
       appendPlay: (play) =>
         Effect.flatMap(CurrentPrincipal, (principal) =>
-          insertPlay({ ...play, userId: principal.userId, deviceId: principal.deviceId }),
+          insertPlay({ ...play, deviceId: principal.deviceId }),
         ).pipe(orDieOnDatabaseError("appendPlay")),
       watchChanges: () => watchChanges,
       prepareDownload: ({ sourceId, quality, capabilities }) =>
@@ -218,8 +205,6 @@ export const serverRoutes = Layer.unwrap(
       webLinks: ({ sourceId }) => webLinks(sourceId).pipe(orDieOnDatabaseError("webLinks")),
       sourceCopies: ({ sourceId }) =>
         sourceCopies(sourceId).pipe(orDieOnDatabaseError("sourceCopies")),
-      createServerPairingCode: () =>
-        createServerPairingCode.pipe(orDieOnDatabaseError("createServerPairingCode")),
       pairServer: (payload) => pairServer(payload).pipe(orDieOnDatabaseError("pairServer")),
       listServerPeers: () => listServerPeers.pipe(orDieOnDatabaseError("listServerPeers")),
       unpairServer: ({ replicaId }) =>

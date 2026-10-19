@@ -1,6 +1,6 @@
 import { libraryItem, playEvent, recording, source, sourceSegment } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, HeardInSet, RecordingId, SetSummary, SourceSummary } from "@dyad/domain";
+import { HeardInSet, RecordingId, SetSummary, SourceSummary } from "@dyad/domain";
 import { and, asc, eq, inArray, max, or } from "drizzle-orm";
 import { Effect } from "effect";
 
@@ -39,7 +39,6 @@ export const withSeries = (summaries: ReadonlyArray<SourceSummary>) =>
 export const heardInSets = (recordingId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
     const segments = yield* db
       .select({ sourceId: sourceSegment.sourceId, startMs: sourceSegment.startMs })
       .from(sourceSegment)
@@ -51,7 +50,7 @@ export const heardInSets = (recordingId: string) =>
     }
     if (starts.size === 0) return [];
 
-    const rows = yield* playableSources(principal.userId, inArray(source.id, [...starts.keys()]));
+    const rows = yield* playableSources(inArray(source.id, [...starts.keys()]));
     const sets = yield* withSeries(rows.map(sourceSummary));
     return sets
       .map((set) => new HeardInSet({ set, startMs: starts.get(set.id) ?? null }))
@@ -61,7 +60,6 @@ export const heardInSets = (recordingId: string) =>
 /** The last played first. Copies of one recording on several providers give one set. */
 export const listSets = Effect.gen(function* () {
   const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
   const segments = yield* db
     .select({ sourceId: sourceSegment.sourceId, recordingId: sourceSegment.recordingId })
     .from(sourceSegment)
@@ -72,20 +70,14 @@ export const listSets = Effect.gen(function* () {
   const plays = yield* db
     .select({ sourceId: playEvent.sourceId, lastPlayedAt: max(playEvent.startedAt) })
     .from(playEvent)
-    .where(and(eq(playEvent.userId, principal.userId), inArray(playEvent.sourceId, setIds)))
+    .where(inArray(playEvent.sourceId, setIds))
     .groupBy(playEvent.sourceId);
   const playedAt = new Map(plays.map((play) => [play.sourceId, play.lastPlayedAt]));
 
   const saved = yield* db
     .select({ recordingId: libraryItem.entityId })
     .from(libraryItem)
-    .where(
-      and(
-        eq(libraryItem.userId, principal.userId),
-        eq(libraryItem.deleted, false),
-        eq(libraryItem.entityType, "recording"),
-      ),
-    );
+    .where(and(eq(libraryItem.deleted, false), eq(libraryItem.entityType, "recording")));
   const bound = yield* db
     .select({ id: source.id, recordingId: source.recordingId })
     .from(source)
@@ -105,7 +97,7 @@ export const listSets = Effect.gen(function* () {
   const setRoot = new Map(bound.map((row) => [row.id, rootOf(row.recordingId ?? row.id)]));
 
   const wanted = setIds.filter((id) => playedAt.has(id) || savedRoots.has(setRoot.get(id) ?? id));
-  const rows = yield* playableSources(principal.userId, inArray(source.id, wanted));
+  const rows = yield* playableSources(inArray(source.id, wanted));
   const sets = (yield* withSeries(rows.map(sourceSummary)))
     .map((summary) => {
       const own = segments.filter((segment) => segment.sourceId === summary.id);

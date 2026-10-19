@@ -221,8 +221,6 @@ export const entityMerge = sqliteTable(
     confidence: real("confidence").notNull(),
     // Lookup response fields or tag names that support the decision
     evidence: text("evidence", { mode: "json" }),
-    // Null for `system` rows
-    authorUserId: text("author_user_id"),
     // Newer row with the same ID wins
     hlc: text("hlc").notNull(),
     changeSeq,

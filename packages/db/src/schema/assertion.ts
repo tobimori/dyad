@@ -25,8 +25,6 @@ export const catalogAssertion = sqliteTable(
     originRevision: text("origin_revision"),
     evidence: text("evidence", { mode: "json" }),
     confidence: real("confidence").notNull(),
-    // Null for imports and matching, which no user starts
-    authorUserId: text("author_user_id"),
     authorReplicaId: text("author_replica_id").notNull(),
     // Newer assertion with the same ID wins. Between `parse` assertions, a higher `origin_revision`
     // (`parse:v2` over `parse:v1`) wins first.

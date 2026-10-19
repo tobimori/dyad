@@ -4,23 +4,12 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
 import { ServerConnection, serverConnectionLayer } from "@dyad/client-runtime";
+import { nodeDatabaseLayer } from "@dyad/db/node";
+import { createDevice } from "@dyad/server-core";
 import { NodeRuntime, NodeServices, NodeSocketServer } from "@effect/platform-node";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import {
-  Clock,
-  Console,
-  Crypto,
-  Data,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Redacted,
-  Schedule,
-  Schema,
-} from "effect";
+import { Console, Data, Effect, FileSystem, Option, Path, Redacted, Schedule } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { Hex } from "effect/encoding";
 import { NetAddress } from "effect/net";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -79,31 +68,6 @@ const copyDatabase = (source: string, target: string) =>
     yield* sql`VACUUM INTO ${target}`;
   }).pipe(Effect.provide(SqliteClient.layer({ filename: source, readonly: true })));
 
-const FirstUser = Schema.Struct({ id: Schema.String, username: Schema.String });
-
-// The server stores only the SHA-256 of the hex token, like `createDevice` in `server-core`
-const insertDevice = (database: string, token: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqliteClient.SqliteClient;
-    const crypto = yield* Crypto.Crypto;
-
-    const rows = yield* sql`SELECT id, username FROM user ORDER BY created_at LIMIT 1`;
-    if (rows[0] === undefined) {
-      return yield* new SandboxError({ message: "The database has no user" });
-    }
-    const user = yield* Schema.decodeUnknownEffect(FirstUser)(rows[0]);
-
-    const tokenHash = yield* crypto.digest("SHA-256", new TextEncoder().encode(token));
-    yield* sql`INSERT INTO device ${sql.insert({
-      id: yield* crypto.randomUUIDv7(),
-      user_id: user.id,
-      name: "sandbox",
-      token_hash: Hex.encode(tokenHash),
-      created_at: yield* Clock.currentTimeMillis,
-    })}`;
-    return user.username;
-  }).pipe(Effect.provide(SqliteClient.layer({ filename: database })));
-
 const freePort = Effect.gen(function* () {
   const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 0 });
   if (NetAddress.isUnixPathAddress(server.address)) {
@@ -138,11 +102,7 @@ const isRunning = (pid: number) =>
   );
 
 // The other sandbox makes a pairing code, and this server joins its workspace before its first start
-const joinWorkspace = Effect.fn(function* (
-  peerFolder: string,
-  dataDirectory: string,
-  password: string,
-) {
+const joinWorkspace = Effect.fn(function* (peerFolder: string, dataDirectory: string) {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const command = yield* serverCommand;
@@ -150,7 +110,7 @@ const joinWorkspace = Effect.fn(function* (
   const token = Redacted.make((yield* fs.readFileString(peer.tokenFile)).trim());
 
   const pairing = yield* Effect.gen(function* () {
-    return yield* (yield* ServerConnection).createServerPairingCode();
+    return yield* (yield* ServerConnection).createPairingCode();
   }).pipe(
     Effect.provide(serverConnectionLayer(serverUrl(peer), Option.some(token))),
     Effect.scoped,
@@ -161,7 +121,7 @@ const joinWorkspace = Effect.fn(function* (
       ["--conditions=development", command.join, serverUrl(peer), pairing.code],
       {
         cwd: command.repositoryRoot,
-        env: { DYAD_DATA_DIR: dataDirectory, DYAD_JOIN_PASSWORD: password },
+        env: { DYAD_DATA_DIR: dataDirectory },
         extendEnv: true,
         stdout: "inherit",
         stderr: "inherit",
@@ -173,22 +133,11 @@ const joinWorkspace = Effect.fn(function* (
   }
 });
 
-// The server logs the setup code before it accepts connections
-const readSetupCode = Effect.fn(function* (logFile: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const log = yield* fs.readFileString(logFile);
-  const match = /setup code ([A-Z0-9]{4}-[A-Z0-9]{4})/.exec(log);
-  if (match?.[1] === undefined) {
-    return yield* new SandboxError({ message: `No setup code in ${logFile}` });
-  }
-  return match[1];
-});
-
 const start = Command.make(
   "sandbox",
   {
     from: Flag.File("from", { mustExist: true }).pipe(
-      Flag.withDescription("Copy this replica.sqlite with VACUUM INTO and use its first user"),
+      Flag.withDescription("Copy this replica.sqlite with VACUUM INTO"),
       Flag.optional,
     ),
     library: Flag.Directory("library", { mustExist: true }).pipe(
@@ -197,7 +146,7 @@ const start = Command.make(
     ),
     join: Flag.Directory("join", { mustExist: true }).pipe(
       Flag.withDescription(
-        "Join the workspace of the server of this sandbox folder and pair with it, instead of a new setup",
+        "Join the workspace of the server of this sandbox folder and pair with it",
       ),
       Flag.optional,
     ),
@@ -210,7 +159,6 @@ const start = Command.make(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
 
       if (tones && Option.isSome(library)) {
         return yield* new SandboxError({ message: "Use --tones or --library, not both" });
@@ -232,17 +180,14 @@ const start = Command.make(
       if (Option.isNone(library)) yield* fs.makeDirectory(libraryDirectory);
       if (tones) yield* generateTones(libraryDirectory);
 
-      const token = Hex.encode(yield* crypto.randomBytes(32));
-      if (Option.isSome(from)) {
-        const database = path.join(dataDirectory, "replica.sqlite");
-        yield* copyDatabase(path.resolve(from.value), database);
-        const username = yield* insertDevice(database, token);
-        yield* fs.writeFileString(tokenFile, token, { mode: 0o600 });
-        yield* Console.log(`Copied ${from.value}; the token signs in as ${username}`);
-      }
-
-      const password = Hex.encode(yield* crypto.randomBytes(16));
-      if (Option.isSome(join)) yield* joinWorkspace(join.value, dataDirectory, password);
+      const database = path.join(dataDirectory, "replica.sqlite");
+      if (Option.isSome(from)) yield* copyDatabase(path.resolve(from.value), database);
+      if (Option.isSome(join)) yield* joinWorkspace(join.value, dataDirectory);
+      // Also migrates a copied database
+      const device = yield* createDevice("sandbox").pipe(
+        Effect.provide(nodeDatabaseLayer(database)),
+      );
+      yield* fs.writeFileString(tokenFile, device.token, { mode: 0o600 });
 
       const port = yield* freePort;
       const pid = yield* startServer(logFile, {
@@ -269,24 +214,6 @@ const start = Command.make(
                 message: `The server did not start. See ${logFile}. Remove the sandbox with: vp run sandbox stop ${folder}`,
               }),
           ),
-        );
-
-        if (Option.isSome(from)) return;
-
-        // A joined server has the admin of the other sandbox, with its own password
-        const session = Option.isSome(join)
-          ? yield* connection.login({ username: "sandbox", password, deviceName: "sandbox" })
-          : yield* connection.setup({
-              setupCode: yield* readSetupCode(logFile),
-              username: "sandbox",
-              password,
-              deviceName: "sandbox",
-            });
-        yield* fs.writeFileString(tokenFile, session.token, { mode: 0o600 });
-        yield* fs.writeFileString(
-          path.join(folder, "credentials.json"),
-          `${JSON.stringify({ username: "sandbox", password }, null, 2)}\n`,
-          { mode: 0o600 },
         );
       });
       yield* ready.pipe(

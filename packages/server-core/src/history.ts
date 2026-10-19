@@ -1,8 +1,7 @@
 import { playEvent, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal } from "@dyad/domain";
-import type { DeviceId, PlayContext, UserId } from "@dyad/domain";
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import type { DeviceId, PlayContext } from "@dyad/domain";
+import { desc, inArray, sql } from "drizzle-orm";
 import { Crypto, Effect } from "effect";
 
 import { playableSources, sourceSummary } from "./sources.ts";
@@ -11,7 +10,6 @@ import { nextChangeSeq } from "./sync-counter.ts";
 const recentPlayLimit = 100;
 
 export const insertPlay = (play: {
-  readonly userId: UserId;
   readonly deviceId: DeviceId;
   readonly sourceId: string;
   readonly startedAt: number;
@@ -34,19 +32,17 @@ export const insertPlay = (play: {
 /** The playable sources of the user's last plays, newest play first, one entry per source */
 export const listRecentPlays = Effect.gen(function* () {
   const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
 
   const lastPlayedAt = sql<number>`max(${playEvent.startedAt})`;
   const plays = yield* db
     .select({ sourceId: playEvent.sourceId, lastPlayedAt })
     .from(playEvent)
-    .where(eq(playEvent.userId, principal.userId))
     .groupBy(playEvent.sourceId)
     .orderBy(desc(lastPlayedAt))
     .limit(recentPlayLimit);
 
   const playedIds = plays.map((play) => play.sourceId);
-  const rows = yield* playableSources(principal.userId, inArray(source.id, playedIds));
+  const rows = yield* playableSources(inArray(source.id, playedIds));
   const summaries = new Map(rows.map((row) => [row.source.id, sourceSummary(row)]));
 
   return plays.flatMap((play) => summaries.get(play.sourceId) ?? []);

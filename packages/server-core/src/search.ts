@@ -1,7 +1,6 @@
 import { catalogAssertion, playEvent, providerItem, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, SearchResults } from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
+import { SearchResults } from "@dyad/domain";
 import { PopularityHit } from "@dyad/plugin";
 import type { Credentials, Provider, ProviderError } from "@dyad/plugin";
 import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
@@ -22,7 +21,7 @@ const localResultLimit = 50;
 // refreshes and retries of the plugin
 const answerTimeout = "8 seconds";
 
-const searchLocalSources = (query: string, userId: UserId) =>
+const searchLocalSources = (query: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     // `%` and `_` in the query match only themselves
@@ -45,7 +44,7 @@ const searchLocalSources = (query: string, userId: UserId) =>
       contains(source.rawAlbum),
       inArray(source.recordingId, episodes),
     );
-    const rows = yield* playableSources(userId, match, localResultLimit);
+    const rows = yield* playableSources(match, localResultLimit);
 
     const candidates = rows.map((row, position) => {
       const isrc = row.tags === null ? null : tagIdentifiers(row.tags).isrc;
@@ -145,7 +144,7 @@ const fetchPopularity = (
 
 // Plays of the candidates, of their ISRCs and of their artists. The ISRC of a played provider
 // source is known only while it is in the provider cache.
-const loadPlays = (userId: UserId, candidates: ReadonlyArray<Candidate>, now: number) =>
+const loadPlays = (candidates: ReadonlyArray<Candidate>, now: number) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const sourceIds = candidates.map((candidate) => candidate.summary.id);
@@ -168,7 +167,6 @@ const loadPlays = (userId: UserId, candidates: ReadonlyArray<Candidate>, now: nu
       .leftJoin(providerItem, eq(providerItem.sourceId, playEvent.sourceId))
       .where(
         and(
-          eq(playEvent.userId, userId),
           gte(playEvent.startedAt, now - playHistoryMs),
           or(
             inArray(playEvent.sourceId, sourceIds),
@@ -181,7 +179,7 @@ const loadPlays = (userId: UserId, candidates: ReadonlyArray<Candidate>, now: nu
     return rows.map((row) => new Play(row));
   });
 
-const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
+const rankAnswers = (query: string, answer: Answer) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
 
@@ -198,9 +196,9 @@ const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
       );
     }
     const candidates = [...byId.values()];
-    const plays = yield* loadPlays(userId, candidates, now);
+    const plays = yield* loadPlays(candidates, now);
 
-    const ranked = rank(query, candidates, answer.hits, plays, now, yield* providerOrder(userId));
+    const ranked = rank(query, candidates, answer.hits, plays, now, yield* providerOrder);
     return new SearchResults({
       sources: ranked.map((result) => result.summary),
       unavailable: answer.unavailable,
@@ -211,11 +209,9 @@ const rankAnswers = (query: string, userId: UserId, answer: Answer) =>
 export const searchCatalog = (query: string) =>
   Stream.fromEffect(
     Effect.gen(function* () {
-      const principal = yield* CurrentPrincipal;
-      const local = yield* searchLocalSources(query, principal.userId);
+      const local = yield* searchLocalSources(query);
       return yield* rankAnswers(
         query,
-        principal.userId,
         new Answer({ candidates: local, hits: [], unavailable: [] }),
       );
     }),
@@ -228,11 +224,10 @@ export const searchCatalog = (query: string) =>
 export const search = (query: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const principal = yield* CurrentPrincipal;
       const popularities = yield* Popularities;
-      const providers = yield* usableProviders(principal.userId);
+      const providers = yield* usableProviders;
 
-      const local = yield* searchLocalSources(query, principal.userId);
+      const local = yield* searchLocalSources(query);
 
       const providerAnswers = [...providers].flatMap(([id, { provider, credentials }]) => {
         if (provider.search === undefined) return [];
@@ -257,7 +252,7 @@ export const search = (query: string) =>
               unavailable: [...all.unavailable, ...next.unavailable],
             }),
         ),
-        Stream.mapEffect((all) => rankAnswers(query, principal.userId, all)),
+        Stream.mapEffect((all) => rankAnswers(query, all)),
       );
     }),
   );

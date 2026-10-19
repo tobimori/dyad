@@ -1,15 +1,7 @@
 import { playEvent, providerPage, source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
-import {
-  AlbumCard,
-  CurrentPrincipal,
-  HomeGroup,
-  HomePage,
-  HomeShelf,
-  PageState,
-  PageTrack,
-} from "@dyad/domain";
-import type { AlbumRef, UserId } from "@dyad/domain";
+import { AlbumCard, HomeGroup, HomePage, HomeShelf, PageState, PageTrack } from "@dyad/domain";
+import type { AlbumRef } from "@dyad/domain";
 import { ProviderShelf, SuggestionShelf } from "@dyad/plugin";
 import type { Credentials, Recommender } from "@dyad/plugin";
 import { and, eq, gte, inArray } from "drizzle-orm";
@@ -29,7 +21,6 @@ const shelfLimit = 20;
 // Ordered by the decayed weight of their plays, like search ranking, so skips count against
 const recentAlbums = Effect.gen(function* () {
   const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
   const now = yield* Clock.currentTimeMillis;
 
   const plays = yield* db
@@ -40,11 +31,8 @@ const recentAlbums = Effect.gen(function* () {
       completed: playEvent.completed,
     })
     .from(playEvent)
-    .where(
-      and(eq(playEvent.userId, principal.userId), gte(playEvent.startedAt, now - playHistoryMs)),
-    );
+    .where(gte(playEvent.startedAt, now - playHistoryMs));
   const rows = yield* playableSources(
-    principal.userId,
     inArray(source.id, [...new Set(plays.map((play) => play.sourceId))]),
   );
   const summaries = rows.map(sourceSummary);
@@ -88,34 +76,28 @@ const localGroup = Effect.gen(function* () {
 });
 
 const providerGroup = (provider: string) =>
-  providerPageStream(
-    "home",
-    // One cache row per provider, because the shelves do not depend on the user
-    { provider, externalId: "" },
-    Schema.Array(ProviderShelf),
-    {
-      fetch: (plugin) => {
-        const home = plugin.home;
-        return home === undefined
-          ? undefined
-          : (_: string, credentials: Credentials) => home(credentials);
-      },
-      tracks: (shelves) => shelves.flatMap((shelf) => shelf.tracks),
-      build: (page) =>
-        Effect.gen(function* () {
-          const shelves = yield* Effect.forEach(page.data ?? [], (shelf) =>
-            Effect.gen(function* () {
-              return new HomeShelf({
-                title: shelf.title,
-                tracks: yield* providerTracks(page.provider, page.providerName, shelf.tracks),
-                albums: shelf.releases.map((release) => releaseCard(page.provider, release)),
-              });
-            }),
-          );
-          return new HomeGroup({ providerName: page.providerName, shelves, state: page.state });
-        }),
+  providerPageStream("home", { provider, externalId: "" }, Schema.Array(ProviderShelf), {
+    fetch: (plugin) => {
+      const home = plugin.home;
+      return home === undefined
+        ? undefined
+        : (_: string, credentials: Credentials) => home(credentials);
     },
-  );
+    tracks: (shelves) => shelves.flatMap((shelf) => shelf.tracks),
+    build: (page) =>
+      Effect.gen(function* () {
+        const shelves = yield* Effect.forEach(page.data ?? [], (shelf) =>
+          Effect.gen(function* () {
+            return new HomeShelf({
+              title: shelf.title,
+              tracks: yield* providerTracks(page.provider, page.providerName, shelf.tracks),
+              albums: shelf.releases.map((release) => releaseCard(page.provider, release)),
+            });
+          }),
+        );
+        return new HomeGroup({ providerName: page.providerName, shelves, state: page.state });
+      }),
+  });
 
 // One account request per refresh on YouTube Music, so at most 4 a day. A failed fetch waits too.
 const personalLifetimeMs = 6 * 60 * 60 * 1000;
@@ -125,7 +107,6 @@ const forYouSearches = 8;
 const PersonalShelves = Schema.Array(SuggestionShelf);
 
 const forYouShelves = (
-  userId: UserId,
   linked: ReadonlyArray<{
     readonly id: string;
     readonly recommender: Recommender;
@@ -147,12 +128,12 @@ const forYouShelves = (
         ),
       )
       .toSorted((a, b) => b.score - a.score);
-    const found = yield* resolveSuggestions(userId, items, searches);
+    const found = yield* resolveSuggestions(items, searches);
     const picks = items.flatMap((item, index) => {
       const summary = found[index];
       return summary === undefined ? [] : [new Pick({ ...item, summary })];
     });
-    const songs = choose(yield* loadTaste(userId), picks, {
+    const songs = choose(yield* loadTaste, picks, {
       exclude: new Set(),
       limit: forYouLimit,
       explainArtist: true,
@@ -185,7 +166,6 @@ const forYouShelves = (
  * cached shelves first, then again after a refresh of the shelves older than 6 hours.
  */
 const forYouGroup = (
-  userId: UserId,
   linked: ReadonlyArray<{
     readonly id: string;
     readonly recommender: Recommender;
@@ -207,7 +187,7 @@ const forYouGroup = (
               and(
                 eq(providerPage.provider, entry.id),
                 eq(providerPage.kind, "personal"),
-                eq(providerPage.externalId, userId),
+                eq(providerPage.externalId, ""),
               ),
             );
           const shelves = Option.getOrElse(
@@ -216,9 +196,8 @@ const forYouGroup = (
               : Schema.decodeUnknownOption(PersonalShelves)(row.data),
             () => [],
           );
-          const attemptKey = `${entry.id}:${userId}`;
-          const lastTry = Math.max(row?.fetchedAt ?? 0, memory.attempts.get(attemptKey) ?? 0);
-          return { ...entry, shelves, attemptKey, stale: now - lastTry >= personalLifetimeMs };
+          const lastTry = Math.max(row?.fetchedAt ?? 0, memory.attempts.get(entry.id) ?? 0);
+          return { ...entry, shelves, stale: now - lastTry >= personalLifetimeMs };
         }),
       );
       const stale = cached.filter((entry) => entry.stale);
@@ -228,7 +207,7 @@ const forYouGroup = (
       const refresh = Effect.forEach(cached, (entry) =>
         Effect.gen(function* () {
           if (!entry.stale || entry.recommender.shelves === undefined) return entry;
-          memory.attempts.set(entry.attemptKey, now);
+          memory.attempts.set(entry.id, now);
           const shelves = yield* entry.recommender.shelves(entry.credentials).pipe(
             Effect.timeout("20 seconds"),
             Effect.asSome,
@@ -250,7 +229,7 @@ const forYouGroup = (
           const values = {
             provider: entry.id,
             kind: "personal" as const,
-            externalId: userId,
+            externalId: "",
             data: yield* Schema.encodeEffect(PersonalShelves)(shelves.value).pipe(Effect.orDie),
             fetchedAt: now,
           };
@@ -266,14 +245,11 @@ const forYouGroup = (
       );
 
       // The first build searches nothing, so that the home page shows at once
-      const first = forYouShelves(
-        userId,
-        cached,
-        0,
-        state(stale.length === 0 ? "fresh" : "fetching"),
-      ).pipe(orDieOnDatabaseError("homePage"));
+      const first = forYouShelves(cached, 0, state(stale.length === 0 ? "fresh" : "fetching")).pipe(
+        orDieOnDatabaseError("homePage"),
+      );
       const second = refresh.pipe(
-        Effect.flatMap((fetched) => forYouShelves(userId, fetched, forYouSearches, state("fresh"))),
+        Effect.flatMap((fetched) => forYouShelves(fetched, forYouSearches, state("fresh"))),
         orDieOnDatabaseError("homePage"),
       );
       return Stream.concat(Stream.fromEffect(first), Stream.fromEffect(second));
@@ -283,8 +259,7 @@ const forYouGroup = (
 /** The user's plays first, then the suggestions for the user, then each usable provider's home */
 export const homePage = Stream.unwrap(
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    const providers = yield* usableProviders(principal.userId);
+    const providers = yield* usableProviders;
     const recommenders = yield* Recommenders;
     const groups = [...providers].flatMap(([id, usable]) =>
       usable.provider.home === undefined ? [] : [providerGroup(id)],
@@ -293,12 +268,12 @@ export const homePage = Stream.unwrap(
     const linked = yield* Effect.forEach(
       [...recommenders].filter(([, recommender]) => recommender.shelves !== undefined),
       ([id, recommender]) =>
-        Effect.map(recommenderAccount(principal.userId, id), (account) =>
+        Effect.map(recommenderAccount(id), (account) =>
           Option.map(account, ({ credentials }) => ({ id, recommender, credentials })),
         ),
     ).pipe(Effect.map((accounts) => accounts.flatMap(Option.toArray)));
     // `zipLatestAll` waits for every stream, so a group without recommenders is left out
-    const forYou = linked.length === 0 ? [] : [forYouGroup(principal.userId, linked)];
+    const forYou = linked.length === 0 ? [] : [forYouGroup(linked)];
 
     const local = Stream.fromEffect(localGroup.pipe(orDieOnDatabaseError("homePage")));
     return Stream.zipLatestAll(local, ...forYou, ...groups).pipe(

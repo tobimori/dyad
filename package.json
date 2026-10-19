@@ -22,8 +22,10 @@
   },
   "devDependencies": {
     "@dyad/client-runtime": "workspace:*",
+    "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
     "@dyad/oxlint": "workspace:*",
+    "@dyad/server-core": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/tsgo": "catalog:",

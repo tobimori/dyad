@@ -8,14 +8,13 @@ import {
   ArtistPage,
   ArtistRef,
   ArtistSection,
-  CurrentPrincipal,
   PageNotFound,
   PageState,
   PageTrack,
   SourceSummary,
   TrackSection,
 } from "@dyad/domain";
-import type { AlbumRef, UserId } from "@dyad/domain";
+import type { AlbumRef } from "@dyad/domain";
 import { ProviderAlbum, ProviderArtist, ProviderSource } from "@dyad/plugin";
 import type {
   Credentials,
@@ -59,8 +58,7 @@ class LibraryFile extends Data.Class<{
 // One entry per source. A source with several files gives the tags of one of them.
 const libraryFiles = (match: SQL | undefined) =>
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    const rows = yield* playableSources(principal.userId, and(isNotNull(localFile.id), match));
+    const rows = yield* playableSources(and(isNotNull(localFile.id), match));
 
     return rows.map(
       (row) =>
@@ -170,40 +168,35 @@ class LibrarySource extends Data.Class<{
 
 // The provider sources that the user saved in a provider library. Each source of a saved item binds
 // to the item's recording, so other sources of a merged recording are not part of it.
-const librarySources = (userId: UserId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* linkedProviders(userId);
+const librarySources = Effect.gen(function* () {
+  const db = yield* Database;
+  const providers = yield* linkedProviders;
 
-    const rows = yield* db
-      .select({
-        sourceId: providerItem.sourceId,
-        provider: providerItem.provider,
-        data: providerItem.data,
-      })
-      .from(libraryItem)
-      .innerJoin(source, eq(source.recordingId, libraryItem.entityId))
-      .innerJoin(providerItem, eq(providerItem.sourceId, source.id))
-      .where(
-        and(
-          eq(libraryItem.userId, userId),
-          eq(libraryItem.deleted, false),
-          inArray(providerItem.provider, [...providers.keys()]),
-        ),
-      )
-      .groupBy(source.id);
+  const rows = yield* db
+    .select({
+      sourceId: providerItem.sourceId,
+      provider: providerItem.provider,
+      data: providerItem.data,
+    })
+    .from(libraryItem)
+    .innerJoin(source, eq(source.recordingId, libraryItem.entityId))
+    .innerJoin(providerItem, eq(providerItem.sourceId, source.id))
+    .where(
+      and(eq(libraryItem.deleted, false), inArray(providerItem.provider, [...providers.keys()])),
+    )
+    .groupBy(source.id);
 
-    return yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const decoded = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(
-          Effect.orDie,
-        );
-        const item = yield* toCachedSource(row.provider, decoded);
-        const name = providers.get(row.provider)?.name ?? row.provider;
-        return new LibrarySource({ summary: cachedSummary(item, name), source: decoded });
-      }),
-    );
-  });
+  return yield* Effect.forEach(rows, (row) =>
+    Effect.gen(function* () {
+      const decoded = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(
+        Effect.orDie,
+      );
+      const item = yield* toCachedSource(row.provider, decoded);
+      const name = providers.get(row.provider)?.name ?? row.provider;
+      return new LibrarySource({ summary: cachedSummary(item, name), source: decoded });
+    }),
+  );
+});
 
 const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
   [...groupBy(sources, (item) => item.summary.artistRef)].map(
@@ -272,9 +265,8 @@ export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "su
 
 /** The album artists of the files on this replica and the artists of the provider library */
 export const listLibraryArtists = Effect.gen(function* () {
-  const principal = yield* CurrentPrincipal;
   const files = yield* libraryFiles(isNotNull(localFile.albumArtistKey));
-  const saved = yield* librarySources(principal.userId);
+  const saved = yield* librarySources;
 
   const local = [...groupBy(files, (file) => file.albumArtistKey)].map(
     ([key, group]) =>
@@ -289,11 +281,10 @@ export const listLibraryArtists = Effect.gen(function* () {
 
 /** The albums of the files on this replica and of the provider library, by artist and title */
 export const listLibraryAlbums = Effect.gen(function* () {
-  const principal = yield* CurrentPrincipal;
   const files = yield* libraryFiles(
     and(isNotNull(localFile.albumArtistKey), isNotNull(localFile.albumKey)),
   );
-  const saved = yield* librarySources(principal.userId);
+  const saved = yield* librarySources;
 
   return [...albumCards(files), ...libraryAlbumCards(saved)].toSorted(
     (a, b) => (a.artist ?? "").localeCompare(b.artist ?? "") || a.title.localeCompare(b.title),
@@ -445,12 +436,11 @@ export const providerPageStream = <A, E, Page, R>(
   Stream.unwrap(
     Effect.gen(function* () {
       const db = yield* Database;
-      const principal = yield* CurrentPrincipal;
       const plugins = yield* Providers;
       const { provider, externalId } = parts;
       const plugin = plugins.get(provider);
       const providerName = plugin?.name ?? provider;
-      const library = yield* librarySources(principal.userId);
+      const library = yield* librarySources;
 
       const emit = (data: A | null, state: PageState) =>
         options.build(new PageInput({ provider, providerName, data, library, state }));
@@ -459,7 +449,7 @@ export const providerPageStream = <A, E, Page, R>(
 
       if (plugin === undefined) return failed("No plugin gives this page");
       // Cached pages too, because the tracks of a page play only with the user's credentials
-      const usable = (yield* usableProviders(principal.userId)).get(provider);
+      const usable = (yield* usableProviders).get(provider);
       if (usable === undefined) {
         return failed(`Link your ${providerName} account to see this page`);
       }

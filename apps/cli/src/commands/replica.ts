@@ -1,25 +1,23 @@
 import { hostname } from "node:os";
 
 import { nodeDatabaseLayer } from "@dyad/db/node";
-import { HttpUrl, UserId } from "@dyad/domain";
+import { HttpUrl } from "@dyad/domain";
 import { ServerConfig, replicaLayer } from "@dyad/host";
 import { createDevice, joinWorkspace } from "@dyad/server-core";
-import { Console, Crypto, Effect, FileSystem, Layer, Path } from "effect";
+import { Console, Effect, FileSystem, Layer, Path } from "effect";
 import { Argument, Command } from "effect/cli";
-import { Hex } from "effect/encoding";
 
 import { localReplica } from "../context/replica.ts";
 import { fail } from "./auth.ts";
 import { saveDeviceToken } from "./devices.ts";
 
 const failures = {
-  has_users: "This device already joined. Delete its replica folder to join again.",
+  already_joined: "This device already joined. Delete its replica folder to join again.",
   invalid_code: "The code is wrong or expired",
   workspace_mismatch: "The replicas are in different workspaces",
   same_server: "The code is from this device",
   unreachable: "Cannot reach the other replica",
   upgrade_required: "The replicas have different versions. Update both.",
-  not_admin: "Only an admin can pair",
   not_found: "The other replica does not know this device",
 };
 
@@ -41,14 +39,11 @@ const join = Command.make(
       const replica = yield* localReplica;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
       yield* fs.makeDirectory(replica.dataDirectory, { recursive: true });
 
-      // This device signs in with a device token, so the password of the copied admin is never used
-      const password = Hex.encode(yield* crypto.randomBytes(32));
       const session = yield* Effect.gen(function* () {
-        const link = yield* joinWorkspace({ url, code, password });
-        return yield* createDevice(UserId.make(link.admin.id), hostname());
+        yield* joinWorkspace({ url, code });
+        return yield* createDevice(hostname());
       }).pipe(
         Effect.provide(nodeDatabaseLayer(path.join(replica.dataDirectory, "replica.sqlite"))),
       );

@@ -9,9 +9,6 @@ export type WorkspaceId = typeof WorkspaceId.Type;
 export const RecordingId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("RecordingId"));
 export type RecordingId = typeof RecordingId.Type;
 
-export const UserId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("UserId"));
-export type UserId = typeof UserId.Type;
-
 export const DeviceId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("DeviceId"));
 export type DeviceId = typeof DeviceId.Type;
 

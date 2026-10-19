@@ -19,7 +19,7 @@ import {
   nextEntry,
   positionAt,
 } from "@dyad/domain";
-import type { DeviceId, PageTrack, PlayContext, UserId } from "@dyad/domain";
+import type { DeviceId, PageTrack, PlayContext } from "@dyad/domain";
 import { ProviderSource } from "@dyad/plugin";
 import { and, eq, inArray } from "drizzle-orm";
 import {
@@ -47,7 +47,7 @@ import { Outputs } from "./outputs.ts";
 import { hintPrefetch } from "./playback.ts";
 import { Receivers, deviceOutput } from "./receivers.ts";
 import { usableProviders } from "./providers.ts";
-import { SessionState, loadSessions, saveSession } from "./session-store.ts";
+import { SessionState, loadSession, saveSession } from "./session-store.ts";
 import { continueRadio } from "./radio.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { TimedDesired, driveTimedOutputs } from "./timed-output.ts";
@@ -126,7 +126,6 @@ class OpenPlay extends Data.Class<{
 }> {}
 
 const makeSession = (
-  userId: UserId,
   initial: SessionState,
   prefetch: (sourceIds: ReadonlyArray<string>) => void,
   queueEnds: (entries: ReadonlyArray<QueueEntry>) => void,
@@ -189,7 +188,7 @@ const makeSession = (
             volume: player.volume,
             muted: false,
             delayMs: urlOutputs.delayOf(id),
-            groupable: receivers.has(userId, id),
+            groupable: receivers.has(id),
           }),
       ),
       ...urlOutputs.list(),
@@ -200,7 +199,7 @@ const makeSession = (
 
     const timedCapable = (outputId: OutputId) =>
       state.players.has(outputId)
-        ? receivers.has(userId, outputId)
+        ? receivers.has(outputId)
         : urlOutputs.has(outputId) && urlOutputs.timedCapable(outputId);
 
     // In a timed group, or in a group of URL outputs that the plugin groups
@@ -292,7 +291,6 @@ const makeSession = (
     const endPlay = (play: OpenPlay, now: number, completed: boolean) => {
       state.play = Option.none();
       return insertPlay({
-        userId,
         deviceId: play.deviceId,
         sourceId: play.entry.source.id,
         startedAt: play.startedAt,
@@ -402,7 +400,6 @@ const makeSession = (
       if (!urlOutputs.has(outputId)) return;
 
       const created: UrlDriver = yield* driveUrlOutput({
-        userId,
         outputId,
         desired,
         report: (received) => reportOutput(created, received),
@@ -422,7 +419,6 @@ const makeSession = (
       if (driver !== undefined) return yield* driver.desire(desired);
 
       const created: TimedDriver = yield* driveTimedOutputs({
-        userId,
         desired,
         report: (received) => reportTimed(created, received),
         taken: (taken) => memberTaken(created, taken),
@@ -1318,32 +1314,35 @@ const makeSessions = Effect.gen(function* () {
     yield* Effect.context<
       Effect.Services<ReturnType<typeof makeSession | typeof hintPrefetch | typeof continueRadio>>
     >();
-  const sessions = new Map<UserId, Session>();
-  const creating = yield* Semaphore.make(1);
 
-  // In order, so that the last hint of a session wins
-  const prefetches = yield* Queue.unbounded<readonly [UserId, ReadonlyArray<string>]>();
+  // In order, so that the last hint wins
+  const prefetches = yield* Queue.unbounded<ReadonlyArray<string>>();
   yield* Effect.forkScoped(
     Effect.forever(
-      Effect.flatMap(Queue.take(prefetches), ([userId, sourceIds]) =>
-        hintPrefetch(`session:${userId}`, userId, sourceIds).pipe(
+      Effect.flatMap(Queue.take(prefetches), (sourceIds) =>
+        hintPrefetch("session", sourceIds).pipe(
           orDieOnDatabaseError("hintPrefetch"),
-          Effect.catchCause((cause) => Effect.logError("Cannot prefetch for a session", cause)),
+          Effect.catchCause((cause) => Effect.logError("Cannot prefetch for the session", cause)),
         ),
       ),
     ),
   );
 
   // Radio requests take seconds, so they run outside the session lock
-  const endings = yield* Queue.unbounded<readonly [UserId, ReadonlyArray<QueueEntry>]>();
+  const endings = yield* Queue.unbounded<ReadonlyArray<QueueEntry>>();
+  const session = yield* makeSession(
+    Option.getOrElse(yield* loadSession, () => emptyState),
+    (sourceIds) => Queue.offerUnsafe(prefetches, sourceIds),
+    (entries) => Queue.offerUnsafe(endings, entries),
+  ).pipe(Effect.provide(services));
   yield* Effect.forkScoped(
     Effect.forever(
-      Effect.flatMap(Queue.take(endings), ([userId, entries]) =>
+      Effect.flatMap(Queue.take(endings), (entries) =>
         Effect.gen(function* () {
           const last = entries.at(-1);
           if (last === undefined) return;
-          const tracks = yield* continueRadio(userId, entries);
-          yield* (yield* sessionFor(userId)).appendRadio(last.id, tracks);
+          const tracks = yield* continueRadio(entries);
+          yield* session.appendRadio(last.id, tracks);
         }).pipe(
           orDieOnDatabaseError("continueRadio"),
           Effect.provide(services),
@@ -1353,80 +1352,41 @@ const makeSessions = Effect.gen(function* () {
     ),
   );
 
-  const create = (userId: UserId, state: SessionState) =>
-    makeSession(
-      userId,
-      state,
-      (sourceIds) => Queue.offerUnsafe(prefetches, [userId, sourceIds]),
-      (entries) => Queue.offerUnsafe(endings, [userId, entries]),
-    ).pipe(Effect.provide(services));
-
-  for (const [userId, state] of yield* loadSessions)
-    sessions.set(userId, yield* create(userId, state));
-
-  // Plugin outputs belong to the household, so every session lists them
+  // Plugin outputs belong to the household, so the session lists them
   yield* Effect.forkScoped(
-    Stream.runForEach(Stream.merge((yield* Outputs).changes, (yield* Receivers).changes), () =>
-      Effect.forEach(sessions.values(), (session) => session.refreshOutputs, { discard: true }),
+    Stream.runForEach(
+      Stream.merge((yield* Outputs).changes, (yield* Receivers).changes),
+      () => session.refreshOutputs,
     ),
   );
 
-  const save = (userId: UserId, session: Session, all: boolean) =>
+  const save = (all: boolean) =>
     session.changes(all).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,
-          onSome: (state) => saveSession(userId, state),
+          onSome: (state) => saveSession(state),
         }),
       ),
       orDieOnDatabaseError("saveSession"),
-      Effect.catchCause((cause) => Effect.logError("Cannot save a playback session", cause)),
+      Effect.catchCause((cause) => Effect.logError("Cannot save the playback session", cause)),
       Effect.provideService(Database, db),
     );
 
-  const sessionFor = (userId: UserId) =>
-    Effect.suspend(() => {
-      const existing = sessions.get(userId);
-      if (existing !== undefined) return Effect.succeed(existing);
-
-      return creating.withPermits(1)(
-        Effect.gen(function* () {
-          const created = sessions.get(userId) ?? (yield* create(userId, emptyState));
-          sessions.set(userId, created);
-          return created;
-        }),
-      );
-    });
-
   // Registered before the ticker, so that it runs after the ticker stopped
-  yield* Effect.addFinalizer(() =>
-    Effect.forEach(sessions, ([userId, session]) =>
-      session.endOpenPlay.pipe(Effect.andThen(save(userId, session, true))),
-    ),
-  );
+  yield* Effect.addFinalizer(() => session.endOpenPlay.pipe(Effect.andThen(save(true))));
 
   // Saves happen at most once a second
   yield* Effect.forkScoped(
-    Effect.repeat(
-      Effect.suspend(() =>
-        Effect.forEach(sessions, ([userId, session]) =>
-          session.tick.pipe(Effect.andThen(save(userId, session, false))),
-        ),
-      ),
-      Schedule.spaced("1 second"),
-    ),
+    Effect.repeat(session.tick.pipe(Effect.andThen(save(false))), Schedule.spaced("1 second")),
   );
 
-  return {
-    sessionFor,
-    removeDevice: (userId: UserId, deviceId: DeviceId) =>
-      Effect.flatMap(sessionFor(userId), (session) => session.removeDevice(deviceId)),
-  };
+  return { session };
 });
 
 /**
- * The playback session of each user on this replica. A session is replica-local, because commands
- * and reports need one writer.
+ * The playback session of this replica. It is replica-local, because commands and reports need one
+ * writer.
  */
 export class Sessions extends Context.Service<Sessions, Effect.Success<typeof makeSessions>>()(
   "@dyad/server-core/Sessions",
@@ -1434,20 +1394,20 @@ export class Sessions extends Context.Service<Sessions, Effect.Success<typeof ma
 
 export const sessionsLayer = Layer.effect(
   Sessions,
-  makeSessions.pipe(orDieOnDatabaseError("loadSessions")),
+  makeSessions.pipe(orDieOnDatabaseError("loadSession")),
 );
 
 // A search result is not in `source` until it plays, so its summary comes from the provider cache
-const sourceSummaries = (userId: UserId, sourceIds: ReadonlyArray<string>) =>
+const sourceSummaries = (sourceIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const rows = yield* playableSources(userId, inArray(source.id, sourceIds));
+    const rows = yield* playableSources(inArray(source.id, sourceIds));
     const summaries = new Map(rows.map((row) => [row.source.id, sourceSummary(row)]));
 
     const missing = sourceIds.filter((id) => !summaries.has(id));
     if (missing.length === 0) return summaries;
 
-    const providers = yield* usableProviders(userId);
+    const providers = yield* usableProviders;
     const cached = yield* db
       .select({
         sourceId: providerItem.sourceId,
@@ -1492,7 +1452,7 @@ export const connectDevice = (payload: {
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
     const db = yield* Database;
-    const session = yield* (yield* Sessions).sessionFor(principal.userId);
+    const session = (yield* Sessions).session;
 
     const [row] =
       payload.player === null
@@ -1512,11 +1472,11 @@ export const connectDevice = (payload: {
 export const controlSession = (request: Parameters<Session["control"]>[1]) =>
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
-    const session = yield* (yield* Sessions).sessionFor(principal.userId);
+    const session = (yield* Sessions).session;
     const command = request.command;
     const sources =
       SessionCommand.guards.Play(command) || SessionCommand.guards.Enqueue(command)
-        ? yield* sourceSummaries(principal.userId, command.sourceIds)
+        ? yield* sourceSummaries(command.sourceIds)
         : new Map<string, SourceSummary>();
     return yield* session.control(principal.deviceId, request, sources);
   });
@@ -1524,6 +1484,6 @@ export const controlSession = (request: Parameters<Session["control"]>[1]) =>
 export const reportPlayback = (report: Parameters<Session["report"]>[1]) =>
   Effect.gen(function* () {
     const principal = yield* CurrentPrincipal;
-    const session = yield* (yield* Sessions).sessionFor(principal.userId);
+    const session = (yield* Sessions).session;
     yield* session.report(principal.deviceId, report);
   });

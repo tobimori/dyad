@@ -1,7 +1,8 @@
 import { playbackSession } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { EntryId, OutputId, Playback, QueueEntry, RepeatMode, UserId } from "@dyad/domain";
-import { Clock, Data, Effect, Schema } from "effect";
+import { EntryId, OutputId, Playback, QueueEntry, RepeatMode } from "@dyad/domain";
+import { eq } from "drizzle-orm";
+import { Clock, Data, Effect, Option, Schema } from "effect";
 
 /** The part of a session that survives a restart */
 export class SessionState extends Data.Class<{
@@ -24,18 +25,19 @@ class SavedPlayback extends Schema.Class<SavedPlayback>("SavedPlayback")({
 }) {}
 
 /**
- * The saved sessions. Nothing plays after a restart, so a session loads paused. A session that does
- * not decode, for example after a format change, starts empty.
+ * The saved session. Nothing plays after a restart, so it loads paused. A session that does not
+ * decode, for example after a format change, starts empty.
  */
-export const loadSessions = Effect.gen(function* () {
+export const loadSession = Effect.gen(function* () {
   const db = yield* Database;
-  const rows = yield* db.select().from(playbackSession);
+  const [row] = yield* db.select().from(playbackSession).where(eq(playbackSession.slot, 1));
+  if (row === undefined) return Option.none();
 
-  return yield* Effect.forEach(rows, (row) =>
-    Effect.gen(function* () {
-      const entries = yield* Schema.decodeUnknownEffect(SavedEntries)(row.entries);
-      const saved = yield* Schema.decodeUnknownEffect(SavedPlayback)(row.playback);
-      const state = new SessionState({
+  return yield* Effect.gen(function* () {
+    const entries = yield* Schema.decodeUnknownEffect(SavedEntries)(row.entries);
+    const saved = yield* Schema.decodeUnknownEffect(SavedPlayback)(row.playback);
+    return Option.some(
+      new SessionState({
         // Unplayable marks are for one pass, and the next start can work
         entries: entries.map((entry) => new QueueEntry({ ...entry, unplayable: false })),
         nextEntryId: row.nextEntryId,
@@ -48,22 +50,20 @@ export const loadSessions = Effect.gen(function* () {
           revision: row.revision,
           lost: false,
         }),
-      });
-      return [[UserId.make(row.userId), state] as const];
-    }).pipe(
-      Effect.catchTag("SchemaError", (error) =>
-        Effect.logWarning("Cannot load a playback session", error).pipe(Effect.as([])),
-      ),
+      }),
+    );
+  }).pipe(
+    Effect.catchTag("SchemaError", (error) =>
+      Effect.logWarning("Cannot load the playback session", error).pipe(Effect.as(Option.none())),
     ),
-  ).pipe(Effect.map((sessions) => sessions.flat()));
+  );
 });
 
-export const saveSession = (userId: UserId, state: SessionState) =>
+export const saveSession = (state: SessionState) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const playback = state.playback;
     const row = {
-      userId,
       entries: yield* Schema.encodeEffect(SavedEntries)(state.entries),
       nextEntryId: state.nextEntryId,
       queueVersion: state.queueVersion,
@@ -83,6 +83,6 @@ export const saveSession = (userId: UserId, state: SessionState) =>
     };
     yield* db
       .insert(playbackSession)
-      .values(row)
-      .onConflictDoUpdate({ target: playbackSession.userId, set: row });
+      .values({ slot: 1, ...row })
+      .onConflictDoUpdate({ target: playbackSession.slot, set: row });
   });

@@ -1,8 +1,8 @@
 import { playEvent, recording, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { PageTrack } from "@dyad/domain";
-import type { SourceSummary, UserId } from "@dyad/domain";
-import { and, eq, gte, sql } from "drizzle-orm";
+import type { SourceSummary } from "@dyad/domain";
+import { eq, gte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { Clock, Data, Effect } from "effect";
 
@@ -39,49 +39,48 @@ export class Taste extends Data.Class<{
 const bound = alias(recording, "bound");
 const canonical = alias(recording, "canonical");
 
-export const loadTaste = (userId: UserId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const now = yield* Clock.currentTimeMillis;
-    const plays = yield* db
-      .select({
-        sourceId: playEvent.sourceId,
-        startedAt: playEvent.startedAt,
-        playedMs: playEvent.playedMs,
-        completed: playEvent.completed,
-        title: sql<string | null>`coalesce(${canonical.title}, ${source.rawTitle})`,
-        artist: sql<string | null>`coalesce(${canonical.artistName}, ${source.rawArtist})`,
-      })
-      .from(playEvent)
-      .innerJoin(source, eq(source.id, playEvent.sourceId))
-      .leftJoin(bound, eq(bound.id, source.recordingId))
-      .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
-      .where(and(eq(playEvent.userId, userId), gte(playEvent.startedAt, now - playHistoryMs)));
+export const loadTaste = Effect.gen(function* () {
+  const db = yield* Database;
+  const now = yield* Clock.currentTimeMillis;
+  const plays = yield* db
+    .select({
+      sourceId: playEvent.sourceId,
+      startedAt: playEvent.startedAt,
+      playedMs: playEvent.playedMs,
+      completed: playEvent.completed,
+      title: sql<string | null>`coalesce(${canonical.title}, ${source.rawTitle})`,
+      artist: sql<string | null>`coalesce(${canonical.artistName}, ${source.rawArtist})`,
+    })
+    .from(playEvent)
+    .innerJoin(source, eq(source.id, playEvent.sourceId))
+    .leftJoin(bound, eq(bound.id, source.recordingId))
+    .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
+    .where(gte(playEvent.startedAt, now - playHistoryMs));
 
-    const sums = new Map<string, { value: number; name: string }>();
-    const recent = new Set<string>();
-    for (const play of plays) {
-      if (play.artist !== null) {
-        const key = normalizeArtist(play.artist);
-        const sum = sums.get(key) ?? { value: 0, name: play.artist };
-        sums.set(key, { value: sum.value + playValue(play, now), name: sum.name });
-      }
-      if (now - play.startedAt < recentMs) {
-        recent.add(play.sourceId);
-        recent.add(songKey(play.title, play.artist));
-      }
+  const sums = new Map<string, { value: number; name: string }>();
+  const recent = new Set<string>();
+  for (const play of plays) {
+    if (play.artist !== null) {
+      const key = normalizeArtist(play.artist);
+      const sum = sums.get(key) ?? { value: 0, name: play.artist };
+      sums.set(key, { value: sum.value + playValue(play, now), name: sum.name });
     }
+    if (now - play.startedAt < recentMs) {
+      recent.add(play.sourceId);
+      recent.add(songKey(play.title, play.artist));
+    }
+  }
 
-    return new Taste({
-      artists: new Map(
-        [...sums].map(([key, sum]) => [
-          key,
-          new ArtistTaste({ affinity: saturate(sum.value), name: sum.name }),
-        ]),
-      ),
-      recent,
-    });
+  return new Taste({
+    artists: new Map(
+      [...sums].map(([key, sum]) => [
+        key,
+        new ArtistTaste({ affinity: saturate(sum.value), name: sum.name }),
+      ]),
+    ),
+    recent,
   });
+});
 
 /** A playable suggestion before the taste applies */
 export class Pick extends Data.Class<{

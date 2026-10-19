@@ -224,7 +224,7 @@ export const compareAssertions =
 
 /**
  * The selected assertion of `field` and its value. An import that has no value lets the next origin
- * apply. Only an admin can clear a field.
+ * apply. Only the owner can clear a field.
  */
 export const resolveAssertion = <A>(
   providers: ReadonlyMap<string, Provider>,

@@ -32,10 +32,7 @@ export const pushIfHeld = (playlistId: string) =>
       .from(playlist)
       .innerJoin(
         providerAccount,
-        and(
-          eq(providerAccount.userId, playlist.ownerId),
-          eq(providerAccount.provider, sql`json_extract(${playlist.link}, '$.provider')`),
-        ),
+        eq(providerAccount.provider, sql`json_extract(${playlist.link}, '$.provider')`),
       )
       .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id))
       .where(

@@ -1,8 +1,7 @@
 import { credential, providerAccount } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import type { UserId } from "@dyad/domain";
 import type { Credentials, PopularityHit, Provider, ProviderError } from "@dyad/plugin";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Redacted } from "effect";
 
 /** Providers that plugins add, by provider ID */
@@ -28,24 +27,23 @@ export const toCredentials = (values: Readonly<Record<string, string>>) =>
  * The providers whose copies the user sees: they need no account, or an account of them is linked
  * on some replica. Playing a copy can still need the replica with the credential.
  */
-export const linkedProviders = (userId: UserId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* Providers;
-    const accounts = yield* db
-      .select({ provider: providerAccount.provider })
-      .from(providerAccount)
-      .where(and(eq(providerAccount.userId, userId), eq(providerAccount.deleted, false)));
-    const linked = new Set(accounts.map((account) => account.provider));
-    return new Map(
-      [...providers].filter(
-        ([id, provider]) =>
-          provider.account === undefined || linked.has(id) || provider.account.optional === true,
-      ),
-    );
-  });
+export const linkedProviders = Effect.gen(function* () {
+  const db = yield* Database;
+  const providers = yield* Providers;
+  const accounts = yield* db
+    .select({ provider: providerAccount.provider })
+    .from(providerAccount)
+    .where(eq(providerAccount.deleted, false));
+  const linked = new Set(accounts.map((account) => account.provider));
+  return new Map(
+    [...providers].filter(
+      ([id, provider]) =>
+        provider.account === undefined || linked.has(id) || provider.account.optional === true,
+    ),
+  );
+});
 
-/** A provider that one user can search and play, with the user's credentials */
+/** A provider that this replica can search and play, with its credentials */
 class UsableProvider extends Data.Class<{
   readonly provider: Provider;
   /** Empty when the provider needs no account */
@@ -56,32 +54,30 @@ class UsableProvider extends Data.Class<{
  * The providers that need no account or have an optional one, and the providers of which the user
  * linked an account
  */
-export const usableProviders = (userId: UserId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* Providers;
+export const usableProviders = Effect.gen(function* () {
+  const db = yield* Database;
+  const providers = yield* Providers;
 
-    const accounts = yield* db
-      .select({ provider: providerAccount.provider, values: credential.values })
-      .from(providerAccount)
-      .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id))
-      .where(eq(providerAccount.userId, userId));
-    const linked = new Map(accounts.map((account) => [account.provider, account.values]));
+  const accounts = yield* db
+    .select({ provider: providerAccount.provider, values: credential.values })
+    .from(providerAccount)
+    .innerJoin(credential, eq(credential.providerAccountId, providerAccount.id));
+  const linked = new Map(accounts.map((account) => [account.provider, account.values]));
 
-    const usable = new Map<string, UsableProvider>();
-    for (const [id, provider] of providers) {
-      const values = linked.get(id);
-      if (
-        provider.account === undefined ||
-        (values === undefined && provider.account.optional === true)
-      ) {
-        usable.set(id, new UsableProvider({ provider, credentials: new Map() }));
-        continue;
-      }
-      if (values === undefined) continue;
-
-      usable.set(id, new UsableProvider({ provider, credentials: toCredentials(values) }));
+  const usable = new Map<string, UsableProvider>();
+  for (const [id, provider] of providers) {
+    const values = linked.get(id);
+    if (
+      provider.account === undefined ||
+      (values === undefined && provider.account.optional === true)
+    ) {
+      usable.set(id, new UsableProvider({ provider, credentials: new Map() }));
+      continue;
     }
+    if (values === undefined) continue;
 
-    return usable;
-  });
+    usable.set(id, new UsableProvider({ provider, credentials: toCredentials(values) }));
+  }
+
+  return usable;
+});

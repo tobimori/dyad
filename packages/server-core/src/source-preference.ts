@@ -1,14 +1,8 @@
 import { source, sourcePreference } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import {
-  CurrentPrincipal,
-  ProviderChoice,
-  ProviderChoices,
-  SourcePreferenceRow,
-} from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
+import { ProviderChoice, ProviderChoices, SourcePreferenceRow } from "@dyad/domain";
 import { HlcClock, sourcePreferenceId } from "@dyad/sync";
-import { eq } from "drizzle-orm";
+import {} from "drizzle-orm";
 import { Effect } from "effect";
 
 import { Providers } from "./providers.ts";
@@ -16,22 +10,19 @@ import { writeRow } from "./replication.ts";
 import { nextChangeSeq } from "./sync-counter.ts";
 
 /** The user's provider order, best first. Empty until the user sets one. */
-export const providerOrder = (userId: UserId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({ providerRanking: sourcePreference.providerRanking })
-      .from(sourcePreference)
-      .where(eq(sourcePreference.userId, userId));
-    return row?.providerRanking ?? [];
-  });
+export const providerOrder = Effect.gen(function* () {
+  const db = yield* Database;
+  const [row] = yield* db
+    .select({ providerRanking: sourcePreference.providerRanking })
+    .from(sourcePreference);
+  return row?.providerRanking ?? [];
+});
 
 /** The order first, then local files, then the other providers of the known sources by name */
 export const listProviderChoices = Effect.gen(function* () {
   const db = yield* Database;
   const providers = yield* Providers;
-  const principal = yield* CurrentPrincipal;
-  const order = yield* providerOrder(principal.userId);
+  const order = yield* providerOrder;
   const known = yield* db.selectDistinct({ provider: source.provider }).from(source);
 
   const nameOf = (provider: string) => {
@@ -57,11 +48,9 @@ export const listProviderChoices = Effect.gen(function* () {
 export const setProviderOrder = (providerRanking: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const clock = yield* HlcClock;
-    const principal = yield* CurrentPrincipal;
     const row = new SourcePreferenceRow({
       table: "source_preference",
-      id: yield* sourcePreferenceId(principal.userId),
-      userId: principal.userId,
+      id: yield* sourcePreferenceId,
       scope: "global",
       providerRanking,
       hlc: yield* clock.next,

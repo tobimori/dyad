@@ -8,8 +8,7 @@ import {
   sourceVariant,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CurrentPrincipal, RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
-import type { UserId } from "@dyad/domain";
+import { RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
 import { and, eq, getColumns, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
@@ -310,13 +309,13 @@ const bound = alias(recording, "bound");
 const canonical = alias(recording, "canonical");
 
 /**
- * The sources that `userId` can play, one row per source: a file on this replica, or a source of
+ * The sources that the owner can play, one row per source: a file on this replica, or a source of
  * a linked provider
  */
-export const playableSources = (userId: UserId, match?: SQL, limit?: number) =>
+export const playableSources = (match?: SQL, limit?: number) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const providers = yield* linkedProviders(userId);
+    const providers = yield* linkedProviders;
 
     const query = db
       .select({
@@ -433,9 +432,8 @@ export const sourceSummary = (row: {
 export const position = (tags: typeof Tags.Type, key: "disc" | "track") =>
   Number.parseInt(tags[key] ?? "", 10) || null;
 
-/** Local files only: provider sources come from other users' private libraries */
+/** The files on this replica */
 export const listSources = Effect.gen(function* () {
-  const principal = yield* CurrentPrincipal;
-  const rows = yield* playableSources(principal.userId, isNotNull(localFile.id));
+  const rows = yield* playableSources(isNotNull(localFile.id));
   return rows.map(sourceSummary);
 });

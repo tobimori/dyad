@@ -1,16 +1,9 @@
 import { Effect, Schema } from "effect";
 
-import {
-  DeviceId,
-  PlayContext,
-  RecordingId,
-  ReplicaId,
-  UserId,
-  WorkspaceId,
-} from "./primitives.ts";
+import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 8;
+export const syncProtocolVersion = 9;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -23,7 +16,7 @@ export type HybridLogicalClock = typeof HybridLogicalClock.Type;
 
 const Uuid = Schema.String.check(Schema.isUUID());
 
-/** What a user can add to the library: a song, an album (provider release) or an artist */
+/** What the owner can add to the library: a song, an album (provider release) or an artist */
 export const LibraryEntityType = Schema.Literals(["recording", "release", "artist"]);
 export type LibraryEntityType = typeof LibraryEntityType.Type;
 
@@ -36,11 +29,10 @@ export const LibraryOrigin = Schema.String.check(
 /** One library membership. Each write sets all fields. */
 export class LibraryItemRow extends Schema.Class<LibraryItemRow>("LibraryItemRow")({
   table: Schema.Literal("library_item"),
-  /** UUIDv5 of `library_item:<user_id>:<entity_type>:<entity_id>:<origin>` */
+  /** UUIDv5 of `library_item:<entity_type>:<entity_id>:<origin>` */
   id: Uuid,
-  userId: UserId,
   entityType: LibraryEntityType,
-  /** The bound recording, the provider release or the catalog artist that the user saved */
+  /** The bound recording, the provider release or the catalog artist that the owner saved */
   entityId: Uuid,
   origin: LibraryOrigin,
   addedAt: Schema.Int,
@@ -76,7 +68,6 @@ export class PlaylistLinkState extends Schema.Class<PlaylistLinkState>("Playlist
 export class PlaylistRow extends Schema.Class<PlaylistRow>("PlaylistRow")({
   table: Schema.Literal("playlist"),
   id: Uuid,
-  ownerId: UserId,
   name: Schema.String,
   origin: Schema.NullOr(Schema.String),
   link: Schema.NullOr(PlaylistLink).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
@@ -105,7 +96,6 @@ export class PlayEventRow extends Schema.Class<PlayEventRow>("PlayEventRow")({
   table: Schema.Literal("play_event"),
   /** UUIDv7 */
   id: Uuid,
-  userId: UserId,
   deviceId: DeviceId,
   sourceId: Uuid,
   recordingId: Schema.NullOr(RecordingId),
@@ -122,24 +112,22 @@ export const ProviderRanking = Schema.Array(Schema.String.check(Schema.isMaxLeng
   Schema.isMaxLength(100),
 );
 
-/** How the user orders the sources of a recording. Each write sets all fields. */
+/** How the owner orders the sources of a recording. Each write sets all fields. */
 export class SourcePreferenceRow extends Schema.Class<SourcePreferenceRow>("SourcePreferenceRow")({
   table: Schema.Literal("source_preference"),
-  /** UUIDv5 of `source_preference:<user_id>:<scope>` */
+  /** UUIDv5 of `source_preference:<scope>` */
   id: Uuid,
-  userId: UserId,
   scope: Schema.Literal("global"),
   /** Providers that it leaves out come after the others */
   providerRanking: ProviderRanking,
   hlc: HybridLogicalClock,
 }) {}
 
-/** The user loves the entity. One row per user and entity; each write sets all fields. */
+/** The owner loves the entity. One row per entity; each write sets all fields. */
 export class RatingRow extends Schema.Class<RatingRow>("RatingRow")({
   table: Schema.Literal("rating"),
-  /** UUIDv5 of `rating:<user_id>:<entity_type>:<entity_id>` */
+  /** UUIDv5 of `rating:<entity_type>:<entity_id>` */
   id: Uuid,
-  userId: UserId,
   entityType: LibraryEntityType,
   /** As in `LibraryItemRow` */
   entityId: Uuid,
@@ -215,7 +203,6 @@ export class CatalogAssertionRow extends Schema.Class<CatalogAssertionRow>("Cata
   originRevision: Schema.NullOr(Schema.String),
   evidence: Schema.Unknown,
   confidence: Schema.Finite,
-  authorUserId: Schema.NullOr(Schema.String),
   authorReplicaId: Schema.String,
   hlc: HybridLogicalClock,
   retracted: Schema.Boolean,
@@ -233,7 +220,6 @@ export class EntityMergeRow extends Schema.Class<EntityMergeRow>("EntityMergeRow
   method: Schema.Literals(["mbid_tag", "isrc", "mapper", "manual", "shared_recording", "url_rel"]),
   confidence: Schema.Finite,
   evidence: Schema.Unknown,
-  authorUserId: Schema.NullOr(Schema.String),
   hlc: HybridLogicalClock,
 }) {}
 
@@ -264,7 +250,6 @@ export type CatalogInputRow = typeof CatalogInputRow.Type;
 export class ProviderAccountRow extends Schema.Class<ProviderAccountRow>("ProviderAccountRow")({
   table: Schema.Literal("provider_account"),
   id: Uuid,
-  userId: UserId,
   provider: Schema.String,
   displayName: Schema.String,
   createdAt: Schema.Int,
@@ -277,9 +262,8 @@ export class LibraryRemoteTrackRow extends Schema.Class<LibraryRemoteTrackRow>(
   "LibraryRemoteTrackRow",
 )({
   table: Schema.Literal("library_remote_track"),
-  /** `<user_id>:<provider>:<recording_id>` */
+  /** `<provider>:<recording_id>` */
   id: Schema.String,
-  userId: UserId,
   provider: Schema.String,
   recordingId: Uuid,
   remoteId: Schema.String,
@@ -341,22 +325,14 @@ export class PeerRedeemRequest extends Schema.Class<PeerRedeemRequest>("PeerRede
   protocolVersion: Schema.Int,
 }) {}
 
-/** The admin who made the pairing code. A server that joins makes its first admin with this ID. */
-export class PeerAdmin extends Schema.Class<PeerAdmin>("PeerAdmin")({
-  id: UserId,
-  username: Schema.String,
-  role: Schema.Literals(["admin", "member"]),
-}) {}
-
 export class PeerLink extends Schema.Class<PeerLink>("PeerLink")({
   /** The redeeming server keeps it secret. The other server stores only its hash. */
   token: Schema.String,
   replicaId: ReplicaId,
   workspaceId: WorkspaceId,
-  admin: PeerAdmin,
 }) {}
 
-/** A paired server replica, as an admin sees it */
+/** A paired server replica */
 export class ServerPeer extends Schema.Class<ServerPeer>("ServerPeer")({
   replicaId: ReplicaId,
   /** Set when this server connects to the peer, null when the peer connects to this server */
@@ -374,7 +350,6 @@ export class ServerPairingFailed extends Schema.TaggedError<ServerPairingFailed>
   "ServerPairingFailed",
   {
     reason: Schema.Literals([
-      "not_admin",
       "invalid_code",
       "workspace_mismatch",
       "same_server",

@@ -25,7 +25,6 @@ const serve = (socket: Socket.Socket) =>
     const principal = yield* principalOf(hello.value.token);
 
     const client = new TimedClient({
-      userId: principal.userId,
       deviceId: principal.deviceId,
       receiver: hello.value.receiver,
       send,

@@ -1,7 +1,6 @@
 import { playlist, playlistEntry, source } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import {
-  CurrentPrincipal,
   PlaylistEntryRow,
   PlaylistLink,
   PlaylistNotFound,
@@ -23,7 +22,6 @@ import { patchPlaylist } from "./user-library.ts";
 
 export const listPlaylists = Effect.gen(function* () {
   const db = yield* Database;
-  const principal = yield* CurrentPrincipal;
   const rows = yield* db
     .select({ playlist, entryCount: count(playlistEntry.id) })
     .from(playlist)
@@ -31,7 +29,7 @@ export const listPlaylists = Effect.gen(function* () {
       playlistEntry,
       and(eq(playlistEntry.playlistId, playlist.id), eq(playlistEntry.deleted, false)),
     )
-    .where(and(eq(playlist.ownerId, principal.userId), eq(playlist.deleted, false)))
+    .where(eq(playlist.deleted, false))
     .groupBy(playlist.id);
 
   return rows
@@ -66,9 +64,8 @@ const liveEntries = (playlistId: string) =>
 
 const ownedPlaylist = (playlistId: string) =>
   Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
     const row = yield* readRow("playlist", playlistId);
-    if (row?.table !== "playlist" || row.deleted || row.ownerId !== principal.userId) {
+    if (row?.table !== "playlist" || row.deleted) {
       return yield* new PlaylistNotFound();
     }
     return row;
@@ -139,12 +136,10 @@ export const createPlaylist = (
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const clock = yield* HlcClock;
-    const principal = yield* CurrentPrincipal;
     const hlc = yield* clock.next;
     const row = new PlaylistRow({
       table: "playlist",
       id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
-      ownerId: principal.userId,
       name,
       origin: null,
       link:

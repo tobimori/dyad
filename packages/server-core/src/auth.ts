@@ -1,4 +1,4 @@
-import { device, serverPeer, user } from "@dyad/db";
+import { device, serverPeer } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   Authentication,
@@ -10,73 +10,15 @@ import {
   PairingCode,
   Principal,
   Unauthorized,
-  UserId,
 } from "@dyad/domain";
-import { and, asc, eq } from "drizzle-orm";
-import { Clock, Context, Crypto, Data, Effect, Layer, Option, Ref } from "effect";
+import { eq } from "drizzle-orm";
+import { Clock, Context, Crypto, Effect, Layer, Ref } from "effect";
 
-import { fromHex, hex } from "./ids.ts";
+import { hex } from "./ids.ts";
 import { Sessions } from "./sessions.ts";
-
-// Compares all characters, so that the time does not show how many characters match
-const equalSecrets = (a: string, b: string) => {
-  if (a.length !== b.length) return false;
-
-  let difference = 0;
-  for (let index = 0; index < a.length; index++) {
-    difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
-  return difference === 0;
-};
-
-// OWASP recommendation for PBKDF2-HMAC-SHA256 in 2023. WebCrypto has no memory-hard function, and
-// Node, Electron and browsers all have PBKDF2.
-const passwordIterations = 600_000;
-
-// Hash of a random password that nobody knows. `login` checks a password against it when the user
-// does not exist, so that the answer takes as long as for a wrong password.
-const unknownUserHash =
-  "pbkdf2-sha256$600000$d41daee5d6c3fab7525367021d62d6ad$778c3d7ea05bb6eabd68179a70bfedd695ed7dca46eecc3cf346d4c742634f0f";
-
-const pbkdf2 = (password: string, salt: Uint8Array, iterations: number) =>
-  Effect.gen(function* () {
-    const key = yield* Effect.promise(() =>
-      globalThis.crypto.subtle.importKey(
-        "raw",
-        new TextEncoder().encode(password),
-        "PBKDF2",
-        false,
-        ["deriveBits"],
-      ),
-    );
-    const bits = yield* Effect.promise(() =>
-      globalThis.crypto.subtle.deriveBits(
-        { name: "PBKDF2", hash: "SHA-256", salt, iterations },
-        key,
-        256,
-      ),
-    );
-    return new Uint8Array(bits);
-  });
 
 export const randomBytes = (size: number) =>
   Crypto.Crypto.use((crypto) => crypto.randomBytes(size)).pipe(Effect.orDie);
-
-export const hashPassword = (password: string) =>
-  Effect.gen(function* () {
-    const salt = yield* randomBytes(16);
-    const hash = yield* pbkdf2(password, salt, passwordIterations);
-    return `pbkdf2-sha256$${passwordIterations}$${hex(salt)}$${hex(hash)}`;
-  });
-
-const verifyPassword = (password: string, stored: string) =>
-  Effect.gen(function* () {
-    const [scheme, iterations, salt, expected] = stored.split("$");
-    if (scheme !== "pbkdf2-sha256" || salt === undefined || expected === undefined) return false;
-
-    const hash = yield* pbkdf2(password, fromHex(salt), Number(iterations));
-    return equalSecrets(hex(hash), expected);
-  });
 
 export const sha256 = (value: string) =>
   Effect.gen(function* () {
@@ -100,44 +42,62 @@ export const normalizeCode = (code: string) => {
   return `${characters.slice(0, 4)}-${characters.slice(4)}`;
 };
 
-class PendingPairing extends Data.Class<{ readonly userId: UserId; readonly expiresAt: number }> {}
-
-const pairingLifetimeMs = 5 * 60 * 1000;
+const codeLifetimeMs = 10 * 60 * 1000;
 
 /**
- * Short-lived codes stay in memory, so a server restart cancels them. The server then logs a new
- * setup code, and a signed-in device can make a new pairing code.
+ * Pairing codes for devices and replicas. They stay in memory, so a restart cancels them. While the
+ * replica has no paired device and no paired replica, its log shows a code that does not expire.
  */
-class AuthCodes extends Context.Service<
-  AuthCodes,
-  {
-    /** Exists only while the replica has no user */
-    readonly setup: Ref.Ref<Option.Option<string>>;
-    readonly pairings: Ref.Ref<ReadonlyMap<string, PendingPairing>>;
-  }
->()("@dyad/server-core/AuthCodes") {}
+export class PairingCodes extends Context.Service<
+  PairingCodes,
+  Ref.Ref<ReadonlyMap<string, number>>
+>()("@dyad/server-core/PairingCodes") {}
 
-export const authCodesLayer = Layer.effect(
-  AuthCodes,
+export const pairingCodesLayer = Layer.effect(
+  PairingCodes,
   Effect.gen(function* () {
     const db = yield* Database;
-    const users = yield* db.$count(user);
-    const setup = yield* Ref.make(Option.none<string>());
+    const codes = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+    if ((yield* db.$count(device)) + (yield* db.$count(serverPeer)) > 0) return codes;
 
-    if (users === 0) {
-      const code = yield* randomCode;
-      yield* Ref.set(setup, Option.some(code));
-      // The setup code is the only way to create the first admin, so the operator must see it
-      yield* Effect.logWarning(`No user exists. Create the first admin with setup code ${code}`);
-    }
-
-    const pairings = yield* Ref.make<ReadonlyMap<string, PendingPairing>>(new Map());
-    return { setup, pairings };
+    const code = yield* randomCode;
+    yield* Ref.set(codes, new Map([[code, Number.POSITIVE_INFINITY]]));
+    // The only way in, so the operator must see it
+    yield* Effect.logWarning(
+      `Nothing is paired. Pair the first device or replica with code ${code}`,
+    );
+    return codes;
   }).pipe(Effect.orDie),
 );
 
-/** Adds a device of `userId` and returns its token */
-export const createDevice = (userId: UserId, name: string) =>
+export const createPairingCode = Effect.gen(function* () {
+  const codes = yield* PairingCodes;
+  const now = yield* Clock.currentTimeMillis;
+  const code = yield* randomCode;
+  const expiresAt = now + codeLifetimeMs;
+
+  yield* Ref.update(codes, (pending) =>
+    new Map([...pending].filter(([, expiry]) => expiry > now)).set(code, expiresAt),
+  );
+  return new PairingCode({ code, expiresAt });
+});
+
+/** Removes the code, because a code works once. `false` if it is wrong or expired. */
+export const redeemCode = (code: string) =>
+  Effect.gen(function* () {
+    const codes = yield* PairingCodes;
+    const now = yield* Clock.currentTimeMillis;
+    const normalized = normalizeCode(code);
+    const expiresAt = yield* Ref.modify(codes, (pending) => {
+      const next = new Map(pending);
+      next.delete(normalized);
+      return [pending.get(normalized), next];
+    });
+    return expiresAt !== undefined && expiresAt > now;
+  });
+
+/** Adds a device and returns its token */
+export const createDevice = (name: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const crypto = yield* Crypto.Crypto;
@@ -146,115 +106,25 @@ export const createDevice = (userId: UserId, name: string) =>
 
     yield* db.insert(device).values({
       id,
-      userId,
       name,
       tokenHash: yield* sha256(token),
       createdAt: yield* Clock.currentTimeMillis,
     });
 
-    return new DeviceSession({ token, principal: new Principal({ userId, deviceId: id }) });
+    return new DeviceSession({ token, principal: new Principal({ deviceId: id }) });
   });
-
-export const setup = ({
-  setupCode,
-  username,
-  password,
-  deviceName,
-}: {
-  readonly setupCode: string;
-  readonly username: string;
-  readonly password: string;
-  readonly deviceName: string;
-}) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const crypto = yield* Crypto.Crypto;
-    const codes = yield* AuthCodes;
-
-    // Check and clear in one step, so that two requests with the code cannot create two admins
-    const code = normalizeCode(setupCode);
-    const result = yield* Ref.modify(codes.setup, (current) => {
-      if (Option.isNone(current)) return ["already_set_up", current] as const;
-      if (!equalSecrets(code, current.value)) return ["invalid_code", current] as const;
-      return ["claimed", Option.none<string>()] as const;
-    });
-    if (result !== "claimed") return yield* new AuthenticationFailed({ reason: result });
-
-    return yield* Effect.gen(function* () {
-      const userId = UserId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
-      yield* db.insert(user).values({
-        id: userId,
-        username,
-        passwordHash: yield* hashPassword(password),
-        role: "admin",
-        createdAt: yield* Clock.currentTimeMillis,
-      });
-      return yield* createDevice(userId, deviceName);
-    }).pipe(
-      // Without the code, a failed setup would leave the server without a way to create an admin
-      Effect.onError(() => Ref.set(codes.setup, Option.some(code))),
-    );
-  });
-
-export const login = ({
-  username,
-  password,
-  deviceName,
-}: {
-  readonly username: string;
-  readonly password: string;
-  readonly deviceName: string;
-}) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db.select().from(user).where(eq(user.username, username)).limit(1);
-
-    const valid = yield* verifyPassword(password, row?.passwordHash ?? unknownUserHash);
-    if (row === undefined || !valid) {
-      return yield* new AuthenticationFailed({ reason: "invalid_credentials" });
-    }
-
-    return yield* createDevice(UserId.make(row.id), deviceName);
-  });
-
-export const createPairingCode = Effect.gen(function* () {
-  const principal = yield* CurrentPrincipal;
-  const codes = yield* AuthCodes;
-  const now = yield* Clock.currentTimeMillis;
-  const code = yield* randomCode;
-  const expiresAt = now + pairingLifetimeMs;
-
-  yield* Ref.update(codes.pairings, (pairings) => {
-    const next = new Map([...pairings].filter(([, pairing]) => pairing.expiresAt > now));
-    next.set(code, new PendingPairing({ userId: principal.userId, expiresAt }));
-    return next;
-  });
-  return new PairingCode({ code, expiresAt });
-});
 
 export const pair = (code: string, deviceName: string) =>
   Effect.gen(function* () {
-    const codes = yield* AuthCodes;
-    const now = yield* Clock.currentTimeMillis;
-    const normalized = normalizeCode(code);
-
-    // A code works once
-    const pairing = yield* Ref.modify(codes.pairings, (pairings) => {
-      const next = new Map(pairings);
-      next.delete(normalized);
-      return [pairings.get(normalized), next];
-    });
-    if (pairing === undefined || pairing.expiresAt <= now) {
+    if (!(yield* redeemCode(code)))
       return yield* new AuthenticationFailed({ reason: "invalid_code" });
-    }
-
-    return yield* createDevice(pairing.userId, deviceName);
+    return yield* createDevice(deviceName);
   });
 
 export const listDevices = Effect.gen(function* () {
   const db = yield* Database;
   const principal = yield* CurrentPrincipal;
-  const rows = yield* db.select().from(device).where(eq(device.userId, principal.userId));
+  const rows = yield* db.select().from(device);
 
   return rows.map(
     (row) =>
@@ -270,13 +140,10 @@ export const listDevices = Effect.gen(function* () {
 export const removeDevice = (deviceId: DeviceId) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
-    yield* db
-      .delete(device)
-      .where(and(eq(device.id, deviceId), eq(device.userId, principal.userId)));
+    yield* db.delete(device).where(eq(device.id, deviceId));
 
     // Authentication checks a token only when a request starts, so open streams must end
-    yield* (yield* Sessions).removeDevice(principal.userId, deviceId);
+    yield* (yield* Sessions).session.removeDevice(deviceId);
   });
 
 /** The device of a device token */
@@ -285,32 +152,21 @@ export const principalOf = (token: string) =>
     const db = yield* Database;
     const tokenHash = yield* sha256(token);
     const [row] = yield* db
-      .select({ id: device.id, userId: device.userId })
+      .select({ id: device.id })
       .from(device)
       .where(eq(device.tokenHash, tokenHash))
       .limit(1)
       .pipe(orDieOnDatabaseError("authenticate"));
-    if (row !== undefined) {
-      return new Principal({ userId: UserId.make(row.userId), deviceId: DeviceId.make(row.id) });
-    }
+    if (row !== undefined) return new Principal({ deviceId: DeviceId.make(row.id) });
 
-    // A paired replica acts for the owner, with its replica ID as device ID
+    // A paired replica uses its replica ID as device ID
     const [peer] = yield* db
       .select({ replicaId: serverPeer.replicaId })
       .from(serverPeer)
       .where(eq(serverPeer.tokenHash, tokenHash))
       .pipe(orDieOnDatabaseError("authenticate"));
-    const [owner] = yield* db
-      .select({ id: user.id })
-      .from(user)
-      .orderBy(asc(user.createdAt))
-      .limit(1)
-      .pipe(orDieOnDatabaseError("authenticate"));
-    if (peer === undefined || owner === undefined) return yield* new Unauthorized();
-    return new Principal({
-      userId: UserId.make(owner.id),
-      deviceId: DeviceId.make(peer.replicaId),
-    });
+    if (peer === undefined) return yield* new Unauthorized();
+    return new Principal({ deviceId: DeviceId.make(peer.replicaId) });
   });
 
 export const authenticationLayer = Layer.effect(

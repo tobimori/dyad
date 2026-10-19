@@ -1,12 +1,6 @@
-import { catalogAssertion, recording, source, sourceSegment, user } from "@dyad/db";
+import { catalogAssertion, recording, source, sourceSegment } from "@dyad/db";
 import { Database, ReplicaDatabase } from "@dyad/db/node";
-import {
-  CurrentPrincipal,
-  RecordingId,
-  SourceSegment,
-  TracklistEditFailed,
-  UserId,
-} from "@dyad/domain";
+import { RecordingId, SourceSegment, TracklistEditFailed } from "@dyad/domain";
 import { TracklistEntry } from "@dyad/plugin";
 import type {
   MusicBrainzRecording,
@@ -79,7 +73,6 @@ const writeAssertion = (
     readonly value: unknown;
     readonly confidence: number;
     readonly evidence: unknown;
-    readonly authorUserId: UserId | null;
   },
 ) =>
   Effect.gen(function* () {
@@ -125,7 +118,6 @@ const assertTracklist = (
     readonly originRef: string;
     readonly value: typeof Entries.Encoded | null;
     readonly confidence: number;
-    readonly authorUserId: UserId | null;
   },
 ) =>
   writeAssertion(
@@ -186,7 +178,6 @@ const assertProviderTracklists = (
         originRef: `${prefix}${tracklist.part}`,
         value: Schema.encodeSync(Entries)(tracklist.entries),
         confidence: tracklist.confidence,
-        authorUserId: null,
       }),
     );
     const lost = (yield* tracklistAssertions(sourceId)).filter(
@@ -467,7 +458,7 @@ const queueMatch = (sourceId: string) =>
  * Reads the tracklists of a provider source and, for a set, of the tracklist sites in the
  * background when it plays, at most once a day. Call it after the source is in the catalog.
  */
-export const queueTracklistRead = (sourceId: string, userId: UserId) =>
+export const queueTracklistRead = (sourceId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const tracklists = yield* Tracklists;
@@ -485,12 +476,12 @@ export const queueTracklistRead = (sourceId: string, userId: UserId) =>
 
     tracklists.readAt.set(sourceId, now);
     // The user waits for it, so it runs before imports and lookups
-    yield* (yield* Jobs).enqueue(readKind, sourceId, { sourceId, userId }, { priority: 1 });
+    yield* (yield* Jobs).enqueue(readKind, sourceId, { sourceId }, { priority: 1 });
   });
 
-const ReadPayload = Schema.Struct({ sourceId: Schema.String, userId: UserId });
+const ReadPayload = Schema.Struct({ sourceId: Schema.String });
 
-const runRead = ({ sourceId, userId }: typeof ReadPayload.Type) =>
+const runRead = ({ sourceId }: typeof ReadPayload.Type) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const tracklists = yield* Tracklists;
@@ -507,7 +498,7 @@ const runRead = ({ sourceId, userId }: typeof ReadPayload.Type) =>
         return undefined;
       });
 
-    const usable = (yield* usableProviders(userId)).get(row.provider);
+    const usable = (yield* usableProviders).get(row.provider);
     const read = usable?.provider.tracklists;
     const own =
       usable === undefined || read === undefined
@@ -574,7 +565,6 @@ const assertMatch = (text: typeof EntryText.Type, recordingId: string) =>
       value: recordingId,
       confidence: 1,
       evidence: text,
-      authorUserId: null,
     });
   });
 
@@ -670,7 +660,7 @@ const runMatch = ({ sourceId, after }: typeof MatchPayload.Type) =>
   });
 
 /** The segments of the source, with the canonical fields of the matched recordings */
-const segmentsOf = (sourceId: string, userId: UserId) =>
+const segmentsOf = (sourceId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
     const rows = yield* db
@@ -698,7 +688,6 @@ const segmentsOf = (sourceId: string, userId: UserId) =>
       groups.length === 0
         ? []
         : yield* playableSources(
-            userId,
             inArray(
               source.recordingId,
               groups.map((row) => row.id),
@@ -734,13 +723,12 @@ const segmentsOf = (sourceId: string, userId: UserId) =>
 export const sourceSegments = (sourceId: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const principal = yield* CurrentPrincipal;
       const subscription = yield* PubSub.subscribe((yield* Tracklists).changes);
 
       return Stream.concat(
         Stream.succeed(sourceId),
         Stream.fromSubscription(subscription).pipe(Stream.filter((id) => id === sourceId)),
-      ).pipe(Stream.mapEffect(() => segmentsOf(sourceId, principal.userId)));
+      ).pipe(Stream.mapEffect(() => segmentsOf(sourceId)));
     }),
   );
 
@@ -751,13 +739,6 @@ export const sourceSegments = (sourceId: string) =>
 export const hideTracklist = (sourceId: string, hidden: boolean) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
-
-    const [author] = yield* db
-      .select({ role: user.role })
-      .from(user)
-      .where(eq(user.id, principal.userId));
-    if (author?.role !== "admin") return yield* new TracklistEditFailed({ reason: "not_admin" });
 
     const [row] = yield* db.select({ id: source.id }).from(source).where(eq(source.id, sourceId));
     if (row === undefined) return yield* new TracklistEditFailed({ reason: "source_not_found" });
@@ -770,7 +751,6 @@ export const hideTracklist = (sourceId: string, hidden: boolean) =>
             ...admin,
             value: null,
             confidence: 1,
-            authorUserId: principal.userId,
           });
         } else {
           const id = yield* assertionId({
