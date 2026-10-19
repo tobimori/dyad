@@ -663,6 +663,12 @@ export class QueueEntry extends Schema.Class<QueueEntry>("QueueEntry")({
   ),
 }) {}
 
+/** The copy that the room plays for an entry, when it is not the entry's `source` */
+export class EntryCopy extends Schema.Class<EntryCopy>("EntryCopy")({
+  entryId: EntryId,
+  source: SourceSummary,
+}) {}
+
 /** The transport of a room. `positionAt` gives the position at a server time. */
 export class Playback extends Schema.Class<Playback>("Playback")({
   state: Schema.Literals(["stopped", "paused", "playing"]),
@@ -744,6 +750,7 @@ export const SessionEvent = Schema.TaggedUnion({
     nextEntryId: Schema.Int,
     entries: Schema.Array(QueueEntry),
     playback: Playback,
+    copies: Schema.Array(EntryCopy),
   },
   /** Apply only when `fromVersion` is the version of the local queue, else connect again */
   QueueChanged: {
@@ -753,6 +760,11 @@ export const SessionEvent = Schema.TaggedUnion({
     splices: Schema.Array(QueueSplice),
   },
   PlaybackChanged: { room: OutputId, serverTime: Schema.Number, playback: Playback },
+  /**
+   * The copies of the entry that plays and of the next entries, as far as the room knows them.
+   * Replaces the copies before.
+   */
+  CopiesChanged: { room: OutputId, copies: Schema.Array(EntryCopy) },
   RoomRemoved: { room: OutputId },
   OutputsChanged: { outputs: Schema.Array(Output) },
   /** A newer connection of the same device plays. This connection continues as a controller. */

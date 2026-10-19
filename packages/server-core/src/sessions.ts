@@ -2,6 +2,7 @@ import { device, providerItem, source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   CurrentPrincipal,
+  EntryCopy,
   EntryId,
   Output,
   OutputId,
@@ -43,7 +44,7 @@ import {
 
 import { insertPlay } from "./history.ts";
 import { Outputs } from "./outputs.ts";
-import { hintPrefetch } from "./playback.ts";
+import { expectedCopy, hintPrefetch } from "./playback.ts";
 import { queueCopyDiscovery } from "./source-copies.ts";
 import { Receivers, deviceOutput, isDeviceOutput } from "./receivers.ts";
 import { usableProviders } from "./providers.ts";
@@ -147,11 +148,15 @@ class OpenPlay extends Data.Class<{
   readonly resumedAt: number | null;
 }> {}
 
+const noCopies: ReadonlyArray<EntryCopy> = [];
+
 const makeSession = Effect.fn(function* (
   room: OutputId,
   initial: SessionState,
   household: ReturnType<typeof makeHousehold>,
   prefetch: (sourceIds: ReadonlyArray<string>) => void,
+  // The entries whose copies clients see
+  wantCopies: (entries: ReadonlyArray<QueueEntry>) => void,
   queueEnds: (entries: ReadonlyArray<QueueEntry>) => void,
   // A device volume changed
   outputsChanged: () => void,
@@ -181,6 +186,9 @@ const makeSession = Effect.fn(function* (
     ended: Option.none<EntryId>(),
     // The sources of the last prefetch hint, joined
     prefetched: "",
+    copies: noCopies,
+    // The entries of the last copies request, joined
+    copiesFor: "",
     // Set while the output is a URL output
     urlDriver: Option.none<UrlDriver>(),
     // Set while the output is a timed output
@@ -337,15 +345,16 @@ const makeSession = Effect.fn(function* (
   });
 
   // The next two entries that a skip or the end of an entry can start
-  const upcomingSources = () => {
+  const upcomingEntries = () => {
     const { entryId, repeat, state: transport } = state.playback;
     // A paused session can wait for weeks, for example after a restart
     if (transport !== "playing") return [];
 
     const first = nextEntry(state.entries, entryId, repeat, "skip");
     const second = first && nextEntry(state.entries, first.id, repeat, "skip");
-    const entries = [first, second].filter((entry) => entry && entry.id !== entryId);
-    return [...new Set(entries.flatMap((entry) => entry?.source.id ?? []))];
+    return [first, second].flatMap((entry) =>
+      entry === undefined || entry.id === entryId ? [] : [entry],
+    );
   };
 
   // The current entry and the entries that follow it, until one repeats
@@ -435,10 +444,21 @@ const makeSession = Effect.fn(function* (
         if (changed) state.dirty = true;
         yield* trackPlay(now);
 
-        const upcoming = upcomingSources();
+        const next = upcomingEntries();
+        const upcoming = [...new Set(next.map((entry) => entry.source.id))];
         if (upcoming.join(" ") !== state.prefetched) {
           state.prefetched = upcoming.join(" ");
           prefetch(upcoming);
+        }
+        // A pinned entry plays its own copy
+        const shown = [currentEntry(), ...next].flatMap((entry) =>
+          entry === undefined || entry.pinned ? [] : [entry],
+        );
+        // Again once the entry plays, after a failed copy and after copy discovery
+        const copiesFor = `${state.playback.rate} ${shown.map((entry) => `${entry.id}:${entry.source.id}`).join(" ")}`;
+        if (copiesFor !== state.copiesFor) {
+          state.copiesFor = copiesFor;
+          wantCopies(shown);
         }
         const { entryId, repeat, autoplay } = state.playback;
         // A paused room has no upcoming sources either
@@ -1075,6 +1095,7 @@ const makeSession = Effect.fn(function* (
             nextEntryId: state.nextEntryId,
             entries: state.entries,
             playback: state.playback,
+            copies: state.copies,
           }),
         );
         connection.rooms.add(room);
@@ -1261,8 +1282,20 @@ const makeSession = Effect.fn(function* (
     ),
   );
 
+  const setCopies = (copies: ReadonlyArray<EntryCopy>) =>
+    lock.withPermits(1)(
+      Effect.sync(() => {
+        const key = (list: ReadonlyArray<EntryCopy>) =>
+          list.map((copy) => `${copy.entryId}:${copy.source.id}`).join(" ");
+        if (key(copies) === key(state.copies)) return;
+        state.copies = copies;
+        broadcast(SessionEvent.cases.CopiesChanged.make({ room, copies }));
+      }),
+    );
+
   return {
     subscribe,
+    setCopies,
     playerJoined,
     playerLeft,
     idle,
@@ -1292,6 +1325,7 @@ const makeSessions = Effect.gen(function* () {
           | typeof hintPrefetch
           | typeof continueRadio
           | typeof queueCopyDiscovery
+          | typeof expectedCopy
         >
       >
     >();
@@ -1342,6 +1376,30 @@ const makeSessions = Effect.gen(function* () {
     ),
   );
 
+  // The latest request of a room replaces its older one
+  const copyRequests = yield* Queue.unbounded<{
+    readonly room: OutputId;
+    readonly entries: ReadonlyArray<QueueEntry>;
+  }>();
+  yield* Effect.forkScoped(
+    Effect.forever(
+      Effect.flatMap(Queue.take(copyRequests), ({ room, entries }) =>
+        Effect.gen(function* () {
+          const copies = yield* Effect.forEach(entries, (entry) =>
+            Effect.map(expectedCopy(entry.source.id), (copy) =>
+              copy === null ? [] : [new EntryCopy({ entryId: entry.id, source: copy })],
+            ),
+          );
+          yield* rooms.get(room)?.setCopies(copies.flat()) ?? Effect.void;
+        }).pipe(
+          orDieOnDatabaseError("expectedCopy"),
+          Effect.provide(services),
+          Effect.catchCause((cause) => Effect.logError("Cannot find the copies for a room", cause)),
+        ),
+      ),
+    ),
+  );
+
   // Radio requests take seconds, so they run outside the room lock
   const endings = yield* Queue.unbounded<{
     readonly room: OutputId;
@@ -1372,6 +1430,7 @@ const makeSessions = Effect.gen(function* () {
       initial,
       household,
       (sourceIds) => Queue.offerUnsafe(prefetches, { room, sourceIds }),
+      (entries) => Queue.offerUnsafe(copyRequests, { room, entries }),
       (entries) => Queue.offerUnsafe(endings, { room, entries }),
       broadcastOutputs,
     ).pipe(Effect.provide(services));

@@ -361,17 +361,7 @@ export const choosePlayableCopy = Effect.fn("choosePlayableCopy")(function* (
   pinned: boolean,
   capabilities: PlaybackCapabilities,
 ) {
-  const providers = yield* Providers;
-  const [own] = yield* playableSources(eq(source.id, sourceId));
-  const ownProvider =
-    own?.source.provider ?? Option.getOrUndefined(yield* cachedProviderSource(sourceId))?.provider;
-  const copies = (yield* playableCopies(sourceId)).map((row) => row.source.id);
-  const others = copies.filter((id) => id !== sourceId);
-  const linked = ownProvider !== undefined && providers.get(ownProvider)?.links === true;
-  const candidates = [
-    ...new Set(pinned && !linked ? [sourceId, ...others] : [...copies, sourceId]),
-  ];
-
+  const candidates = yield* copyCandidates(sourceId, pinned);
   const failures: Array<PlaybackUnavailable | ProviderError> = [];
   for (const candidate of candidates) {
     const result = yield* tryCopy(candidate, capabilities);
@@ -390,6 +380,32 @@ export const choosePlayableCopy = Effect.fn("choosePlayableCopy")(function* (
   return yield* new PlaybackUnavailable({
     reason: Schema.is(PlaybackUnavailable)(first) ? first.reason : "failed",
   });
+});
+
+const copyCandidates = Effect.fn(function* (sourceId: string, pinned: boolean) {
+  const providers = yield* Providers;
+  const [own] = yield* playableSources(eq(source.id, sourceId));
+  const ownProvider =
+    own?.source.provider ?? Option.getOrUndefined(yield* cachedProviderSource(sourceId))?.provider;
+  const copies = (yield* playableCopies(sourceId)).map((row) => row.source.id);
+  const others = copies.filter((id) => id !== sourceId);
+  const linked = ownProvider !== undefined && providers.get(ownProvider)?.links === true;
+  return [...new Set(pinned && !linked ? [sourceId, ...others] : [...copies, sourceId])];
+});
+
+/**
+ * The copy that `choosePlayableCopy` tries first for the source, without a request: the first
+ * candidate that did not fail a moment ago. `null` when that is the source itself.
+ */
+export const expectedCopy = Effect.fn("expectedCopy")(function* (sourceId: string) {
+  const { failed } = yield* CopyAttempts;
+  const now = yield* Clock.currentTimeMillis;
+  const candidates = yield* copyCandidates(sourceId, false);
+  const first = candidates.find((id) => {
+    const failedAt = failed.get(id);
+    return failedAt === undefined || now - failedAt >= failedLifetimeMs;
+  });
+  return first === undefined ? null : yield* copySummary(sourceId, first);
 });
 
 // The source that plays, when it is not the requested source

@@ -8,7 +8,13 @@ import {
   nextEntry,
   positionAt,
 } from "@dyad/domain";
-import type { DeviceId, PlaybackCapabilities, QueueEntry, SourceSummary } from "@dyad/domain";
+import type {
+  DeviceId,
+  EntryCopy,
+  PlaybackCapabilities,
+  QueueEntry,
+  SourceSummary,
+} from "@dyad/domain";
 import { NowPlaying } from "@dyad/plugin/client";
 import {
   Clock,
@@ -55,6 +61,8 @@ export class SessionView extends Data.Class<{
   readonly rooms: ReadonlyArray<RoomSummary>;
   readonly queueVersion: number;
   readonly entries: ReadonlyArray<QueueEntry>;
+  /** The copies that the room plays instead of the entries' sources */
+  readonly copies: ReadonlyArray<EntryCopy>;
   /** With the transport commands of this client that the server did not confirm yet */
   readonly playback: Playback;
   /** The last playback from the server */
@@ -95,6 +103,7 @@ const initialView = new SessionView({
   rooms: [],
   queueVersion: 0,
   entries: [],
+  copies: [],
   playback: stoppedPlayback,
   confirmed: stoppedPlayback,
   outputs: [],
@@ -221,6 +230,7 @@ class RoomState extends Data.Class<{
   readonly entries: ReadonlyArray<QueueEntry>;
   readonly confirmed: Playback;
   readonly pending: ReadonlyArray<Pending>;
+  readonly copies: ReadonlyArray<EntryCopy>;
 }> {}
 
 // Each pending command adds one revision, until the server reaches it
@@ -337,6 +347,7 @@ const makeSessionClient = Effect.fn(function* (options: {
       ),
       queueVersion: room?.queueVersion ?? 0,
       entries: room?.entries ?? [],
+      copies: room?.copies ?? [],
       playback: room === undefined ? stoppedPlayback : withPending(room),
       confirmed: room?.confirmed ?? stoppedPlayback,
       outputs: replica.outputs,
@@ -533,6 +544,7 @@ const makeSessionClient = Effect.fn(function* (options: {
                       entries: snapshot.entries,
                       confirmed: snapshot.playback,
                       pending: [],
+                      copies: snapshot.copies,
                     }),
                   );
                   const complete = (known: typeof home | null) =>
@@ -568,6 +580,9 @@ const makeSessionClient = Effect.fn(function* (options: {
                     change.serverTime - receivedAt,
                   );
                 }),
+
+              CopiesChanged: ({ room, copies }) =>
+                Effect.sync(() => changeRoom(replica, room, () => ({ copies }))),
 
               RoomRemoved: ({ room }) => Effect.sync(() => replica.rooms.delete(room)),
 

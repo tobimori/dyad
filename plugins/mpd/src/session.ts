@@ -190,6 +190,7 @@ export const openSession = Effect.fn("openSession")(function* (mirror: SessionMi
           rooms.delete(room);
           return none;
         }),
+      CopiesChanged: () => Effect.succeed(none),
       OutputsChanged: ({ outputs }) =>
         Effect.succeed(new ViewChange({ started: null, outputs, clockOffset: null })),
       Superseded: () => Effect.succeed(none),
