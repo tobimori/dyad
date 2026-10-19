@@ -2,13 +2,13 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { LibraryNotices, accountHint, useLibraryStatus } from "../component/library-notice.tsx";
-import { ListItem, TrackList, entryItems, playsSource } from "../component/track-list.tsx";
-import type { TrackItem } from "../component/track-list.tsx";
-import { useListScreen } from "../component/list-screen.tsx";
-import { Section, SectionView } from "../context/routes.ts";
-import { useReload } from "../context/screen-app.ts";
-import type { ScreenApp } from "../context/screen-app.ts";
+import { LibraryNotices, accountHint, useLibraryStatus } from "./library-notice.tsx";
+import { ListItem, TrackList, entryItems, playsSource } from "../../component/track-list.tsx";
+import type { TrackItem } from "../../component/track-list.tsx";
+import { useListScreen } from "../../component/list-screen.tsx";
+import { Section, SectionView } from "../../context/routes.ts";
+import { useReload } from "../../context/screen-app.ts";
+import type { ScreenApp } from "../../context/screen-app.ts";
 
 const title = "Songs";
 

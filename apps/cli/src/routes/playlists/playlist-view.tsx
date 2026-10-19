@@ -8,7 +8,7 @@ import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
 import { Action } from "../../component/dialog-actions.tsx";
-import { useLibraryStatus } from "../../component/library-notice.tsx";
+import { useLibraryStatus } from "../library/library-notice.tsx";
 import { useListScreen } from "../../component/list-screen.tsx";
 import { ListItem, TrackList, entryItems, playsSource } from "../../component/track-list.tsx";
 import { commands } from "../../context/keymap.ts";
@@ -17,7 +17,7 @@ import type { Route } from "../../context/router.ts";
 import { useReload } from "../../context/screen-app.ts";
 import type { ScreenApp } from "../../context/screen-app.ts";
 import { useTheme } from "../../theme/theme.ts";
-import { listActions } from "./page-view.tsx";
+import { listActions } from "../page/page-view.tsx";
 
 function PlaylistHeader(props: {
   readonly atoms: ServerAtoms;

@@ -4,7 +4,7 @@ import { Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo } from "react";
 
-import { accountHint, useLibraryStatus } from "../component/library-notice.tsx";
+import { accountHint, useLibraryStatus } from "./library/library-notice.tsx";
 import { useListScreen } from "../component/list-screen.tsx";
 import { AlbumRow, RowList, headed, selectableRows, trackRows } from "../component/row-list.tsx";
 import type { Row, SelectableRow } from "../component/row-list.tsx";

@@ -4,12 +4,12 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import type { Action } from "../component/dialog-actions.tsx";
-import { useListScreen } from "../component/list-screen.tsx";
-import { ListItem, TrackList, playsSource } from "../component/track-list.tsx";
-import { Section, SectionView } from "../context/routes.ts";
-import { useReload } from "../context/screen-app.ts";
-import type { ScreenApp } from "../context/screen-app.ts";
+import type { Action } from "../../component/dialog-actions.tsx";
+import { useListScreen } from "../../component/list-screen.tsx";
+import { ListItem, TrackList, playsSource } from "../../component/track-list.tsx";
+import { Section, SectionView } from "../../context/routes.ts";
+import { useReload } from "../../context/screen-app.ts";
+import type { ScreenApp } from "../../context/screen-app.ts";
 
 const title = "Sets";
 

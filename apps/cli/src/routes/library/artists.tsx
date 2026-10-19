@@ -2,13 +2,13 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { RowList, artistRows, counted } from "../component/row-list.tsx";
-import { useListScreen } from "../component/list-screen.tsx";
-import type { SelectableRow } from "../component/row-list.tsx";
-import { ListTitle } from "../component/track-list.tsx";
-import { Section, SectionView } from "../context/routes.ts";
-import { useReload } from "../context/screen-app.ts";
-import type { ScreenApp } from "../context/screen-app.ts";
+import { RowList, artistRows, counted } from "../../component/row-list.tsx";
+import { useListScreen } from "../../component/list-screen.tsx";
+import type { SelectableRow } from "../../component/row-list.tsx";
+import { ListTitle } from "../../component/track-list.tsx";
+import { Section, SectionView } from "../../context/routes.ts";
+import { useReload } from "../../context/screen-app.ts";
+import type { ScreenApp } from "../../context/screen-app.ts";
 
 const title = "Artists";
 

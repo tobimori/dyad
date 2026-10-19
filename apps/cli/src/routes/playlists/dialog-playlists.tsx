@@ -9,16 +9,16 @@ import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 
-import { PlaylistItem, SegmentItem, SongItem } from "../context/action-items.ts";
-import type { ActionApp, ActionItem } from "../context/action-items.ts";
-import { commands, useCommands } from "../context/keymap.ts";
-import { useTheme } from "../theme/theme.ts";
-import { Dialog, useDialog } from "../ui/dialog.tsx";
-import { SelectList, SelectOption } from "../ui/select-list.tsx";
-import { useToast } from "../ui/toast.tsx";
-import { Action } from "./dialog-actions.tsx";
-import { useLibraryStatus } from "./library-notice.tsx";
-import { counted } from "./row-list.tsx";
+import { PlaylistItem, SegmentItem, SongItem } from "../../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../../context/action-items.ts";
+import { commands, useCommands } from "../../context/keymap.ts";
+import { useTheme } from "../../theme/theme.ts";
+import { Dialog, useDialog } from "../../ui/dialog.tsx";
+import { SelectList, SelectOption } from "../../ui/select-list.tsx";
+import { useToast } from "../../ui/toast.tsx";
+import { Action } from "../../component/dialog-actions.tsx";
+import { useLibraryStatus } from "../library/library-notice.tsx";
+import { counted } from "../../component/row-list.tsx";
 
 const dialogWidth = 56;
 const newPlaylist = "new";

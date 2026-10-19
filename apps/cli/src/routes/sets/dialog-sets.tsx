@@ -5,16 +5,16 @@ import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef } from "react";
 
-import { SegmentItem, SongItem } from "../context/action-items.ts";
-import type { ActionApp, ActionItem } from "../context/action-items.ts";
-import { commands } from "../context/keymap.ts";
-import type { usePlayer } from "../playback/use-player.ts";
-import { useTheme } from "../theme/theme.ts";
-import { Dialog, useDialog } from "../ui/dialog.tsx";
-import { SelectList, SelectOption } from "../ui/select-list.tsx";
-import { Action } from "./dialog-actions.tsx";
-import { usePlaylistActions } from "./dialog-playlists.tsx";
-import { counted } from "./row-list.tsx";
+import { SegmentItem, SongItem } from "../../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../../context/action-items.ts";
+import { commands } from "../../context/keymap.ts";
+import type { usePlayer } from "../../playback/use-player.ts";
+import { useTheme } from "../../theme/theme.ts";
+import { Dialog, useDialog } from "../../ui/dialog.tsx";
+import { SelectList, SelectOption } from "../../ui/select-list.tsx";
+import { Action } from "../../component/dialog-actions.tsx";
+import { usePlaylistActions } from "../playlists/dialog-playlists.tsx";
+import { counted } from "../../component/row-list.tsx";
 
 const dialogWidth = 72;
 

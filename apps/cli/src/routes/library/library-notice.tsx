@@ -6,8 +6,8 @@ import { Clock, Effect } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { Fragment, useMemo } from "react";
 
-import { commands, keyLabel } from "../context/keymap.ts";
-import { useTheme } from "../theme/theme.ts";
+import { commands, keyLabel } from "../../context/keymap.ts";
+import { useTheme } from "../../theme/theme.ts";
 
 const noNames: ReadonlyMap<string, string> = new Map();
 

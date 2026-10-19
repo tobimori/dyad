@@ -2,12 +2,12 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { useListScreen } from "../component/list-screen.tsx";
-import { TrackList, entryItems, playsSource } from "../component/track-list.tsx";
-import type { TrackItem } from "../component/track-list.tsx";
-import { Section, SectionView } from "../context/routes.ts";
-import { useReload } from "../context/screen-app.ts";
-import type { ScreenApp } from "../context/screen-app.ts";
+import { useListScreen } from "../../component/list-screen.tsx";
+import { TrackList, entryItems, playsSource } from "../../component/track-list.tsx";
+import type { TrackItem } from "../../component/track-list.tsx";
+import { Section, SectionView } from "../../context/routes.ts";
+import { useReload } from "../../context/screen-app.ts";
+import type { ScreenApp } from "../../context/screen-app.ts";
 
 const title = "Favorites";
 

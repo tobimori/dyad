@@ -8,8 +8,8 @@ import type { RefObject } from "react";
 
 import type { Action } from "../component/dialog-actions.tsx";
 import type { useDownloadAction } from "../component/dialog-downloads.tsx";
-import type { usePlaylistActions } from "../component/dialog-playlists.tsx";
-import type { useLibraryMarks } from "../component/library-marks.ts";
+import type { usePlaylistActions } from "../routes/playlists/dialog-playlists.tsx";
+import type { useLibraryMarks } from "../routes/library/library-marks.ts";
 import type { Artwork } from "../component/use-artwork.ts";
 import type { usePlayer } from "../playback/use-player.ts";
 import type { useCoverVideo } from "../video/video-view.tsx";

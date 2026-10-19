@@ -3,15 +3,15 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { LibraryNotices, useLibraryStatus } from "../component/library-notice.tsx";
-import { useListScreen } from "../component/list-screen.tsx";
-import { PlaylistRow, RowList, counted } from "../component/row-list.tsx";
-import { ListTitle } from "../component/track-list.tsx";
-import { commands } from "../context/keymap.ts";
-import type { Command } from "../context/keymap.ts";
-import { Section, SectionView } from "../context/routes.ts";
-import { useReload } from "../context/screen-app.ts";
-import type { ScreenApp } from "../context/screen-app.ts";
+import { LibraryNotices, useLibraryStatus } from "../library/library-notice.tsx";
+import { useListScreen } from "../../component/list-screen.tsx";
+import { PlaylistRow, RowList, counted } from "../../component/row-list.tsx";
+import { ListTitle } from "../../component/track-list.tsx";
+import { commands } from "../../context/keymap.ts";
+import type { Command } from "../../context/keymap.ts";
+import { Section, SectionView } from "../../context/routes.ts";
+import { useReload } from "../../context/screen-app.ts";
+import type { ScreenApp } from "../../context/screen-app.ts";
 
 const title = "Playlists";
 
