@@ -58,9 +58,10 @@ const searchOfUser = Effect.gen(function* () {
         Effect.annotateLogs("provider", id),
       );
       const cached = yield* cacheProviderSources(id, results);
-      return cached
-        .map((item) => cachedSummary(item, usable.provider.name))
-        .find((summary) => songKey(summary.title, summary.artist) === key);
+      const summaries = yield* Effect.forEach(cached, (item) =>
+        cachedSummary(item, usable.provider.name),
+      );
+      return summaries.find((summary) => songKey(summary.title, summary.artist) === key);
     });
 });
 
@@ -90,10 +91,10 @@ export const resolveSuggestions = (
         provider,
         entries.map(([, item]) => item),
       );
-      cached.forEach((item, position) => {
+      for (const [position, item] of cached.entries()) {
         const index = entries[position]?.[0];
-        if (index !== undefined) found[index] = cachedSummary(item, nameOf(provider));
-      });
+        if (index !== undefined) found[index] = yield* cachedSummary(item, nameOf(provider));
+      }
     }
 
     const missing = items.flatMap(({ suggestion }, index) =>
@@ -124,9 +125,9 @@ export const resolveSuggestions = (
       const playable = Option.filter(cached, (value) => providers.has(value.provider));
       found[item.index] =
         local.get(item.key) ??
-        Option.getOrUndefined(
-          Option.map(playable, (value) => cachedSummary(value, nameOf(value.provider))),
-        );
+        (Option.isSome(playable)
+          ? yield* cachedSummary(playable.value, nameOf(playable.value.provider))
+          : undefined);
       const searchedBefore = unknown.some((other) => other.key === item.key);
       if (found[item.index] === undefined && !fresh && !searchedBefore) unknown.push(item);
     }

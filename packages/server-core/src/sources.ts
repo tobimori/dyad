@@ -1,18 +1,10 @@
-import {
-  artist,
-  artistLookup,
-  localFile,
-  providerItem,
-  recording,
-  source,
-  sourceVariant,
-} from "@dyad/db";
+import { localFile, providerItem, recording, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
 import { HlcClock } from "@dyad/sync";
-import { and, eq, getColumns, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, eq, getColumns, inArray, isNotNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
@@ -20,19 +12,15 @@ import { Effect, Option, Schema } from "effect";
 
 import { ParseEvidence, assertRecording } from "./assertions.ts";
 import { AlbumType } from "./editions.ts";
-import { boundRecordingId, musicbrainzArtistId, sourceId, variantId } from "./ids.ts";
+import { boundRecordingId, sourceId, variantId } from "./ids.ts";
 import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import type { CachedSource } from "./provider-cache.ts";
 import { Providers, linkedProviders } from "./providers.ts";
 import { libraryAlbumRef, libraryArtistRef, providerAlbumRef, providerArtistRef } from "./refs.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
-import {
-  parseVersionTitle,
-  parsedCredit,
-  parserRevision,
-  versionedTitle,
-} from "./version-titles.ts";
+import { parseUploadTitle } from "./upload-titles.ts";
+import { parsedCredit, parserRevision, versionedTitle } from "./version-titles.ts";
 import type { ParsedTitle } from "./version-titles.ts";
 
 // Projection columns before replication assigns revisions
@@ -46,29 +34,6 @@ const differs = (table: SQLiteTable, keys: ReadonlyArray<string>) => {
     .map(([, column]) => sql`${column} IS NOT excluded.${sql.identifier(column.name)}`);
   return sql`(${sql.join(changes, sql` OR `)})`;
 };
-
-// Artists with each name key, in the catalog and in the MusicBrainz searches of this replica
-const artistCounts = (keys: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const catalog = yield* db
-      .select({ id: artist.id, nameKey: artist.nameKey })
-      .from(artist)
-      .where(and(inArray(artist.nameKey, keys), isNull(artist.mergedIntoId)));
-    const lookups = yield* db
-      .select()
-      .from(artistLookup)
-      .where(inArray(artistLookup.nameKey, keys));
-    const searched = yield* Effect.forEach(lookups, (lookup) =>
-      Effect.forEach(lookup.artists, (found) =>
-        musicbrainzArtistId(found.mbid).pipe(Effect.map((id) => ({ id, nameKey: lookup.nameKey }))),
-      ),
-    );
-
-    const ids = new Map(keys.map((key) => [key, new Set<string>()]));
-    for (const row of [...catalog, ...searched.flat()]) ids.get(row.nameKey ?? "")?.add(row.id);
-    return new Map([...ids].map(([key, found]) => [key, found.size]));
-  });
 
 // An uploader that the title names as the artist is that artist, for example the channel `SXTN`
 const uploaderCredit = (parsed: ParsedTitle, uploader: CreditedArtist | null) => {
@@ -95,24 +60,12 @@ const assertParsedTitle = (
   },
 ) =>
   Effect.gen(function* () {
-    const counts = new Map<string, number>();
-    // The parser has no I/O, so it runs again with the counts of the name keys that it asked for
-    const parsed = yield* Effect.gen(function* () {
-      while (true) {
-        const missing = new Set<string>();
-        const result = parseVersionTitle({
-          title: item.title,
-          uploader: item.uploader?.name ?? null,
-          // An uploader without an artist field gives its own name as the artist
-          artists: item.artist === null || item.artist === item.uploader?.name ? [] : [item.artist],
-          artistCount: (key) => counts.get(key) ?? (missing.add(key), 0),
-          durationMs: item.durationMs,
-        });
-        if (missing.size === 0) return result;
-
-        const found = yield* artistCounts([...missing]);
-        for (const key of missing) counts.set(key, found.get(key) ?? 0);
-      }
+    const parsed = yield* parseUploadTitle({
+      title: item.title,
+      uploader: item.uploader?.name ?? null,
+      // An uploader without an artist field gives its own name as the artist
+      artists: item.artist === null || item.artist === item.uploader?.name ? [] : [item.artist],
+      durationMs: item.durationMs,
     });
 
     return yield* assertRecording(

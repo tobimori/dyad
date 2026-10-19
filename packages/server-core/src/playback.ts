@@ -398,7 +398,7 @@ const copySummary = (sourceId: string, copyId: string) =>
     const cached = yield* cachedProviderSource(copyId);
     if (Option.isNone(cached)) return null;
     const provider = (yield* Providers).get(cached.value.provider);
-    return cachedSummary(cached.value, provider?.name ?? cached.value.provider);
+    return yield* cachedSummary(cached.value, provider?.name ?? cached.value.provider);
   });
 
 /**

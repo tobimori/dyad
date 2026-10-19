@@ -47,8 +47,8 @@ const artistRoot = (provider: string, externalId: string) =>
 // The song of a cached result for the `artist_title` rule
 const cachedSongFacts = (item: CachedSource) =>
   Effect.gen(function* () {
-    const artistId = cachedArtistId(item);
-    const title = cachedSummary(item, item.provider).title;
+    const artistId = yield* cachedArtistId(item);
+    const { title } = yield* cachedSummary(item, item.provider);
     const { durationMs } = item.source;
     if (artistId === null || title === null || durationMs === null) return null;
     const titleKey = songTitleKey(title);
@@ -212,29 +212,33 @@ export const sourceCopies = (sourceId: string) =>
                 : "unavailable",
           }),
       ),
-      ...[
-        ...Option.toArray(cached),
-        // Results of the same song that no copy of the group already is
-        ...sameSong.filter(
-          (item) =>
-            item.sourceId !== sourceId &&
-            !playableIds.has(item.sourceId) &&
-            !others.some((row) => row.source.id === item.sourceId),
-        ),
-      ].flatMap((item) => {
-        const provider = linked.get(item.provider);
-        if (provider === undefined) return [];
-        return [
-          new SourceCopy({
-            source: cachedSummary(item, provider.name),
-            lossless: item.source.lossless,
-            bitrate: item.source.bitrate,
-            sampleRate: null,
-            bitDepth: null,
-            unavailable: null,
+      ...(yield* Effect.forEach(
+        [
+          ...Option.toArray(cached),
+          // Results of the same song that no copy of the group already is
+          ...sameSong.filter(
+            (item) =>
+              item.sourceId !== sourceId &&
+              !playableIds.has(item.sourceId) &&
+              !others.some((row) => row.source.id === item.sourceId),
+          ),
+        ],
+        (item) =>
+          Effect.gen(function* () {
+            const provider = linked.get(item.provider);
+            if (provider === undefined) return [];
+            return [
+              new SourceCopy({
+                source: yield* cachedSummary(item, provider.name),
+                lossless: item.source.lossless,
+                bitrate: item.source.bitrate,
+                sampleRate: null,
+                bitDepth: null,
+                unavailable: null,
+              }),
+            ];
           }),
-        ];
-      }),
+      )).flat(),
     ];
 
     return copies.toSorted(compareCopies(yield* providerOrder));
@@ -258,13 +262,9 @@ const songText = (sourceId: string) =>
       .where(eq(source.id, sourceId));
     if (own !== undefined) return own;
     const cached = yield* cachedProviderSource(sourceId);
-    return Option.match(cached, {
-      onNone: () => null,
-      onSome: (item) => {
-        const summary = cachedSummary(item, item.provider);
-        return { title: summary.title, artist: summary.artist };
-      },
-    });
+    if (Option.isNone(cached)) return null;
+    const summary = yield* cachedSummary(cached.value, cached.value.provider);
+    return { title: summary.title, artist: summary.artist };
   });
 
 // The usable providers with search that were not searched for the song in the last day. In the

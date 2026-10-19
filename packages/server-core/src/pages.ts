@@ -450,22 +450,20 @@ export const providerTracks = (
   Effect.gen(function* () {
     const providers = yield* Providers;
     return yield* Effect.forEach(tracks, (track) =>
-      toCachedSource(track.provider ?? provider, track.source).pipe(
-        Effect.map(
-          (item) =>
-            new PageTrack({
-              source: cachedSummary(
-                item,
-                track.provider === null
-                  ? providerName
-                  : (providers.get(track.provider)?.name ?? track.provider),
-              ),
-              disc: track.disc,
-              number: track.number,
-              playable: track.streamable,
-            }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const item = yield* toCachedSource(track.provider ?? provider, track.source);
+        return new PageTrack({
+          source: yield* cachedSummary(
+            item,
+            track.provider === null
+              ? providerName
+              : (providers.get(track.provider)?.name ?? track.provider),
+          ),
+          disc: track.disc,
+          number: track.number,
+          playable: track.streamable,
+        });
+      }),
     );
   });
 
@@ -925,14 +923,15 @@ const catalogArtist = (
         ...(source.uploader !== null && ids.has(source.uploader.id) ? [source.uploader] : []),
       ])
       .at(0)?.name;
-    const cachedSongs = cached.map(
-      (item) =>
-        new PageTrack({
-          source: cachedSummary(item, providers.get(item.provider)?.name ?? item.provider),
+    const cachedSongs = yield* Effect.forEach(cached, (item) =>
+      Effect.gen(function* () {
+        return new PageTrack({
+          source: yield* cachedSummary(item, providers.get(item.provider)?.name ?? item.provider),
           disc: null,
           number: null,
           playable: true,
-        }),
+        });
+      }),
     );
 
     const credited = alias(artist, "credited");

@@ -94,17 +94,19 @@ const searchLocalSources = (query: string) =>
     );
     return [
       ...catalog,
-      ...cached.flat().map((item, index) => {
-        const provider = providers.get(item.provider);
-        return new Candidate({
-          summary: cachedSummary(item, provider?.name ?? item.provider),
-          isrc: item.isrc,
-          position: catalog.length + index,
-          local: false,
-          lossless: item.source.lossless,
-          upload: provider?.uploads === true,
-        });
-      }),
+      ...(yield* Effect.forEach(cached.flat(), (item, index) =>
+        Effect.gen(function* () {
+          const provider = providers.get(item.provider);
+          return new Candidate({
+            summary: yield* cachedSummary(item, provider?.name ?? item.provider),
+            isrc: item.isrc,
+            position: catalog.length + index,
+            local: false,
+            lossless: item.source.lossless,
+            upload: provider?.uploads === true,
+          });
+        }),
+      )),
     ];
   });
 
@@ -143,16 +145,17 @@ const searchProvider = (
     }
 
     const cached = yield* cacheProviderSources(id, sources.value);
-    const candidates = cached.map(
-      (item, position) =>
-        new Candidate({
-          summary: cachedSummary(item, name),
+    const candidates = yield* Effect.forEach(cached, (item, position) =>
+      Effect.gen(function* () {
+        return new Candidate({
+          summary: yield* cachedSummary(item, name),
           isrc: item.isrc,
           position,
           local: false,
           lossless: item.source.lossless,
           upload,
-        }),
+        });
+      }),
     );
     return new Answer({ candidates, hits: [], unavailable: [] });
   });

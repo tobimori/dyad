@@ -9,7 +9,8 @@ import { boundRecordingId, sourceId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import { providerAlbumRef, providerArtistRef } from "./refs.ts";
-import { parseVersionTitle, parsedCredit, versionedTitle } from "./version-titles.ts";
+import { parseUploadTitle } from "./upload-titles.ts";
+import { parsedCredit, versionedTitle } from "./version-titles.ts";
 
 // Results of played sources do not expire, because `source` has no artwork and no ISRC. The TTL
 // only limits the size of the cache.
@@ -34,8 +35,8 @@ export class CachedSource extends Data.Class<{
 const parseCached = (item: CachedSource) => {
   const { uploader } = item.source;
   return uploader === null
-    ? null
-    : parseVersionTitle({
+    ? Effect.succeed(null)
+    : parseUploadTitle({
         title: item.source.title,
         uploader: uploader.name,
         artists:
@@ -50,38 +51,40 @@ const parseCached = (item: CachedSource) => {
  * The artist ID that the result credits, as in `writeSource`: the first artist, or the uploader
  * when the title names it as the artist. `null` for a reupload.
  */
-export const cachedArtistId = (item: CachedSource) => {
-  const { uploader } = item.source;
-  if (uploader === null) return item.source.artists[0]?.id ?? null;
-  return parseCached(item)?.uploaderRole === "artist" ? uploader.id : null;
-};
-
-export const cachedSummary = (item: CachedSource, providerName: string) => {
-  const artist = item.source.artists[0] ?? item.source.uploader;
-  const albumId = item.source.albumId;
-  const parsed = parseCached(item);
-
-  return new SourceSummary({
-    id: item.sourceId,
-    provider: item.provider,
-    title: parsed === null ? item.source.title : versionedTitle(parsed),
-    artist:
-      parsed === null || parsed.artists.length === 0
-        ? item.source.artist
-        : parsedCredit(parsed).name,
-    album: item.source.album,
-    durationMs: item.source.durationMs,
-    codec: item.source.codec,
-    artworkUrl: item.source.artworkUrl,
-    artistRef: artist === null ? null : providerArtistRef(item.provider, artist.id),
-    albumRef: albumId === null ? null : providerAlbumRef(item.provider, albumId),
-    explicit: item.source.explicit ?? false,
-    providerName,
-    recordingId: item.recordingId,
-    video: item.source.video,
-    series: parsed?.series?.name ?? null,
+export const cachedArtistId = (item: CachedSource) =>
+  Effect.gen(function* () {
+    const { uploader } = item.source;
+    if (uploader === null) return item.source.artists[0]?.id ?? null;
+    return (yield* parseCached(item))?.uploaderRole === "artist" ? uploader.id : null;
   });
-};
+
+export const cachedSummary = (item: CachedSource, providerName: string) =>
+  Effect.gen(function* () {
+    const artist = item.source.artists[0] ?? item.source.uploader;
+    const albumId = item.source.albumId;
+    const parsed = yield* parseCached(item);
+
+    return new SourceSummary({
+      id: item.sourceId,
+      provider: item.provider,
+      title: parsed === null ? item.source.title : versionedTitle(parsed),
+      artist:
+        parsed === null || parsed.artists.length === 0
+          ? item.source.artist
+          : parsedCredit(parsed).name,
+      album: item.source.album,
+      durationMs: item.source.durationMs,
+      codec: item.source.codec,
+      artworkUrl: item.source.artworkUrl,
+      artistRef: artist === null ? null : providerArtistRef(item.provider, artist.id),
+      albumRef: albumId === null ? null : providerAlbumRef(item.provider, albumId),
+      explicit: item.source.explicit ?? false,
+      providerName,
+      recordingId: item.recordingId,
+      video: item.source.video,
+      series: parsed?.series?.name ?? null,
+    });
+  });
 
 export const toCachedSource = (provider: string, source: ProviderSource) =>
   Effect.gen(function* () {

@@ -42,13 +42,11 @@ const sourceSeed = (sourceId: string) =>
     const name = Option.isSome(cached)
       ? (yield* linkedProviders).get(cached.value.provider)?.name
       : undefined;
-    return Option.map(
-      Option.filter(cached, () => name !== undefined),
-      (item) => ({
-        summary: cachedSummary(item, name ?? item.provider),
-        externalId: item.source.externalId,
-      }),
-    );
+    if (Option.isNone(cached) || name === undefined) return Option.none();
+    return Option.some({
+      summary: yield* cachedSummary(cached.value, name),
+      externalId: cached.value.source.externalId,
+    });
   });
 
 const seedOf = (start: typeof RadioStart.Type) =>

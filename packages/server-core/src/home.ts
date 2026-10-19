@@ -99,7 +99,7 @@ const providerGroup = (provider: string) =>
           }),
         );
         return new HomeGroup({ providerName: page.providerName, shelves, state: page.state });
-      }),
+      }).pipe(orDieOnDatabaseError("homePage")),
   });
 
 // One account request per refresh on YouTube Music, so at most 4 a day. A failed fetch waits too.
