@@ -6,6 +6,8 @@ import { Data, Effect, Fiber } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { useEffect, useState } from "react";
 
+import { SongItem } from "../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../context/action-items.ts";
 import { commands } from "../context/keymap.ts";
 import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
@@ -114,4 +116,9 @@ export function useWebLinks(props: {
           : dialog.push(<WebLinksDialog connection={connection} run={props.run} source={source} />),
     });
   };
+}
+
+export function useWebLinkActions(app: ActionApp) {
+  const webLinks = useWebLinks({ connection: app.client, run: app.run });
+  return (item: ActionItem) => (item instanceof SongItem ? [webLinks(item.source)] : []);
 }

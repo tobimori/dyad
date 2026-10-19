@@ -1,16 +1,19 @@
-import { formatDuration, songLine, sourceLabel } from "@dyad/client-runtime";
+import { formatDuration, songLine, sourceLabel, titleOf } from "@dyad/client-runtime";
 import type { ServerAtoms } from "@dyad/client-runtime";
 import type { HeardInSet, RecordingId } from "@dyad/domain";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef } from "react";
 
+import { SegmentItem, SongItem } from "../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../context/action-items.ts";
 import { commands } from "../context/keymap.ts";
 import type { usePlayer } from "../playback/use-player.ts";
 import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
 import { SelectList, SelectOption } from "../ui/select-list.tsx";
 import { Action } from "./dialog-actions.tsx";
+import { usePlaylistActions } from "./dialog-playlists.tsx";
 import { counted } from "./row-list.tsx";
 
 const dialogWidth = 72;
@@ -100,4 +103,26 @@ export function useHeardInSets(props: {
               ),
           }),
         ];
+}
+
+/**
+ * "Heard in sets" for a song and a track of a set. The set that plays saves its identified tracks
+ * as a playlist instead, unless its screen gives that action.
+ */
+export function useSetActions(app: ActionApp) {
+  const heardInSets = useHeardInSets({ atoms: app.atoms, player: app.player });
+  const playlists = usePlaylistActions({ atoms: app.atoms, replica: app.replica, run: app.run });
+  return (item: ActionItem) => {
+    if (item instanceof SegmentItem) return heardInSets(item.segment.recordingId);
+    if (!(item instanceof SongItem)) return [];
+
+    const source = item.source;
+    const playingSet = source.id === app.player.current?.source.id && app.segments.length > 0;
+    if (!playingSet) return heardInSets(source.recordingId);
+    const identified = [...new Set(app.segments.flatMap((segment) => segment.recordingId ?? []))];
+    const savesSet = item.extra.some((action) => action.command === commands.saveSetAsPlaylist);
+    return identified.length > 0 && !savesSet
+      ? [playlists.saveSet(titleOf(source), identified)]
+      : [];
+  };
 }

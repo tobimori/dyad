@@ -9,6 +9,8 @@ import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 
+import { PlaylistItem, SegmentItem, SongItem } from "../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../context/action-items.ts";
 import { commands, useCommands } from "../context/keymap.ts";
 import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
@@ -300,5 +302,20 @@ export function usePlaylistActions(props: {
         }),
       ];
     },
+  };
+}
+
+/** "Add to playlist" for songs and tracks of sets, and the edits of a playlist */
+export function usePlaylistItemActions(app: ActionApp) {
+  const playlists = usePlaylistActions({ atoms: app.atoms, replica: app.replica, run: app.run });
+  return (item: ActionItem) => {
+    if (item instanceof SongItem && item.source.recordingId !== null) {
+      return [playlists.add([{ recordingId: item.source.recordingId, sourceId: item.source.id }])];
+    }
+    if (item instanceof SegmentItem && item.segment.recordingId !== null) {
+      return [playlists.add([{ recordingId: item.segment.recordingId, sourceId: null }])];
+    }
+    if (item instanceof PlaylistItem) return playlists.manage(item.playlist, item.onDelete);
+    return [];
   };
 }

@@ -1,4 +1,4 @@
-import { DownloadPin, songLine, titleOf } from "@dyad/client-runtime";
+import { songLine, titleOf } from "@dyad/client-runtime";
 import type {
   Downloads,
   ListenFeed,
@@ -6,38 +6,27 @@ import type {
   ServerAtoms,
   SessionClient,
 } from "@dyad/client-runtime";
-import { AlbumPage, ArtistPage, RadioStart, segmentIndexAt } from "@dyad/domain";
-import type {
-  AlbumCard,
-  AlbumRef,
-  ArtistRef,
-  DownloadQuality,
-  PlayContext,
-  SourceSegment,
-  SourceSummary,
-} from "@dyad/domain";
+import { AlbumPage, ArtistPage, segmentIndexAt } from "@dyad/domain";
+import type { AlbumRef, ArtistRef, DownloadQuality, SourceSegment } from "@dyad/domain";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { CliRenderEvents } from "@opentui/core";
 import type { BoxRenderable, Renderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
-import { Data, Effect, Schema, SubscriptionRef } from "effect";
+import { Effect, Schema } from "effect";
 import type { Fiber } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AccountsDialog } from "./component/dialog-accounts.tsx";
 import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
-import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx";
+import { DownloadsDialog, useDownloadAction } from "./component/dialog-downloads.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
 import { RoomsDialog } from "./component/dialog-rooms.tsx";
 import { usePlaylistActions } from "./component/dialog-playlists.tsx";
 import { useLibraryMarks } from "./component/library-marks.ts";
-import { useHeardInSets } from "./component/dialog-sets.tsx";
-import { usePlayFrom } from "./component/dialog-play-from.tsx";
 import { PluginsDialog } from "./component/dialog-plugins.tsx";
 import { ProviderOrderDialog } from "./component/dialog-provider-order.tsx";
-import { useWebLinks } from "./component/dialog-web-links.tsx";
 import { Footer } from "./component/footer.tsx";
 import { Header } from "./component/header.tsx";
 import {
@@ -55,6 +44,15 @@ import { useArtwork } from "./component/use-artwork.ts";
 import { commands, useCommands } from "./context/keymap.ts";
 import type { Command } from "./context/keymap.ts";
 import type { PluginHost } from "./context/plugin-host.ts";
+import {
+  ActionApp,
+  AlbumItem,
+  ArtistItem,
+  PlaylistItem,
+  SegmentItem,
+  SongItem,
+} from "./context/action-items.ts";
+import { useItemActions } from "./context/item-actions.ts";
 import { Route, sectionPlace, useRouter } from "./context/router.ts";
 import type { Place } from "./context/router.ts";
 import type { Section } from "./context/routes.ts";
@@ -63,7 +61,7 @@ import { useSearch } from "./context/use-search.ts";
 import type { Engine } from "./playback/engine.ts";
 import { usePlayer } from "./playback/use-player.ts";
 import { useSegments } from "./playback/use-segments.ts";
-import { NowPlayingPanel, NowPlayingView, segmentLine } from "./routes/now-playing.tsx";
+import { NowPlayingPanel, NowPlayingView } from "./routes/now-playing.tsx";
 import { PageView, pageRows, usePage } from "./routes/page/page-view.tsx";
 import { PlaylistView, usePlaylist } from "./routes/page/playlist-view.tsx";
 import { sections, startSection } from "./routes/sections.ts";
@@ -77,12 +75,6 @@ const sidebarMinWidth = 100;
 const panelMinWidth = 120;
 const pageStep = 10;
 const upNextRows = 20;
-
-class ActionTarget extends Data.Class<{
-  readonly source: SourceSummary;
-  readonly context: typeof PlayContext.Type;
-  readonly sectionActions: ReadonlyArray<Action>;
-}> {}
 
 export function App(props: {
   readonly serverUrl: string;
@@ -167,9 +159,6 @@ export function App(props: {
     replica: props.replica,
     run: props.run,
   });
-  const heardInSets = useHeardInSets({ atoms: props.atoms, player });
-  const webLinks = useWebLinks({ connection: client, run: props.run });
-  const playFrom = usePlayFrom(props.atoms);
   const libraryMarks = useLibraryMarks({
     replica: props.replica,
     run: props.run,
@@ -340,258 +329,60 @@ export function App(props: {
   const actionTarget = () => {
     const index = indexOfSelection();
     const item = items[index];
+    const play = () => activate(index);
 
     if (!nowPlaying && item instanceof ListItem) {
-      return new ActionTarget({
+      return new SongItem({
         source: item.source,
         context: item.context,
-        sectionActions: Route.guards.Section(route) ? (sectionView.actions?.(index) ?? []) : [],
+        play,
+        extra: Route.guards.Section(route) ? (sectionView.actions?.(index) ?? []) : [],
       });
     }
     if (!nowPlaying && item instanceof TrackRow) {
-      return new ActionTarget({
-        source: item.track.source,
-        context: item.context,
-        sectionActions: [],
-      });
+      return new SongItem({ source: item.track.source, context: item.context, play, extra: [] });
     }
     if (!nowPlaying && item !== undefined) return item;
 
     const current = player.current;
     if (current === undefined) return undefined;
-    return new ActionTarget({
+    return new SongItem({
       source: current.source,
       context: current.context,
-      sectionActions: sectionView.actions?.(null) ?? [],
+      play: () => {},
+      extra: sectionView.actions?.(null) ?? [],
     });
   };
 
-  const downloadActions = (
-    target: Pick<DownloadPin, "kind" | "id" | "title" | "sourceIds">,
-    add: Command,
-    remove: Command,
-  ) => {
-    const downloads = props.downloads;
-    if (downloads === null) return [];
-
-    const noun = target.kind === "song" ? "" : ` ${target.kind}`;
-    const pinned = SubscriptionRef.getUnsafe(downloads.state).pins.some(
-      (pin) => pin.kind === target.kind && pin.id === target.id,
-    );
-    if (pinned) {
-      return [
-        new Action({
-          command: remove,
-          label: `Remove${noun} download`,
-          run: () => {
-            props.run(downloads.unpin(target.kind, target.id));
-            toast("notice", `Removed the download of ${target.title}`);
-          },
-        }),
-      ];
-    }
-
-    const download = (quality: typeof DownloadQuality.Type) => {
-      props.run(downloads.pin(new DownloadPin({ ...target, quality })));
-      toast("notice", `Downloading ${target.title}`);
-    };
-    return [
-      new Action({
-        command: add,
-        label: `Download${noun}`,
-        run: () =>
-          dialog.push(
-            <QualityDialog
-              title={`Download ${target.title}`}
-              current={downloadQuality}
-              onChoose={download}
-            />,
-          ),
-      }),
-    ];
-  };
-
-  // No "Go to" for the page that shows now; a source without a ref falls back to a search
-  // The video plays with its own audio, so a source that does not play yet starts first
-  // The seed plays first, then the songs that the server suggests after it
-  const startRadio = (start: typeof RadioStart.Type, label: string, seed: SourceSummary | null) => {
-    if (client === null) {
-      toast("error", "Connect to the server to start a radio");
-      return;
-    }
-    toast("notice", `Starting radio: ${label}`);
-    props.run(
-      client.radio({ start }).pipe(
-        Effect.match({
-          onSuccess: (tracks) => {
-            if (tracks.length === 0) {
-              toast("notice", `No radio songs for ${label} yet`);
-              return;
-            }
-            const reasons = Object.fromEntries(
-              tracks.flatMap((track) =>
-                track.reason === null ? [] : [[track.source.id, track.reason]],
-              ),
-            );
-            const sources = [
-              ...(seed === null ? [] : [seed]),
-              ...tracks.map((track) => track.source),
-            ];
-            player.playList(sources, 0, "radio", reasons);
-          },
-          onFailure: () => toast("error", "Cannot start the radio. Try again."),
-        }),
-      ),
-    );
-  };
-
-  const artistRadio = (name: string) =>
-    new Action({
-      command: commands.artistRadio,
-      label: `Start artist radio: ${name}`,
-      run: () => startRadio(RadioStart.cases.Artist.make({ name }), name, null),
-    });
-
-  const watchVideo = (source: SourceSummary) => {
-    const current = player.current?.source.id === source.id;
-    if (current && !source.video) {
+  // The video plays with its own audio, so a song that does not play yet starts first
+  const watchVideo = (item: SongItem) => {
+    const current = player.current?.source.id === item.source.id;
+    if (current && !item.source.video) {
       toast("notice", "This track has no video");
       return;
     }
-    if (!current) activate(indexOfSelection());
+    if (!current) item.play();
     backdrop.watchVideo();
     showNowPlaying();
   };
 
-  const trackActions = (target: ActionTarget) => {
-    const source = target.source;
-    const list = [
-      new Action({
-        command: commands.playNext,
-        label: "Play next",
-        run: () => player.playNext(source, target.context),
-      }),
-      new Action({
-        command: commands.addToQueue,
-        label: "Add to queue",
-        run: () => player.addToQueue([source], target.context),
-      }),
-      new Action({
-        command: commands.startRadio,
-        label: "Start radio",
-        run: () =>
-          startRadio(
-            RadioStart.cases.Source.make({ sourceId: source.id }),
-            titleOf(source),
-            source,
-          ),
-      }),
-      ...(source.video
-        ? [
-            new Action({
-              command: commands.watchVideo,
-              label: "Watch the video",
-              run: () => watchVideo(source),
-            }),
-          ]
-        : []),
-    ];
-
-    const artist = source.artist;
-    const artistRef = source.artistRef;
-    const showsArtist = Route.guards.Artist(route) && route.ref === artistRef;
-    if (artistRef !== null && !showsArtist) {
-      list.push(
-        new Action({
-          command: commands.goToArtist,
-          label: `Go to artist: ${artist ?? "Unknown artist"}`,
-          run: () => openArtist(artistRef, artist),
-        }),
-      );
-    }
-    if (artistRef === null && artist !== null) {
-      list.push(
-        new Action({
-          command: commands.searchArtist,
-          label: `Search the artist: ${artist}`,
-          run: () => searchFor(artist),
-        }),
-      );
-    }
-
-    const album = source.album;
-    const albumRef = source.albumRef;
-    const showsAlbum = Route.guards.Album(route) && route.ref === albumRef;
-    if (albumRef !== null && !showsAlbum) {
-      list.push(
-        new Action({
-          command: commands.goToAlbum,
-          label: `Go to album: ${album ?? "Unknown album"}`,
-          run: () => openAlbum(albumRef, album, artistRef),
-        }),
-      );
-    }
-    if (albumRef === null && album !== null) {
-      list.push(
-        new Action({
-          command: commands.searchAlbum,
-          label: `Search the album: ${album}`,
-          run: () => searchFor(album),
-        }),
-      );
-    }
-
-    const song = {
-      kind: "song" as const,
-      id: source.id,
-      title: titleOf(source),
-      sourceIds: [source.id],
-    };
-    const recordingId = source.recordingId;
-    // The tracklist is known for the set that plays; a section of sets gives its own action
-    const playingSet = source.id === player.current?.source.id && segments.length > 0;
-    const identified = [...new Set(segments.flatMap((segment) => segment.recordingId ?? []))];
-    const savesSet = target.sectionActions.some(
-      (action) => action.command === commands.saveSetAsPlaylist,
-    );
-    return [
-      ...list,
-      ...(recordingId === null
-        ? []
-        : [playlistActions.add([{ recordingId, sourceId: source.id }])]),
-      ...libraryMarks.song(source),
-      ...(playingSet && identified.length > 0 && !savesSet
-        ? [playlistActions.saveSet(titleOf(source), identified)]
-        : []),
-      ...(playingSet ? [] : heardInSets(recordingId)),
-      // A new play: switching the source of an entry in place belongs to the session
-      playFrom(source, (copy) => player.playCopy(copy, target.context)),
-      webLinks(source),
-      ...downloadActions(song, commands.download, commands.removeDownload),
-      ...target.sectionActions,
-    ];
-  };
-
-  const albumActions = (album: AlbumCard) => {
-    const artistRef = album.artistRef;
-    const showsArtist = Route.guards.Artist(route) && route.ref === artistRef;
-    // The downloads read the songs of the album when they run online
-    const download = downloadActions(
-      { kind: "album", id: album.ref, title: album.title, sourceIds: [] },
-      commands.downloadAll,
-      commands.removeAllDownload,
-    );
-    if (artistRef === null || showsArtist) return download;
-
-    return [
-      new Action({
-        command: commands.goToArtist,
-        label: `Go to artist: ${album.artist ?? "Unknown artist"}`,
-        run: () => openArtist(artistRef, album.artist),
-      }),
-      ...download,
-    ];
-  };
+  const actionApp = new ActionApp({
+    atoms: props.atoms,
+    replica: props.replica,
+    client,
+    run: props.run,
+    player,
+    route,
+    segments,
+    downloads: props.downloads,
+    downloadQuality,
+    openArtist,
+    openAlbum,
+    searchFor,
+    watchVideo,
+  });
+  const itemActions = useItemActions(actionApp);
+  const downloadAction = useDownloadAction(actionApp);
 
   const pageSources = Route.guards.Playlist(route)
     ? playlist.items.flatMap((item) => (item instanceof ListItem ? [item.source] : []))
@@ -609,11 +400,11 @@ export function App(props: {
     const sourceIds = pageSources.map((source) => source.id);
     if (Route.guards.Album(route)) {
       const album = { kind: "album" as const, id: route.ref, title: route.hint, sourceIds };
-      return downloadActions(album, commands.downloadAll, commands.removeAllDownload);
+      return downloadAction(album, commands.downloadAll, commands.removeAllDownload);
     }
     if (Route.guards.Playlist(route)) {
       const playlist = { kind: "playlist" as const, id: route.id, title: route.hint, sourceIds };
-      return downloadActions(playlist, commands.downloadAll, commands.removeAllDownload);
+      return downloadAction(playlist, commands.downloadAll, commands.removeAllDownload);
     }
     return [];
   };
@@ -635,7 +426,10 @@ export function App(props: {
   const pageActions = () => {
     const loaded = AsyncResult.isSuccess(page.result) ? page.result.value : null;
     const artist = loaded !== null && Schema.is(ArtistPage)(loaded) ? loaded.name : null;
-    const radio = Route.guards.Artist(route) && artist !== null ? [artistRadio(artist)] : [];
+    const radio =
+      Route.guards.Artist(route) && artist !== null
+        ? itemActions(new ArtistItem({ name: artist }))
+        : [];
     const marks = pageMarks(loaded);
     const pageRoute = Route.guards.Artist(route) || Route.guards.Album(route);
     if (!(pageRoute || Route.guards.Playlist(route)) || pageSources.length === 0) {
@@ -671,65 +465,32 @@ export function App(props: {
     else player.seekTo(segment.startMs);
   };
 
-  const segmentActions = (segment: SourceSegment) => {
-    const list = [
-      new Action({
-        command: commands.playSegment,
-        label: "Play from this track",
-        run: () => playSegment(segments.indexOf(segment)),
-      }),
-    ];
-    const { artist, artistRef, album, albumRef } = segment;
-    if (artistRef !== null) {
-      list.push(
-        new Action({
-          command: commands.goToArtist,
-          label: `Go to artist: ${artist ?? "Unknown artist"}`,
-          run: () => openArtist(artistRef, artist),
-        }),
-      );
-    }
-    if (albumRef !== null) {
-      list.push(
-        new Action({
-          command: commands.goToAlbum,
-          label: `Go to album: ${album ?? "Unknown album"}`,
-          run: () => openAlbum(albumRef, album, artistRef),
-        }),
-      );
-    }
-    // Unknown tracks are `ID - ID`
-    if (artistRef === null && segment.title.toUpperCase() !== "ID") {
-      const query = segmentLine(segment).replace(" – ", " ");
-      list.push(
-        new Action({
-          command: commands.searchTrack,
-          label: `Search the track: ${query}`,
-          run: () => searchFor(query),
-        }),
-      );
-    }
-    if (segment.recordingId !== null) {
-      list.push(playlistActions.add([{ recordingId: segment.recordingId, sourceId: null }]));
-    }
-    list.push(...heardInSets(segment.recordingId));
-    return list;
-  };
+  const segmentActions = (segment: SourceSegment) => [
+    new Action({
+      command: commands.playSegment,
+      label: "Play from this track",
+      run: () => playSegment(segments.indexOf(segment)),
+    }),
+    ...itemActions(new SegmentItem({ segment })),
+  ];
 
   const shownSegment = nowPlaying ? segments[selectedSegment] : undefined;
 
   // In a DJ set, the actions of the selected track come before the actions of the set
   const actionsFor = (target: ReturnType<typeof actionTarget>) => {
     const inSet = shownSegment === undefined ? [] : segmentActions(shownSegment);
-    if (target instanceof ActionTarget) return [...inSet, ...trackActions(target)];
-    if (target instanceof AlbumRow) return albumActions(target.album);
-    if (target instanceof PlaylistRow) return playlistActions.manage(target.playlist, () => {});
-    if (target instanceof ArtistRow) return [artistRadio(target.artist.name)];
+    if (target instanceof SongItem) return [...inSet, ...itemActions(target)];
+    if (target instanceof AlbumRow) return itemActions(new AlbumItem({ album: target.album }));
+    if (target instanceof PlaylistRow) {
+      return itemActions(new PlaylistItem({ playlist: target.playlist, onDelete: () => {} }));
+    }
+    if (target instanceof ArtistRow)
+      return itemActions(new ArtistItem({ name: target.artist.name }));
     return [];
   };
 
   const actionTitle = (target: ReturnType<typeof actionTarget>) => {
-    if (target instanceof ActionTarget) return songLine(target.source);
+    if (target instanceof SongItem) return songLine(target.source);
     if (target instanceof AlbumRow) return target.album.title;
     if (target instanceof ArtistRow) return target.artist.name;
     return titleOfRoute(route);
@@ -867,10 +628,18 @@ export function App(props: {
       commands.watchVideo,
       () => {
         const target = actionTarget();
-        const current = player.current?.source;
-        if (target instanceof ActionTarget) watchVideo(target.source);
-        else if (current !== undefined) watchVideo(current);
-        else toast("notice", "Nothing is playing");
+        const current = player.current;
+        if (target instanceof SongItem) watchVideo(target);
+        else if (current !== undefined) {
+          watchVideo(
+            new SongItem({
+              source: current.source,
+              context: current.context,
+              play: () => {},
+              extra: [],
+            }),
+          );
+        } else toast("notice", "Nothing is playing");
       },
     ],
   ];

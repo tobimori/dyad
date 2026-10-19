@@ -5,6 +5,8 @@ import type { LibraryEntityType, LibraryMark, SourceSummary } from "@dyad/domain
 import { Effect } from "effect";
 import type { Fiber } from "effect";
 
+import { SongItem } from "../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../context/action-items.ts";
 import { useMarks } from "../context/marks.tsx";
 import { commands } from "../context/keymap.ts";
 import type { Command } from "../context/keymap.ts";
@@ -147,4 +149,10 @@ export function useLibraryMarks(props: {
       ];
     },
   };
+}
+
+/** Save, favorite and dislike for a song */
+export function useMarkActions(app: ActionApp) {
+  const marks = useLibraryMarks({ replica: app.replica, run: app.run });
+  return (item: ActionItem) => (item instanceof SongItem ? marks.song(item.source) : []);
 }

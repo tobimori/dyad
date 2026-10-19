@@ -1,11 +1,15 @@
-import { downloadQualities, pinProgress } from "@dyad/client-runtime";
-import type { DownloadPin, Downloads } from "@dyad/client-runtime";
+import { DownloadPin, downloadQualities, pinProgress, titleOf } from "@dyad/client-runtime";
+import type { Downloads } from "@dyad/client-runtime";
 import type { DownloadQuality } from "@dyad/domain";
 import { Effect, Fiber, Stream, SubscriptionRef } from "effect";
 import { useEffect, useState } from "react";
 
-import { Action, ActionsDialog } from "./dialog-actions.tsx";
+import { AlbumItem, SongItem } from "../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../context/action-items.ts";
 import { commands } from "../context/keymap.ts";
+import type { Command } from "../context/keymap.ts";
+import { useToast } from "../ui/toast.tsx";
+import { Action, ActionsDialog } from "./dialog-actions.tsx";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
 import { SelectList, SelectOption } from "../ui/select-list.tsx";
 
@@ -124,4 +128,80 @@ export function DownloadsDialog(props: {
       <SelectList options={options} width={downloadsWidth - 4} rows={14} onChoose={choose} />
     </Dialog>
   );
+}
+
+/** "Download" or "Remove download" of a song, an album or a playlist */
+export function useDownloadAction(app: ActionApp) {
+  const dialog = useDialog();
+  const toast = useToast();
+
+  return (
+    target: Pick<DownloadPin, "kind" | "id" | "title" | "sourceIds">,
+    add: Command,
+    remove: Command,
+  ) => {
+    const downloads = app.downloads;
+    if (downloads === null) return [];
+
+    const noun = target.kind === "song" ? "" : ` ${target.kind}`;
+    const pinned = SubscriptionRef.getUnsafe(downloads.state).pins.some(
+      (pin) => pin.kind === target.kind && pin.id === target.id,
+    );
+    if (pinned) {
+      return [
+        new Action({
+          command: remove,
+          label: `Remove${noun} download`,
+          run: () => {
+            app.run(downloads.unpin(target.kind, target.id));
+            toast("notice", `Removed the download of ${target.title}`);
+          },
+        }),
+      ];
+    }
+
+    const download = (quality: typeof DownloadQuality.Type) => {
+      app.run(downloads.pin(new DownloadPin({ ...target, quality })));
+      toast("notice", `Downloading ${target.title}`);
+    };
+    return [
+      new Action({
+        command: add,
+        label: `Download${noun}`,
+        run: () =>
+          dialog.push(
+            <QualityDialog
+              title={`Download ${target.title}`}
+              current={app.downloadQuality}
+              onChoose={download}
+            />,
+          ),
+      }),
+    ];
+  };
+}
+
+// The download of an album reads its songs when it runs online
+export function useDownloadActions(app: ActionApp) {
+  const download = useDownloadAction(app);
+  return (item: ActionItem) => {
+    if (item instanceof SongItem) {
+      const { source } = item;
+      const song = { kind: "song" as const, id: source.id, title: titleOf(source) };
+      return download(
+        { ...song, sourceIds: [source.id] },
+        commands.download,
+        commands.removeDownload,
+      );
+    }
+    if (item instanceof AlbumItem) {
+      const { album } = item;
+      return download(
+        { kind: "album", id: album.ref, title: album.title, sourceIds: [] },
+        commands.downloadAll,
+        commands.removeAllDownload,
+      );
+    }
+    return [];
+  };
 }

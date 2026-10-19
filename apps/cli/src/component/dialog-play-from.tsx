@@ -4,6 +4,8 @@ import type { SourceCopies, SourceCopy, SourceSummary } from "@dyad/domain";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 
+import { SongItem } from "../context/action-items.ts";
+import type { ActionApp, ActionItem } from "../context/action-items.ts";
 import { commands } from "../context/keymap.ts";
 import { useTheme } from "../theme/theme.ts";
 import { Dialog, useDialog } from "../ui/dialog.tsx";
@@ -104,4 +106,13 @@ export function usePlayFrom(atoms: ServerAtoms) {
       label: "Play from…",
       run: () => dialog.push(<PlayFromDialog atoms={atoms} source={source} onPlay={play} />),
     });
+}
+
+// A new play: switching the source of an entry in place belongs to the session
+export function usePlayFromActions(app: ActionApp) {
+  const playFrom = usePlayFrom(app.atoms);
+  return (item: ActionItem) =>
+    item instanceof SongItem
+      ? [playFrom(item.source, (copy) => app.player.playCopy(copy, item.context))]
+      : [];
 }
