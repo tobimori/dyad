@@ -1,4 +1,4 @@
-import { device, user } from "@dyad/db";
+import { device, serverPeer, user } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   Authentication,
@@ -12,7 +12,7 @@ import {
   Unauthorized,
   UserId,
 } from "@dyad/domain";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { Clock, Context, Crypto, Data, Effect, Layer, Option, Ref } from "effect";
 
 import { fromHex, hex } from "./ids.ts";
@@ -290,8 +290,27 @@ export const principalOf = (token: string) =>
       .where(eq(device.tokenHash, tokenHash))
       .limit(1)
       .pipe(orDieOnDatabaseError("authenticate"));
-    if (row === undefined) return yield* new Unauthorized();
-    return new Principal({ userId: UserId.make(row.userId), deviceId: DeviceId.make(row.id) });
+    if (row !== undefined) {
+      return new Principal({ userId: UserId.make(row.userId), deviceId: DeviceId.make(row.id) });
+    }
+
+    // A paired replica acts for the owner, with its replica ID as device ID
+    const [peer] = yield* db
+      .select({ replicaId: serverPeer.replicaId })
+      .from(serverPeer)
+      .where(eq(serverPeer.tokenHash, tokenHash))
+      .pipe(orDieOnDatabaseError("authenticate"));
+    const [owner] = yield* db
+      .select({ id: user.id })
+      .from(user)
+      .orderBy(asc(user.createdAt))
+      .limit(1)
+      .pipe(orDieOnDatabaseError("authenticate"));
+    if (peer === undefined || owner === undefined) return yield* new Unauthorized();
+    return new Principal({
+      userId: UserId.make(owner.id),
+      deviceId: DeviceId.make(peer.replicaId),
+    });
   });
 
 export const authenticationLayer = Layer.effect(
