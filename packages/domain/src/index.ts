@@ -613,11 +613,11 @@ export class DeviceSummary extends Schema.Class<DeviceSummary>("DeviceSummary")(
   current: Schema.Boolean,
 }) {}
 
-/** Unique in the user's session. The server never uses an ID again, also after a restart. */
+/** Unique in its room. The room never uses an ID again, also after a restart. */
 export const EntryId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("EntryId"));
 export type EntryId = typeof EntryId.Type;
 
-/** `device:<DeviceId>` for a Dyad device that plays */
+/** `device:<DeviceId>` for a Dyad device that plays. A room has the ID of its own output. */
 export const OutputId = Schema.String.check(Schema.isMaxLength(256)).pipe(Schema.brand("OutputId"));
 export type OutputId = typeof OutputId.Type;
 
@@ -645,7 +645,7 @@ export class QueueEntry extends Schema.Class<QueueEntry>("QueueEntry")({
   ),
 }) {}
 
-/** The transport of the user's session. `positionAt` gives the position at a server time. */
+/** The transport of a room. `positionAt` gives the position at a server time. */
 export class Playback extends Schema.Class<Playback>("Playback")({
   state: Schema.Literals(["stopped", "paused", "playing"]),
   /** Entries before it are the history that a skip back goes to */
@@ -657,6 +657,7 @@ export class Playback extends Schema.Class<Playback>("Playback")({
   rate: Schema.Literals([0, 1]),
   /** Changes at each command that changes the transport, but not at the natural end of an entry */
   revision: Schema.Int,
+  /** The room's own output, or `null` after another room or another controller took it */
   outputId: Schema.NullOr(OutputId),
   /** The other outputs that play in sync with `outputId`. A group of Sonos only is a Sonos group. */
   group: Schema.Array(OutputId).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
@@ -709,21 +710,30 @@ export const SessionEvent = Schema.TaggedUnion({
    * Always the first event. Reports of this connection send `generation`. `serverTime` gives the
    * clock offset to the server.
    */
-  Snapshot: {
+  Connected: {
     generation: Schema.Int,
     serverTime: Schema.Number,
+    outputs: Schema.Array(Output),
+    /** The rooms whose `RoomSnapshot` follows. A client forgets the other rooms. */
+    rooms: Schema.Array(OutputId),
+  },
+  /** The first event of each room, also of a room that comes later */
+  RoomSnapshot: {
+    room: OutputId,
+    name: Schema.String,
     queueVersion: Schema.Int,
     entries: Schema.Array(QueueEntry),
     playback: Playback,
-    outputs: Schema.Array(Output),
   },
   /** Apply only when `fromVersion` is the version of the local queue, else connect again */
   QueueChanged: {
+    room: OutputId,
     fromVersion: Schema.Int,
     version: Schema.Int,
     splices: Schema.Array(QueueSplice),
   },
-  PlaybackChanged: { serverTime: Schema.Number, playback: Playback },
+  PlaybackChanged: { room: OutputId, serverTime: Schema.Number, playback: Playback },
+  RoomRemoved: { room: OutputId },
   OutputsChanged: { outputs: Schema.Array(Output) },
   /** A newer connection of the same device plays. This connection continues as a controller. */
   Superseded: {},
@@ -773,13 +783,16 @@ export const SessionCommand = Schema.TaggedUnion({
     crossfadeSeconds: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 12 })),
     djStyle: Schema.NullOr(DjStyle),
   },
-  /** `play: null` keeps the state. The session leaves its group. */
-  Transfer: { outputId: OutputId, play: Schema.NullOr(Schema.Boolean) },
   /**
-   * Plays on all `outputIds` in sync. Only `groupable` outputs. Outputs that play already continue,
-   * and the others join; without one, it is a `Transfer`.
+   * Moves the queue and the position into `room`, which loses its own queue. This room is then
+   * empty. `play: null` keeps the state.
    */
-  SetGroup: { outputIds: Schema.NonEmptyArray(OutputId).check(Schema.isMaxLength(32)) },
+  Transfer: { room: OutputId, play: Schema.NullOr(Schema.Boolean) },
+  /**
+   * The outputs that play in sync with the room's own output, which they leave their rooms for. Only
+   * `groupable` outputs. `[]` ends the group.
+   */
+  SetGroup: { members: Schema.Array(OutputId).check(Schema.isMaxLength(31)) },
   SetOutputDelay: {
     outputId: OutputId,
     delayMs: Schema.Int.check(Schema.isBetween({ minimum: -2000, maximum: 2000 })),
@@ -813,8 +826,8 @@ export class SessionCommandFailed extends Schema.TaggedError<SessionCommandFaile
 ) {}
 
 /**
- * What a device played before it lost the server. The server continues from it only when the device
- * is still the output and nobody changed the transport since `revision`.
+ * What a device played in its own room before it lost the server. The server continues from it only
+ * when the room still plays on the device and nobody changed the transport since `revision`.
  */
 export class PlayerResume extends Schema.Class<PlayerResume>("PlayerResume")({
   revision: Schema.Int,
@@ -899,8 +912,8 @@ const OwnerRpc = RpcGroup.make(
     success: VideoPlan,
     error: PlaybackUnavailable,
   }),
-  // A `Snapshot` of the user's session, then its changes. A device that can play sends `player`;
-  // the newest such connection of a device plays when the device is the output.
+  // `Connected`, a `RoomSnapshot` of each room, then their changes. A device that can play sends
+  // `player`; the newest such connection of a device plays the device's own room.
   Rpc.make("connectDevice", {
     payload: {
       player: Schema.NullOr(
@@ -918,6 +931,7 @@ const OwnerRpc = RpcGroup.make(
   // `ifQueueVersion` is for commands that a client built from queue positions.
   Rpc.make("controlSession", {
     payload: {
+      room: OutputId,
       requestId: Schema.String.check(Schema.isUUID()),
       command: SessionCommand,
       ifQueueVersion: Schema.NullOr(Schema.Int),
@@ -925,8 +939,8 @@ const OwnerRpc = RpcGroup.make(
     success: SessionCommandResult,
     error: SessionCommandFailed,
   }),
-  // From the output device, on each change and every 5 seconds while it plays. The server ignores
-  // a report of an older connection or an older revision.
+  // From the device about its own room, on each change and every 5 seconds while it plays. The
+  // server ignores a report of an older connection or an older revision.
   Rpc.make("reportPlayback", {
     payload: {
       generation: Schema.Int,

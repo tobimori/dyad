@@ -337,20 +337,21 @@ const outputWithNumber = Effect.fn(function* (current: View, server: Server, arg
 const enabledOutputs = (current: View) =>
   current.playback.outputId === null ? [] : [current.playback.outputId, ...current.playback.group];
 
-// As in MPD, enabling a second output plays on both, but only groupable outputs can play in sync
+// As in MPD, enabling a second output plays on both, but only groupable outputs can play in sync.
+// Else the queue moves into the room of the output.
 const enableCommand = (current: View, output: Output) => {
-  const active = current.outputs.find((each) => each.id === current.playback.outputId);
-  return active?.groupable === true && output.groupable
-    ? Command.SetGroup.make({ outputIds: [output.id, ...enabledOutputs(current)] })
-    : Command.Transfer.make({ outputId: output.id, play: null });
+  const own = current.outputs.find((each) => each.id === current.room);
+  return own?.groupable === true && output.groupable
+    ? Command.SetGroup.make({ members: [...current.playback.group, output.id] })
+    : Command.Transfer.make({ room: output.id, play: null });
 };
 
-const disableCommand = (current: View, output: Output) => {
-  const [first, ...rest] = enabledOutputs(current).filter((id) => id !== output.id);
-  return first === undefined
+const disableCommand = (current: View, output: Output) =>
+  output.id === current.room
     ? Command.Pause.make({})
-    : Command.SetGroup.make({ outputIds: [first, ...rest] });
-};
+    : Command.SetGroup.make({
+        members: current.playback.group.filter((id) => id !== output.id),
+      });
 
 const artwork = (picture: boolean) =>
   handler(2, 2, ([uri = "", offsetArg = ""], connection) =>

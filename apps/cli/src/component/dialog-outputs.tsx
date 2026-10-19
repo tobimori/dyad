@@ -19,13 +19,13 @@ const crossfadeOnSeconds = 6;
 // Off, then each style
 const djStyles = [null, ...DjStyle.literals];
 
-/** The outputs that can play the session. Choosing one moves the playback there. */
+/** The outputs. Choosing one moves the queue into its room; the group key adds it to this room. */
 export function OutputsDialog(props: {
   readonly session: typeof SessionClient.Service;
   /** Runs an effect with the log file of the CLI */
   readonly run: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
-  readonly transfer: (outputId: OutputId) => void;
-  readonly group: (outputIds: readonly [OutputId, ...Array<OutputId>]) => void;
+  readonly transfer: (room: OutputId) => void;
+  readonly group: (members: ReadonlyArray<OutputId>) => void;
   readonly setVolume: (outputId: OutputId, volume: number) => void;
 }) {
   const dialog = useDialog();
@@ -34,8 +34,9 @@ export function OutputsDialog(props: {
   const view = useSessionView(props.session, props.run);
   const [highlighted, setHighlighted] = useState<OutputId | null>(null);
 
-  const active = view.playback.outputId;
-  const members = active === null ? [] : [active, ...view.playback.group];
+  const room = view.room;
+  const group = view.playback.group;
+  const members = view.playback.outputId === null ? group : [view.playback.outputId, ...group];
   const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
   const options = view.outputs.map(
     (output) =>
@@ -61,14 +62,15 @@ export function OutputsDialog(props: {
   // Only groupable outputs play in sync, so the group keeps only those
   const toggleGroup = () => {
     const output = view.outputs.find((candidate) => candidate.id === highlighted);
-    if (output?.groupable !== true) return;
-    const groupable = members.filter((id) =>
+    if (output?.groupable !== true || output.id === room) return;
+    const groupable = group.filter((id) =>
       view.outputs.some((candidate) => candidate.id === id && candidate.groupable),
     );
-    const [first, ...rest] = groupable.includes(output.id)
-      ? groupable.filter((id) => id !== output.id)
-      : [output.id, ...groupable];
-    if (first !== undefined) props.group([first, ...rest]);
+    props.group(
+      groupable.includes(output.id)
+        ? groupable.filter((id) => id !== output.id)
+        : [...groupable, output.id],
+    );
   };
 
   const { crossfadeSeconds, djStyle } = view.playback;
@@ -107,8 +109,9 @@ export function OutputsDialog(props: {
 
   const choose = (outputId: OutputId) => {
     dialog.pop();
-    // Choosing a member of a group plays only there
-    if (outputId !== active || members.length > 1) props.transfer(outputId);
+    // Choosing the room's own output ends its group
+    if (outputId !== room) props.transfer(outputId);
+    else if (group.length > 0) props.group([]);
   };
 
   return (

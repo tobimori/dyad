@@ -1,6 +1,7 @@
 import {
   currentEntryOf,
   deviceOutputId,
+  isOwnRoom,
   isTransportCommand,
   positionOf,
 } from "@dyad/client-runtime";
@@ -95,8 +96,7 @@ export function usePlayer(props: {
   const current = currentEntryOf(view);
   const currentIndex = current === undefined ? null : entries.indexOf(current);
   const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
-  const volumeTarget =
-    playback.outputId ?? (view.outputs.some((output) => output.id === own) ? own : null);
+  const volumeTarget = playback.outputId ?? view.room;
   const volumeOutput = view.outputs.find((output) => output.id === volumeTarget);
   const volume = volumeOutput?.volume ?? null;
 
@@ -115,9 +115,8 @@ export function usePlayer(props: {
 
   const send = (command: typeof SessionCommand.Type) => {
     // Offline, only the device that plays can change its own audio
-    if (!view.connected && isTransportCommand(command) && props.engine?.controlOffline(command)) {
-      return;
-    }
+    const offline = !view.connected && isOwnRoom(view) && isTransportCommand(command);
+    if (offline && props.engine?.controlOffline(command)) return;
 
     props.run(
       props.session.send(command).pipe(
@@ -240,6 +239,11 @@ export function usePlayer(props: {
     volume,
     muted: volumeOutput?.muted ?? false,
     error,
+    /** The name of the room that the view shows, `null` for the room of this device */
+    room:
+      view.room === null || isOwnRoom(view)
+        ? null
+        : (view.outputs.find((output) => output.id === view.room)?.name ?? view.name),
     /** The output stopped answering, or a URL output did not start the stream */
     lost: playback.lost && playback.state !== "stopped",
     /** `null` while connected */
@@ -305,20 +309,26 @@ export function usePlayer(props: {
     setVolume: setVolumeTo,
     changeVolume: (direction: 1 | -1) => setVolumeTo((volume ?? 0) + direction * volumeStep),
     setOutputVolume,
-    /** Plays the session on `outputId` from the current position */
-    transfer: (outputId: OutputId) =>
-      send(SessionCommand.cases.Transfer.make({ outputId, play: null })),
-    /** Plays the session on all `outputIds` in sync */
-    group: (outputIds: readonly [OutputId, ...Array<OutputId>]) =>
-      send(SessionCommand.cases.SetGroup.make({ outputIds })),
+    /** Moves the queue into the room of `room` from the current position, and shows that room */
+    transfer: (room: OutputId) => send(SessionCommand.cases.Transfer.make({ room, play: null })),
+    /** The outputs that play in sync with the room's own output */
+    group: (members: ReadonlyArray<OutputId>) =>
+      send(SessionCommand.cases.SetGroup.make({ members })),
+    /** Shows and controls another room */
+    selectRoom: (room: OutputId) => props.run(props.session.selectRoom(room)),
     toggleShuffle: () => send(SessionCommand.cases.SetShuffle.make({ on: !playback.shuffle })),
     cycleRepeat: () =>
       send(SessionCommand.cases.SetRepeat.make({ mode: nextRepeatMode[playback.repeat] })),
     toggleAutoplay: () => send(SessionCommand.cases.SetAutoplay.make({ on: !playback.autoplay })),
-    /** The session pauses when this device plays it, so that it does not look like it plays on */
+    /** The own room pauses when this device plays it, so that it does not look like it plays on */
     quit: () =>
-      playback.outputId === own && playback.state === "playing"
-        ? props.session.send(SessionCommand.cases.Pause.make({})).pipe(Effect.ignore)
-        : Effect.void,
+      Effect.gen(function* () {
+        const mine = yield* SubscriptionRef.get(props.session.own);
+        if (mine.room === null || mine.playback.outputId !== mine.room) return;
+        if (mine.playback.state !== "playing") return;
+        yield* props.session
+          .send(SessionCommand.cases.Pause.make({}), mine.room)
+          .pipe(Effect.ignore);
+      }),
   };
 }

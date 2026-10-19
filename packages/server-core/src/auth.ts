@@ -141,7 +141,7 @@ export const removeDevice = Effect.fn("removeDevice")(function* (deviceId: Devic
   yield* db.delete(device).where(eq(device.id, deviceId));
 
   // Authentication checks a token only when a request starts, so open streams must end
-  yield* (yield* Sessions).session.removeDevice(deviceId);
+  yield* (yield* Sessions).removeDevice(deviceId);
 });
 
 /** The device of a device token */

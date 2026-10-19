@@ -225,7 +225,7 @@ const makeEngine = Effect.fn(function* (options: {
       },
     ) {
       const actions = yield* Queue.unbounded<Effect.Effect<void>>();
-      const latest = SubscriptionRef.get(session.view);
+      const latest = SubscriptionRef.get(session.own);
       const buffers = new Map<EntryId, Buffered>();
       // Entries that failed once before their audio started. The next plan of the server skips
       // the source that failed, so one more start can play another source of the recording.
@@ -668,7 +668,7 @@ const makeEngine = Effect.fn(function* (options: {
               skip.fromEntryId === current ? advanceOffline("skip", skip.direction) : undefined,
 
             SetVolume: (change) => {
-              const view = SubscriptionRef.getUnsafe(session.view);
+              const view = SubscriptionRef.getUnsafe(session.own);
               const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
               return change.outputId === own
                 ? setVolume(change.volume).pipe(Effect.andThen(showLocal))
@@ -683,7 +683,7 @@ const makeEngine = Effect.fn(function* (options: {
       });
 
       controlOffline = (command) => {
-        if (SubscriptionRef.getUnsafe(session.view).connected || current === null) return false;
+        if (SubscriptionRef.getUnsafe(session.own).connected || current === null) return false;
         const action = offlineAction(command);
         if (action === undefined) return false;
         Queue.offerUnsafe(actions, action);
@@ -695,7 +695,7 @@ const makeEngine = Effect.fn(function* (options: {
       audio.setMasterVolume(volume);
       yield* Stream.mergeAll(
         [
-          SubscriptionRef.changes(session.view).pipe(Stream.map(reconcile)),
+          SubscriptionRef.changes(session.own).pipe(Stream.map(reconcile)),
           Stream.fromQueue(actions),
           Stream.tick("5 seconds").pipe(Stream.map(() => tick)),
         ],

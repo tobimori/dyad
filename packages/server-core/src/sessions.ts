@@ -48,7 +48,7 @@ import { hintPrefetch } from "./playback.ts";
 import { queueCopyDiscovery } from "./source-copies.ts";
 import { Receivers, deviceOutput } from "./receivers.ts";
 import { usableProviders } from "./providers.ts";
-import { SessionState, loadSession, saveSession } from "./session-store.ts";
+import { SessionState, deleteSession, loadSessions, saveSession } from "./session-store.ts";
 import { continueRadio } from "./radio.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { TimedDesired, driveTimedOutputs } from "./timed-output.ts";
@@ -90,6 +90,8 @@ const emptyState = new SessionState({
 class Connection extends Data.Class<{
   readonly deviceId: DeviceId;
   readonly events: Queue.Queue<Event, Cause.Done>;
+  // The rooms whose snapshot the connection got. Their events follow it.
+  readonly rooms: Set<OutputId>;
 }> {}
 
 // The connection of a device that plays when the device is the output
@@ -117,6 +119,21 @@ const removalSplices = (indexes: ReadonlyArray<number>) =>
     .toReversed()
     .map((run) => new QueueSplice({ ...run, insert: [] }));
 
+// What `Transfer` moves from one room into another
+class MovedQueue extends Data.Class<{
+  readonly entries: ReadonlyArray<QueueEntry>;
+  readonly entryId: EntryId | null;
+  readonly positionMs: number;
+  readonly playback: Playback;
+}> {}
+
+// The device players of all rooms: a device plays its own room, or joins the group of another
+const makeHousehold = () => ({
+  players: new Map<OutputId, Player>(),
+  connections: new Set<Connection>(),
+  nextGeneration: 1,
+});
+
 // The play of the current entry since the output started it
 class OpenPlay extends Data.Class<{
   readonly entry: QueueEntry;
@@ -128,9 +145,13 @@ class OpenPlay extends Data.Class<{
 }> {}
 
 const makeSession = Effect.fn(function* (
+  room: OutputId,
   initial: SessionState,
+  household: ReturnType<typeof makeHousehold>,
   prefetch: (sourceIds: ReadonlyArray<string>) => void,
   queueEnds: (entries: ReadonlyArray<QueueEntry>) => void,
+  // A device volume changed
+  outputsChanged: () => void,
 ) {
   const services = yield* Effect.context<Database | Crypto.Crypto>();
   const urlOutputs = yield* Outputs;
@@ -149,9 +170,6 @@ const makeSession = Effect.fn(function* (
     // Failed starts since the last start that played. One pass over the queue at most.
     failures: 0,
     reportDeadline: 0,
-    nextGeneration: 1,
-    connections: new Set<Connection>(),
-    players: new Map<OutputId, Player>(),
     requests: new Map<string, RememberedResult>(),
     // Changed since the last save
     dirty: false,
@@ -175,36 +193,24 @@ const makeSession = Effect.fn(function* (
     refilled: Option.none<EntryId>(),
   };
 
+  const players = household.players;
+
   const broadcast = (event: Event) => {
-    for (const connection of state.connections) Queue.offerUnsafe(connection.events, event);
+    for (const connection of household.connections) {
+      if (connection.rooms.has(room)) Queue.offerUnsafe(connection.events, event);
+    }
   };
 
-  const outputs = () => [
-    ...[...state.players].map(
-      ([id, player]) =>
-        new Output({
-          id,
-          kind: "device",
-          name: player.name,
-          volume: player.volume,
-          muted: false,
-          delayMs: urlOutputs.delayOf(id),
-          groupable: receivers.has(id),
-        }),
-    ),
-    ...urlOutputs.list(),
-  ];
-
-  const available = (outputId: OutputId) => state.players.has(outputId) || urlOutputs.has(outputId);
+  const available = (outputId: OutputId) => players.has(outputId) || urlOutputs.has(outputId);
 
   const timedCapable = (outputId: OutputId) =>
-    state.players.has(outputId)
+    players.has(outputId)
       ? receivers.has(outputId)
       : urlOutputs.has(outputId) && urlOutputs.timedCapable(outputId);
 
   // In a timed group, or in a group of URL outputs that the plugin groups
   const groupable = (outputId: OutputId) =>
-    timedCapable(outputId) || (!state.players.has(outputId) && urlOutputs.joinable([outputId]));
+    timedCapable(outputId) || (!players.has(outputId) && urlOutputs.joinable([outputId]));
 
   // A group plays through the renderer, unless its plugin groups it, for example a group of Sonos
   // only. A URL output or a device alone plays by itself.
@@ -214,9 +220,6 @@ const makeSession = Effect.fn(function* (
     const members = [outputId, ...group];
     return urlOutputs.isTimed(outputId) || (group.length > 0 && !urlOutputs.isNative(members));
   };
-
-  const broadcastOutputs = () =>
-    broadcast(SessionEvent.cases.OutputsChanged.make({ outputs: outputs() }));
 
   const indexOf = (entryId: EntryId | null) =>
     state.entries.findIndex((entry) => entry.id === entryId);
@@ -233,6 +236,7 @@ const makeSession = Effect.fn(function* (
     state.queueVersion += 1;
     broadcast(
       SessionEvent.cases.QueueChanged.make({
+        room,
         fromVersion,
         version: state.queueVersion,
         splices,
@@ -277,15 +281,6 @@ const makeSession = Effect.fn(function* (
       revision: state.playback.revision + 1,
     });
 
-  // The sender plays when the output is offline and the sender can play (Spotify Connect)
-  const claimOutput = (deviceId: DeviceId) => {
-    const current = state.playback.outputId;
-    if (current !== null && available(current)) return current;
-
-    const own = deviceOutput(deviceId);
-    return state.players.has(own) ? own : current;
-  };
-
   const playedUntil = (play: OpenPlay, now: number) =>
     play.resumedAt === null ? play.playedMs : play.playedMs + now - play.resumedAt;
 
@@ -328,7 +323,7 @@ const makeSession = Effect.fn(function* (
 
     state.handover = Option.filter(state.handover, (resume) => resume.entryId === playback.entryId);
     const entry = currentEntry();
-    const output = playback.outputId === null ? undefined : state.players.get(playback.outputId);
+    const output = playback.outputId === null ? undefined : players.get(playback.outputId);
     const deviceId =
       output?.connection.deviceId ??
       (Option.isSome(state.urlDriver) || Option.isSome(state.timedDriver)
@@ -454,7 +449,13 @@ const makeSession = Effect.fn(function* (
           prefetch(upcoming);
         }
         const { entryId, repeat, autoplay } = state.playback;
-        const ends = upcoming.length === 0 && repeat === "off" && autoplay && entryId !== null;
+        // A paused room has no upcoming sources either
+        const ends =
+          state.playback.state === "playing" &&
+          upcoming.length === 0 &&
+          repeat === "off" &&
+          autoplay &&
+          entryId !== null;
         if (ends && !Option.contains(state.refilled, entryId)) {
           state.refilled = Option.some(entryId);
           queueEnds(state.entries);
@@ -467,6 +468,7 @@ const makeSession = Effect.fn(function* (
           }
           broadcast(
             SessionEvent.cases.PlaybackChanged.make({
+              room,
               serverTime: now,
               playback: state.playback,
             }),
@@ -485,7 +487,6 @@ const makeSession = Effect.fn(function* (
   const fail = (reason: SessionCommandFailed["reason"]) => new SessionCommandFailed({ reason });
 
   const apply = (
-    deviceId: DeviceId,
     command: Command,
     sources: ReadonlyMap<string, SourceSummary>,
     disliked: ReadonlySet<string>,
@@ -493,36 +494,6 @@ const makeSession = Effect.fn(function* (
   ) => {
     const playback = state.playback;
     const position = positionAt(playback, now);
-
-    const transfer = Effect.fn(function* (
-      outputId: OutputId,
-      play: boolean | null,
-      group: ReadonlyArray<OutputId>,
-    ) {
-      if (!available(outputId)) return yield* fail("output_unavailable");
-
-      if (play ?? playback.state === "playing") {
-        const entry = currentEntry() ?? nextEntry(state.entries, null, playback.repeat, "skip");
-        if (entry === undefined) return yield* fail("nothing_to_play");
-
-        const continues = playback.state !== "stopped" && entry.id === playback.entryId;
-        start(entry.id, continues ? position : 0, now, outputId);
-        setPlayback({ group });
-        return [];
-      }
-
-      setPlayback({
-        state: playback.state === "stopped" ? "stopped" : "paused",
-        positionMs: playback.state === "stopped" ? 0 : position,
-        at: now,
-        rate: 0,
-        revision: playback.revision + 1,
-        outputId,
-        group,
-        lost: false,
-      });
-      return [];
-    });
 
     return SessionCommand.match<Effect.Effect<ReadonlyArray<EntryId>, SessionCommandFailed>>(
       command,
@@ -563,7 +534,7 @@ const makeSession = Effect.fn(function* (
             ]);
             state.failures = 0;
             setPlayback({ shuffle: command.shuffle });
-            start(first.id, 0, now, claimOutput(deviceId));
+            start(first.id, 0, now, room);
             return entries.map((entry) => entry.id);
           }),
 
@@ -683,7 +654,7 @@ const makeSession = Effect.fn(function* (
               ]);
             }
             state.failures = 0;
-            start(entry.id, command.positionMs, now, claimOutput(deviceId));
+            start(entry.id, command.positionMs, now, room);
             return [];
           }),
 
@@ -691,14 +662,11 @@ const makeSession = Effect.fn(function* (
           Effect.gen(function* () {
             if (playback.state === "playing") return [];
 
-            const outputId = claimOutput(deviceId);
-            if (outputId === null) return yield* fail("output_unavailable");
-
             const entry = currentEntry() ?? nextEntry(state.entries, null, playback.repeat, "skip");
             if (entry === undefined) return yield* fail("nothing_to_play");
 
             const continues = playback.state === "paused" && entry.id === playback.entryId;
-            start(entry.id, continues ? position : 0, now, outputId);
+            start(entry.id, continues ? position : 0, now, room);
             return [];
           }),
 
@@ -799,24 +767,17 @@ const makeSession = Effect.fn(function* (
             return [];
           }),
 
-        Transfer: (command) => transfer(command.outputId, command.play, []),
+        // `Sessions` moves the queue, because it needs two rooms
+        Transfer: () => Effect.die(new Error("A room cannot transfer by itself")),
 
+        // The outputs that play already keep playing, so the change needs no new transport
         SetGroup: (command) =>
           Effect.gen(function* () {
-            const first = command.outputIds[0];
-            const all = [...new Set(command.outputIds)];
-            const rest = all.slice(1);
-            if (!all.every(timedCapable) && !urlOutputs.joinable(all)) {
+            const all = [room, ...new Set(command.members.filter((id) => id !== room))];
+            if (all.length > 1 && !all.every(timedCapable) && !urlOutputs.joinable(all)) {
               return yield* fail("output_unavailable");
             }
-
-            // An output that plays already keeps playing, so the change needs no new transport
-            const members =
-              playback.outputId === null ? [] : [playback.outputId, ...playback.group];
-            const kept = members.find((id) => all.includes(id));
-            if (kept === undefined) return yield* transfer(first, null, rest);
-
-            setPlayback({ outputId: kept, group: all.filter((id) => id !== kept) });
+            setPlayback({ outputId: room, group: all.slice(1) });
             return [];
           }),
 
@@ -830,7 +791,7 @@ const makeSession = Effect.fn(function* (
 
         SetVolume: (command) =>
           Effect.gen(function* () {
-            const player = state.players.get(command.outputId);
+            const player = players.get(command.outputId);
             if (player === undefined) {
               // Its status or its outputs change gives the new volume to all sessions
               const setting = urlOutputs.setVolume(command.outputId, command.volume);
@@ -842,8 +803,8 @@ const makeSession = Effect.fn(function* (
               return [];
             }
 
-            state.players.set(command.outputId, new Player({ ...player, volume: command.volume }));
-            broadcastOutputs();
+            players.set(command.outputId, new Player({ ...player, volume: command.volume }));
+            outputsChanged();
             return [];
           }),
       },
@@ -885,7 +846,7 @@ const makeSession = Effect.fn(function* (
               return yield* fail("stale_queue");
             }
 
-            const entryIds = yield* apply(deviceId, request.command, sources, disliked, now);
+            const entryIds = yield* apply(request.command, sources, disliked, now);
             return new SessionCommandResult({
               queueVersion: state.queueVersion,
               revision: state.playback.revision,
@@ -912,13 +873,13 @@ const makeSession = Effect.fn(function* (
     modify((now) =>
       Effect.sync(() => {
         const outputId = deviceOutput(deviceId);
-        const player = state.players.get(outputId);
+        const player = players.get(outputId);
         if (player?.generation !== received.generation) return;
         if (state.playback.outputId !== outputId) return;
 
         if (received.volume !== player.volume) {
-          state.players.set(outputId, new Player({ ...player, volume: received.volume }));
-          broadcastOutputs();
+          players.set(outputId, new Player({ ...player, volume: received.volume }));
+          outputsChanged();
         }
         applyReport(outputId, received, now);
       }),
@@ -949,12 +910,7 @@ const makeSession = Effect.fn(function* (
         const current =
           Option.getOrUndefined(state.timedDriver) === driver ||
           Option.getOrUndefined(state.urlDriver) === driver;
-        if (!current) return;
-        const { outputId, group } = state.playback;
-        if (outputId === null) return;
-        const [first, ...rest] = [outputId, ...group].filter((id) => id !== taken);
-        if (first === undefined) dropOutput(now);
-        else setPlayback({ outputId: first, group: rest });
+        if (current) releaseNow([taken], now);
       }),
     );
 
@@ -1055,109 +1011,68 @@ const makeSession = Effect.fn(function* (
     );
   };
 
-  const addPlayer = (
-    connection: Connection,
-    generation: number,
-    player: { readonly name: string; readonly volume: number },
-    resume: PlayerResume | null,
-    now: number,
-  ) => {
-    const outputId = deviceOutput(connection.deviceId);
-    const earlier = state.players.get(outputId);
-    if (earlier !== undefined) {
-      Queue.offerUnsafe(earlier.connection.events, SessionEvent.cases.Superseded.make({}));
-    }
-    state.players.set(outputId, new Player({ generation, connection, ...player }));
-    broadcastOutputs();
-
-    const playback = state.playback;
-    if (playback.outputId !== outputId) return;
-
-    // The device played on while it was away, and nobody changed the transport since
-    const adopts =
-      resume !== null &&
-      playback.group.length === 0 &&
-      resume.revision >= playback.revision &&
-      indexOf(resume.entryId) !== -1;
-    if (adopts) {
-      // An entry that ended on the device offline has a complete play, as after a natural end
-      if (playback.entryId !== null && resume.advanced.includes(playback.entryId)) {
-        state.ended = Option.some(playback.entryId);
-      }
-      if (resume.play !== null) state.handover = Option.some(resume);
-    }
-    setPlayback(
-      adopts
-        ? {
-            state: resume.state,
-            entryId: resume.entryId,
-            positionMs: resume.positionMs,
-            at: now,
-            rate: resume.state === "playing" ? 1 : 0,
-            revision: resume.revision,
-            lost: false,
-          }
-        : { lost: false },
-    );
-  };
-
-  const attach = (
-    connection: Connection,
-    player: { readonly name: string; readonly volume: number } | null,
-    resume: PlayerResume | null,
-  ) =>
+  // The room's device connected as a player. It played on while it was away, and nobody changed
+  // the transport since.
+  const playerJoined = (resume: PlayerResume | null) =>
     modify((now) =>
       Effect.sync(() => {
-        const generation = player === null ? 0 : state.nextGeneration;
-        if (player !== null) {
-          state.nextGeneration += 1;
-          addPlayer(connection, generation, player, resume, now);
-        }
+        const playback = state.playback;
+        if (playback.outputId !== room) return;
 
+        const adopts =
+          resume !== null &&
+          playback.group.length === 0 &&
+          resume.revision >= playback.revision &&
+          indexOf(resume.entryId) !== -1;
+        if (adopts) {
+          // An entry that ended on the device offline has a complete play, as after a natural end
+          if (playback.entryId !== null && resume.advanced.includes(playback.entryId)) {
+            state.ended = Option.some(playback.entryId);
+          }
+          if (resume.play !== null) state.handover = Option.some(resume);
+        }
+        setPlayback(
+          adopts
+            ? {
+                state: resume.state,
+                entryId: resume.entryId,
+                positionMs: resume.positionMs,
+                at: now,
+                rate: resume.state === "playing" ? 1 : 0,
+                revision: resume.revision,
+                lost: false,
+              }
+            : { lost: false },
+        );
+      }),
+    );
+
+  // In a group, the renderer finds that the device is gone
+  const playerLeft = modify(() =>
+    Effect.sync(() => {
+      if (state.playback.outputId === room && state.playback.group.length === 0) {
+        setPlayback({ lost: true });
+      }
+    }),
+  );
+
+  /** Sends the room's snapshot, then its events */
+  const subscribe = (connection: Connection, name: string) =>
+    lock.withPermits(1)(
+      Effect.sync(() => {
         Queue.offerUnsafe(
           connection.events,
-          SessionEvent.cases.Snapshot.make({
-            generation,
-            serverTime: now,
+          SessionEvent.cases.RoomSnapshot.make({
+            room,
+            name,
             queueVersion: state.queueVersion,
             entries: state.entries,
             playback: state.playback,
-            outputs: outputs(),
           }),
         );
-        state.connections.add(connection);
+        connection.rooms.add(room);
       }),
     );
-
-  const detach = (connection: Connection) =>
-    modify(() =>
-      Effect.sync(() => {
-        state.connections.delete(connection);
-
-        const outputId = deviceOutput(connection.deviceId);
-        if (state.players.get(outputId)?.connection !== connection) return;
-
-        state.players.delete(outputId);
-        broadcastOutputs();
-        // In a group, the renderer finds that the device is gone
-        if (state.playback.outputId === outputId && state.playback.group.length === 0) {
-          setPlayback({ lost: true });
-        }
-      }),
-    );
-
-  /** A `Snapshot`, then the changes. A device with a `player` can be the output. */
-  const connect = Effect.fn(function* (
-    deviceId: DeviceId,
-    player: { readonly name: string; readonly volume: number } | null,
-    resume: PlayerResume | null,
-  ) {
-    const events = yield* Queue.unbounded<Event, Cause.Done>();
-    const connection = new Connection({ deviceId, events });
-
-    yield* Effect.acquireRelease(attach(connection, player, resume), () => detach(connection));
-    return Stream.fromQueue(events);
-  });
 
   // The session pauses where it is and has no output
   const dropOutput = (now: number) => {
@@ -1185,23 +1100,73 @@ const makeSession = Effect.fn(function* (
       }),
     );
 
-  const refreshOutputs = lock.withPermits(1)(Effect.sync(broadcastOutputs));
+  // The room's own output pauses the room; a member leaves the group
+  const releaseNow = (taken: ReadonlyArray<OutputId>, now: number) => {
+    const { outputId, group } = state.playback;
+    if (outputId !== null && taken.includes(outputId)) dropOutput(now);
+    else if (group.some((id) => taken.includes(id))) {
+      setPlayback({ group: group.filter((id) => !taken.includes(id)) });
+    }
+  };
 
-  /** Pauses the session when the device is the output, and ends the device's streams */
-  const removeDevice = (deviceId: DeviceId) =>
+  /** Gives up `taken` for another room. Completes after the drivers of the outputs stopped. */
+  const release = (taken: ReadonlyArray<OutputId>) =>
+    modify((now) => Effect.sync(() => releaseNow(taken, now))).pipe(
+      Effect.andThen(Effect.suspend(() => state.closing)),
+    );
+
+  /** Empties the room and stops it, for `Transfer` */
+  const takeQueue = modify((now) =>
+    Effect.sync(() => {
+      if (state.entries.length === 0) return Option.none<MovedQueue>();
+      const moved = new MovedQueue({
+        entries: state.entries,
+        entryId: state.playback.entryId,
+        positionMs: positionAt(state.playback, now),
+        playback: state.playback,
+      });
+      spliceQueue([new QueueSplice({ index: 0, remove: state.entries.length, insert: [] })]);
+      stop(null, now);
+      return Option.some(moved);
+    }),
+  );
+
+  /** Replaces the queue with the queue of another room, with new entry IDs */
+  const adoptQueue = (moved: MovedQueue, play: boolean | null) =>
     modify((now) =>
       Effect.sync(() => {
-        const removed = deviceOutput(deviceId);
-        const { outputId, group } = state.playback;
-        if (group.includes(removed)) setPlayback({ group: group.filter((id) => id !== removed) });
-        else if (outputId === removed) {
-          const [first, ...rest] = group;
-          if (first === undefined) dropOutput(now);
-          else setPlayback({ outputId: first, group: rest });
+        const entries = moved.entries.map((entry) => {
+          const id = EntryId.make(state.nextEntryId);
+          state.nextEntryId += 1;
+          return new QueueEntry({ ...entry, id, unplayable: false });
+        });
+        const current = entries[moved.entries.findIndex((entry) => entry.id === moved.entryId)];
+        spliceQueue([new QueueSplice({ index: 0, remove: state.entries.length, insert: entries })]);
+        state.failures = 0;
+
+        const { shuffle, repeat, autoplay, crossfadeSeconds, djStyle } = moved.playback;
+        setPlayback({ shuffle, repeat, autoplay, crossfadeSeconds, djStyle });
+        if (current === undefined || moved.playback.state === "stopped") {
+          stop(current?.id ?? null, now);
+        } else if (play ?? moved.playback.state === "playing") {
+          start(current.id, moved.positionMs, now, room);
+        } else {
+          setPlayback({
+            state: "paused",
+            entryId: current.id,
+            positionMs: moved.positionMs,
+            at: now,
+            rate: 0,
+            revision: state.playback.revision + 1,
+            outputId: room,
+            lost: !available(room),
+          });
         }
-        for (const connection of state.connections) {
-          if (connection.deviceId === deviceId) Queue.endUnsafe(connection.events);
-        }
+        return new SessionCommandResult({
+          queueVersion: state.queueVersion,
+          revision: state.playback.revision,
+          entryIds: [],
+        });
       }),
     );
 
@@ -1280,11 +1245,14 @@ const makeSession = Effect.fn(function* (
     );
 
   return {
-    connect,
+    subscribe,
+    playerJoined,
+    playerLeft,
     control,
     report,
-    removeDevice,
-    refreshOutputs,
+    release,
+    takeQueue,
+    adoptQueue,
     tick,
     endOpenPlay,
     changes,
@@ -1296,6 +1264,8 @@ type Session = Effect.Success<ReturnType<typeof makeSession>>;
 
 const makeSessions = Effect.gen(function* () {
   const db = yield* Database;
+  const urlOutputs = yield* Outputs;
+  const receivers = yield* Receivers;
   const services =
     yield* Effect.context<
       Effect.Services<
@@ -1307,35 +1277,66 @@ const makeSessions = Effect.gen(function* () {
         >
       >
     >();
+  const household = makeHousehold();
+  const rooms = new Map<OutputId, Session>();
+  // The last known name of each room's output
+  const names = new Map<OutputId, string>();
+  // Creating a room and connecting a device take turns, so that each connection gets each room
+  const roomsLock = yield* Semaphore.make(1);
 
-  // In order, so that the last hint wins
-  const prefetches = yield* Queue.unbounded<ReadonlyArray<string>>();
+  const outputs = () => [
+    ...[...household.players].map(
+      ([id, player]) =>
+        new Output({
+          id,
+          kind: "device",
+          name: player.name,
+          volume: player.volume,
+          muted: false,
+          delayMs: urlOutputs.delayOf(id),
+          groupable: receivers.has(id),
+        }),
+    ),
+    ...urlOutputs.list(),
+  ];
+  const available = (outputId: OutputId) =>
+    household.players.has(outputId) || urlOutputs.has(outputId);
+
+  const broadcastOutputs = () => {
+    const event = SessionEvent.cases.OutputsChanged.make({ outputs: outputs() });
+    for (const connection of household.connections) Queue.offerUnsafe(connection.events, event);
+  };
+
+  // In order, so that the last hint of a room wins
+  const prefetches = yield* Queue.unbounded<{
+    readonly room: OutputId;
+    readonly sourceIds: ReadonlyArray<string>;
+  }>();
   yield* Effect.forkScoped(
     Effect.forever(
-      Effect.flatMap(Queue.take(prefetches), (sourceIds) =>
-        hintPrefetch("session", sourceIds).pipe(
+      Effect.flatMap(Queue.take(prefetches), ({ room, sourceIds }) =>
+        hintPrefetch(room, sourceIds).pipe(
           // The copies of the next songs, so that a fallback and "Play from…" are ready
           Effect.andThen(queueCopyDiscovery(sourceIds)),
           orDieOnDatabaseError("hintPrefetch"),
-          Effect.catchCause((cause) => Effect.logError("Cannot prefetch for the session", cause)),
+          Effect.catchCause((cause) => Effect.logError("Cannot prefetch for a room", cause)),
         ),
       ),
     ),
   );
 
-  // Radio requests take seconds, so they run outside the session lock
-  const endings = yield* Queue.unbounded<ReadonlyArray<QueueEntry>>();
-  const session = yield* makeSession(
-    Option.getOrElse(yield* loadSession, () => emptyState),
-    (sourceIds) => Queue.offerUnsafe(prefetches, sourceIds),
-    (entries) => Queue.offerUnsafe(endings, entries),
-  ).pipe(Effect.provide(services));
+  // Radio requests take seconds, so they run outside the room lock
+  const endings = yield* Queue.unbounded<{
+    readonly room: OutputId;
+    readonly entries: ReadonlyArray<QueueEntry>;
+  }>();
   yield* Effect.forkScoped(
     Effect.forever(
-      Effect.flatMap(Queue.take(endings), (entries) =>
+      Effect.flatMap(Queue.take(endings), ({ room, entries }) =>
         Effect.gen(function* () {
           const last = entries.at(-1);
-          if (last === undefined) return;
+          const session = rooms.get(room);
+          if (last === undefined || session === undefined) return;
           const tracks = yield* continueRadio(entries);
           yield* session.appendRadio(last.id, tracks);
         }).pipe(
@@ -1347,41 +1348,231 @@ const makeSessions = Effect.gen(function* () {
     ),
   );
 
-  // Plugin outputs belong to the household, so the session lists them
+  // Only under `roomsLock`
+  const createRoom = Effect.fn(function* (room: OutputId, name: string, initial: SessionState) {
+    const session = yield* makeSession(
+      room,
+      initial,
+      household,
+      (sourceIds) => Queue.offerUnsafe(prefetches, { room, sourceIds }),
+      (entries) => Queue.offerUnsafe(endings, { room, entries }),
+      broadcastOutputs,
+    ).pipe(Effect.provide(services));
+    rooms.set(room, session);
+    names.set(room, name);
+    yield* Effect.forEach(
+      household.connections,
+      (connection) => session.subscribe(connection, name),
+      {
+        discard: true,
+      },
+    );
+    return session;
+  });
+
+  const nameOf = (room: OutputId) =>
+    outputs().find((output) => output.id === room)?.name ?? names.get(room) ?? room;
+
+  // A room exists for each output that is online, and for each saved room
+  const roomOf = (room: OutputId) =>
+    roomsLock.withPermits(1)(
+      Effect.suspend(() => {
+        const session = rooms.get(room);
+        if (session !== undefined) return Effect.succeed(session);
+        if (!available(room)) {
+          return Effect.fail(new SessionCommandFailed({ reason: "output_unavailable" }));
+        }
+        return createRoom(room, nameOf(room), emptyState);
+      }),
+    );
+
+  for (const saved of yield* loadSessions) yield* createRoom(saved.room, saved.name, saved.state);
+
+  // Plugin outputs belong to the household, so each one is a room
+  const refreshOutputs = roomsLock.withPermits(1)(
+    Effect.gen(function* () {
+      for (const output of urlOutputs.list()) {
+        names.set(output.id, output.name);
+        if (!rooms.has(output.id)) yield* createRoom(output.id, output.name, emptyState);
+      }
+      broadcastOutputs();
+    }),
+  );
+  yield* refreshOutputs;
   yield* Effect.forkScoped(
-    Stream.runForEach(
-      Stream.merge((yield* Outputs).changes, (yield* Receivers).changes),
-      () => session.refreshOutputs,
-    ),
+    Stream.runForEach(Stream.merge(urlOutputs.changes, receivers.changes), () => refreshOutputs),
   );
 
-  const save = (all: boolean) =>
+  // Other rooms give up the outputs that a room starts to play on
+  const releaseFor = (room: OutputId, taken: ReadonlyArray<OutputId>) =>
+    Effect.forEach(
+      [...rooms].filter(([id]) => id !== room),
+      ([, session]) => session.release(taken),
+      { discard: true },
+    );
+
+  const attach = (
+    connection: Connection,
+    player: { readonly name: string; readonly volume: number } | null,
+    resume: PlayerResume | null,
+  ) =>
+    roomsLock.withPermits(1)(
+      Effect.gen(function* () {
+        const own = deviceOutput(connection.deviceId);
+        const generation = player === null ? 0 : household.nextGeneration;
+        if (player !== null) {
+          household.nextGeneration += 1;
+          const earlier = household.players.get(own);
+          if (earlier !== undefined) {
+            Queue.offerUnsafe(earlier.connection.events, SessionEvent.cases.Superseded.make({}));
+          }
+          household.players.set(own, new Player({ generation, connection, ...player }));
+          names.set(own, player.name);
+          if (!rooms.has(own)) yield* createRoom(own, player.name, emptyState);
+        }
+
+        Queue.offerUnsafe(
+          connection.events,
+          SessionEvent.cases.Connected.make({
+            generation,
+            serverTime: yield* Clock.currentTimeMillis,
+            outputs: outputs(),
+            rooms: [...rooms.keys()],
+          }),
+        );
+        household.connections.add(connection);
+        yield* Effect.forEach(
+          rooms,
+          ([room, session]) => session.subscribe(connection, nameOf(room)),
+          { discard: true },
+        );
+        broadcastOutputs();
+        if (player !== null) yield* rooms.get(own)?.playerJoined(resume) ?? Effect.void;
+      }),
+    );
+
+  const detach = (connection: Connection) =>
+    Effect.suspend(() => {
+      household.connections.delete(connection);
+      const own = deviceOutput(connection.deviceId);
+      if (household.players.get(own)?.connection !== connection) return Effect.void;
+
+      household.players.delete(own);
+      broadcastOutputs();
+      return rooms.get(own)?.playerLeft ?? Effect.void;
+    });
+
+  /** `Connected`, a snapshot of each room, then the changes. A device with a `player` plays its room. */
+  const connect = Effect.fn(function* (
+    deviceId: DeviceId,
+    player: { readonly name: string; readonly volume: number } | null,
+    resume: PlayerResume | null,
+  ) {
+    const events = yield* Queue.unbounded<Event, Cause.Done>();
+    const connection = new Connection({ deviceId, events, rooms: new Set() });
+
+    yield* Effect.acquireRelease(attach(connection, player, resume), () => detach(connection));
+    return Stream.fromQueue(events);
+  });
+
+  // The queue moves in two steps, so that no room waits for the lock of another
+  const transfer = Effect.fn(function* (from: OutputId, to: OutputId, play: boolean | null) {
+    const source = yield* roomOf(from);
+    const target = yield* roomOf(to);
+    if (!available(to)) return yield* new SessionCommandFailed({ reason: "output_unavailable" });
+
+    yield* releaseFor(to, [to]);
+    const moved = yield* source.takeQueue;
+    if (Option.isNone(moved)) {
+      return yield* new SessionCommandFailed({ reason: "nothing_to_play" });
+    }
+    return yield* target.adoptQueue(moved.value, play);
+  });
+
+  const control = Effect.fn(function* (
+    deviceId: DeviceId,
+    room: OutputId,
+    request: Parameters<Session["control"]>[1],
+    sources: ReadonlyMap<string, SourceSummary>,
+    disliked: ReadonlySet<string>,
+  ) {
+    const command = request.command;
+    if (SessionCommand.guards.Transfer(command)) {
+      return yield* transfer(room, command.room, command.play);
+    }
+
+    const session = yield* roomOf(room);
+    if (SessionCommand.guards.SetGroup(command))
+      yield* releaseFor(room, [room, ...command.members]);
+    if (SessionCommand.isAnyOf(["Play", "JumpTo", "Resume"])(command)) {
+      yield* releaseFor(room, [room]);
+    }
+    return yield* session.control(deviceId, request, sources, disliked);
+  });
+
+  const report = (deviceId: DeviceId, received: Parameters<Session["report"]>[1]) =>
+    rooms.get(deviceOutput(deviceId))?.report(deviceId, received) ?? Effect.void;
+
+  /** Takes the device out of all rooms, removes its room and ends the device's streams */
+  const removeDevice = Effect.fn(function* (deviceId: DeviceId) {
+    const removed = deviceOutput(deviceId);
+    yield* releaseFor(removed, [removed]);
+    const own = rooms.get(removed);
+    if (own !== undefined) {
+      yield* own.endOpenPlay;
+      rooms.delete(removed);
+      names.delete(removed);
+      yield* deleteSession(removed).pipe(Effect.provideService(Database, db));
+      for (const connection of household.connections) {
+        if (!connection.rooms.delete(removed)) continue;
+        Queue.offerUnsafe(
+          connection.events,
+          SessionEvent.cases.RoomRemoved.make({ room: removed }),
+        );
+      }
+    }
+    for (const connection of household.connections) {
+      if (connection.deviceId === deviceId) Queue.endUnsafe(connection.events);
+    }
+  });
+
+  const save = (room: OutputId, session: Session, all: boolean) =>
     session.changes(all).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,
-          onSome: (state) => saveSession(state),
+          onSome: (state) => saveSession(room, nameOf(room), state),
         }),
       ),
       orDieOnDatabaseError("saveSession"),
-      Effect.catchCause((cause) => Effect.logError("Cannot save the playback session", cause)),
+      Effect.catchCause((cause) => Effect.logError("Cannot save a room", cause)),
       Effect.provideService(Database, db),
+    );
+  const eachRoom = (run: (room: OutputId, session: Session) => Effect.Effect<void>) =>
+    Effect.suspend(() =>
+      Effect.forEach([...rooms], ([room, session]) => run(room, session), { discard: true }),
     );
 
   // Registered before the ticker, so that it runs after the ticker stopped
-  yield* Effect.addFinalizer(() => session.endOpenPlay.pipe(Effect.andThen(save(true))));
+  yield* Effect.addFinalizer(() =>
+    eachRoom((room, session) =>
+      session.endOpenPlay.pipe(Effect.andThen(save(room, session, true))),
+    ),
+  );
 
   // Saves happen at most once a second
   yield* Effect.forkScoped(
-    Effect.repeat(session.tick.pipe(Effect.andThen(save(false))), Schedule.spaced("1 second")),
+    Effect.repeat(
+      eachRoom((room, session) => session.tick.pipe(Effect.andThen(save(room, session, false)))),
+      Schedule.spaced("1 second"),
+    ),
   );
 
-  return { session };
+  return { connect, control, report, removeDevice };
 });
 
 /**
- * The playback session of this replica. It is replica-local, because commands and reports need one
- * writer.
+ * The rooms of this replica. They are replica-local, because commands and reports need one writer.
  */
 export class Sessions extends Context.Service<Sessions, Effect.Success<typeof makeSessions>>()(
   "@dyad/server-core/Sessions",
@@ -1389,7 +1580,7 @@ export class Sessions extends Context.Service<Sessions, Effect.Success<typeof ma
 
 export const sessionsLayer = Layer.effect(
   Sessions,
-  makeSessions.pipe(orDieOnDatabaseError("loadSession")),
+  makeSessions.pipe(orDieOnDatabaseError("loadSessions")),
 );
 
 // A search result is not in `source` until it plays, so its summary comes from the provider cache
@@ -1445,7 +1636,7 @@ export const connectDevice = Effect.fn("connectDevice")(function* (payload: {
 }) {
   const principal = yield* CurrentPrincipal;
   const db = yield* Database;
-  const session = (yield* Sessions).session;
+  const sessions = yield* Sessions;
 
   const [row] =
     payload.player === null
@@ -1459,14 +1650,14 @@ export const connectDevice = Effect.fn("connectDevice")(function* (payload: {
     payload.player === null || row === undefined
       ? null
       : { name: row.name, volume: payload.player.volume };
-  return yield* session.connect(principal.deviceId, player, payload.resume);
+  return yield* sessions.connect(principal.deviceId, player, payload.resume);
 });
 
 export const controlSession = Effect.fn("controlSession")(function* (
-  request: Parameters<Session["control"]>[1],
+  request: Parameters<Session["control"]>[1] & { readonly room: OutputId },
 ) {
   const principal = yield* CurrentPrincipal;
-  const session = (yield* Sessions).session;
+  const sessions = yield* Sessions;
   const command = request.command;
   const sources =
     SessionCommand.guards.Play(command) || SessionCommand.guards.Enqueue(command)
@@ -1476,13 +1667,12 @@ export const controlSession = Effect.fn("controlSession")(function* (
   const disliked = new Set(
     [...sources.values()].flatMap((summary) => (isDisliked(dislikes, summary) ? [summary.id] : [])),
   );
-  return yield* session.control(principal.deviceId, request, sources, disliked);
+  return yield* sessions.control(principal.deviceId, request.room, request, sources, disliked);
 });
 
 export const reportPlayback = Effect.fn("reportPlayback")(function* (
   report: Parameters<Session["report"]>[1],
 ) {
   const principal = yield* CurrentPrincipal;
-  const session = (yield* Sessions).session;
-  yield* session.report(principal.deviceId, report);
+  yield* (yield* Sessions).report(principal.deviceId, report);
 });

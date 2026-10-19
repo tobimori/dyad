@@ -592,5 +592,17 @@
     "hash": "d8d85ce6e1b4fb647325a5ed909f2b9feb233bdc116e80e5ba6d4543c4623862",
     "bps": true,
     "sql": ["ALTER TABLE `library_sync_state` ADD `marks_seq` integer;"]
+  },
+  {
+    "name": "20261019191452_rooms_by_output",
+    "folderMillis": 1792437292000,
+    "hash": "376e0f065b0e07e0922b84547851b196036217aa2211e7b82a5a898052c1eb56",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `__new_playback_session` (\n\t`room` text PRIMARY KEY,\n\t`name` text NOT NULL,\n\t`entries` text NOT NULL,\n\t`next_entry_id` integer NOT NULL,\n\t`queue_version` integer NOT NULL,\n\t`revision` integer NOT NULL,\n\t`playback` text NOT NULL,\n\t`updated_at` integer NOT NULL\n);\n",
+      "\nINSERT INTO `__new_playback_session`(`room`, `name`, `entries`, `next_entry_id`, `queue_version`, `revision`, `playback`, `updated_at`)\nSELECT json_extract(`playback`, '$.outputId'),\n\tcoalesce((SELECT `name` FROM `device` WHERE 'device:' || `device`.`id` = json_extract(`playback`, '$.outputId')), json_extract(`playback`, '$.outputId')),\n\t`entries`, `next_entry_id`, `queue_version`, `revision`, `playback`, `updated_at`\nFROM `playback_session` WHERE json_extract(`playback`, '$.outputId') IS NOT NULL;",
+      "\nDROP TABLE `playback_session`;",
+      "\nALTER TABLE `__new_playback_session` RENAME TO `playback_session`;\n"
+    ]
   }
 ]

@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 15;
+export const syncProtocolVersion = 16;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.

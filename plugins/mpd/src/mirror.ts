@@ -1,4 +1,5 @@
 import type {
+  OutputId,
   PlaylistSummary,
   SessionCommand,
   SessionCommandFailed,
@@ -26,13 +27,14 @@ export class Artwork extends Data.Class<{
 
 export class MirrorUnavailable extends Data.TaggedError("MirrorUnavailable")<{}> {}
 
-/** One user's Dyad session and library, for one MPD connection */
+/** The rooms and the library of a Dyad server, for one MPD connection */
 export class SessionMirror extends Context.Service<
   SessionMirror,
   {
-    /** Each run subscribes to the session: a `Snapshot`, then its changes */
+    /** Each run subscribes to the rooms: `Connected`, their snapshots, then their changes */
     readonly events: Stream.Stream<typeof SessionEvent.Type, MirrorUnavailable>;
     readonly control: (
+      room: OutputId,
       command: typeof SessionCommand.Type,
       ifQueueVersion: number | null,
     ) => Effect.Effect<SessionCommandResult, SessionCommandFailed | MirrorUnavailable>;

@@ -30,6 +30,7 @@ import { Action, ActionsDialog } from "./component/dialog-actions.tsx";
 import { DownloadsDialog, QualityDialog } from "./component/dialog-downloads.tsx";
 import { HelpDialog } from "./component/dialog-help.tsx";
 import { OutputsDialog } from "./component/dialog-outputs.tsx";
+import { RoomsDialog } from "./component/dialog-rooms.tsx";
 import { usePlaylistActions } from "./component/dialog-playlists.tsx";
 import { useLibraryMarks } from "./component/library-marks.ts";
 import { useHeardInSets } from "./component/dialog-sets.tsx";
@@ -828,6 +829,13 @@ export function App(props: {
           />,
         ),
     ],
+    [
+      commands.rooms,
+      () =>
+        dialog.push(
+          <RoomsDialog session={props.session} run={props.run} select={player.selectRoom} />,
+        ),
+    ],
     [commands.queue, () => enterSectionOf(commands.queue)],
     [commands.search, () => enterSectionOf(commands.search)],
     [commands.nextSection, () => moveSection(1)],
@@ -1131,7 +1139,10 @@ export function App(props: {
         shuffle={player.shuffle}
         repeat={player.repeat}
         message={
-          player.error ?? player.offline ?? (player.lost ? "The output does not answer" : null)
+          player.error ??
+          player.offline ??
+          (player.lost ? "The output does not answer" : null) ??
+          (player.room === null ? null : `Room ${player.room}`)
         }
         artwork={artwork}
         showCover={view === "browse" ? !showPanel : backdrop.overlay !== "full"}
