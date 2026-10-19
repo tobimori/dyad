@@ -29,6 +29,7 @@ import type {
   ProviderLibrary,
 } from "@dyad/plugin";
 import { and, asc, count, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { HlcClock } from "@dyad/sync";
 import { Clock, Data, Effect, Equal, Layer, Option, Schema } from "effect";
 
 import { boundRecordingId, uuidV5 } from "./ids.ts";
@@ -37,7 +38,7 @@ import { PlaylistPushPayload, playlistPushKind, queuePlaylistPush } from "./play
 import { cacheProviderSources } from "./provider-cache.ts";
 import { Providers, toCredentials } from "./providers.ts";
 import { writeProviderSource } from "./sources.ts";
-import { touchGroups } from "./sync-counter.ts";
+import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { readRow } from "./replication.ts";
 import {
   addLinkedPlaylist,
@@ -171,6 +172,7 @@ const writeSongs = (
           ),
         )).map((row) => [row.recordingId, row]),
     );
+    const clock = yield* HlcClock;
     const changed: Array<string> = [];
 
     const recordingIds = yield* Effect.forEach(songs, (song) =>
@@ -200,32 +202,40 @@ const writeSongs = (
           rawAlbum: song.album,
           rawDurationMs: song.durationMs,
         };
-        // Clients get the remote tracks with the group of the recording
         const old = known.get(recordingId);
-        if (
+        const isChanged =
           old === undefined ||
+          old.deleted ||
           old.remoteId !== row.remoteId ||
           old.catalogId !== row.catalogId ||
           old.sourceId !== row.sourceId ||
           old.rawTitle !== row.rawTitle ||
           old.rawArtist !== row.rawArtist ||
           old.rawAlbum !== row.rawAlbum ||
-          old.rawDurationMs !== row.rawDurationMs
-        ) {
-          changed.push(recordingId);
-        }
+          old.rawDurationMs !== row.rawDurationMs;
+        if (isChanged) changed.push(recordingId);
 
         const seen = songsReadAt === null ? {} : { seenAt: songsReadAt };
+        // Other replicas pull only changed rows; `seen_at` alone is local import state
+        const version =
+          old === undefined || isChanged
+            ? { deleted: false, hlc: yield* clock.next, changeSeq: yield* nextChangeSeq }
+            : { deleted: old.deleted, hlc: old.hlc, changeSeq: old.changeSeq };
         yield* db
           .insert(libraryRemoteTrack)
-          .values({ ...row, seenAt: songsReadAt ?? 0 })
+          .values({
+            id: `${account.userId}:${provider}:${recordingId}`,
+            ...row,
+            seenAt: songsReadAt ?? 0,
+            ...version,
+          })
           .onConflictDoUpdate({
             target: [
               libraryRemoteTrack.userId,
               libraryRemoteTrack.provider,
               libraryRemoteTrack.recordingId,
             ],
-            set: { ...row, ...seen },
+            set: { ...row, ...seen, ...version },
           });
         return recordingId;
       }),
@@ -262,6 +272,7 @@ const songsOfLastRead = (account: LinkedAccount) =>
           eq(libraryRemoteTrack.userId, account.userId),
           eq(libraryRemoteTrack.provider, account.provider),
           eq(libraryRemoteTrack.seenAt, state.lastFullReadAt),
+          eq(libraryRemoteTrack.deleted, false),
         ),
       );
     return new Set(rows.map((row) => row.recordingId));
@@ -836,9 +847,17 @@ export const forgetLibrary = (userId: string, provider: string) =>
     yield* db
       .delete(librarySyncState)
       .where(and(eq(librarySyncState.userId, userId), eq(librarySyncState.provider, provider)));
+    const clock = yield* HlcClock;
     const removed = yield* db
-      .delete(libraryRemoteTrack)
-      .where(and(eq(libraryRemoteTrack.userId, userId), eq(libraryRemoteTrack.provider, provider)))
+      .update(libraryRemoteTrack)
+      .set({ deleted: true, hlc: yield* clock.next, changeSeq: yield* nextChangeSeq })
+      .where(
+        and(
+          eq(libraryRemoteTrack.userId, userId),
+          eq(libraryRemoteTrack.provider, provider),
+          eq(libraryRemoteTrack.deleted, false),
+        ),
+      )
       .returning({ recordingId: libraryRemoteTrack.recordingId });
     yield* touchGroups(removed.map((row) => row.recordingId));
     yield* db

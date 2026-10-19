@@ -1,4 +1,13 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+
+import { changeSeq } from "./change-seq.ts";
 
 /**
  * Replica-local, like the credentials that the import needs. No foreign key to `provider_account`:
@@ -24,10 +33,15 @@ export const librarySyncState = sqliteTable(
   (table) => [primaryKey({ columns: [table.userId, table.provider] })],
 );
 
-/** The remote ID for later writes, and the fields to show while the song has no source */
+/**
+ * The remote ID for later writes, and the fields to show while the song has no source. Replicated,
+ * so that every replica shows the song; only `seen_at` changes without a new `change_seq`.
+ */
 export const libraryRemoteTrack = sqliteTable(
   "library_remote_track",
   {
+    // `<user_id>:<provider>:<recording_id>`
+    id: text("id").notNull(),
     userId: text("user_id").notNull(),
     provider: text("provider").notNull(),
     recordingId: text("recording_id").notNull(),
@@ -40,8 +54,15 @@ export const libraryRemoteTrack = sqliteTable(
     rawDurationMs: integer("raw_duration_ms"),
     // The time of the last read of the library songs that had it. 0: only playlist reads had it.
     seenAt: integer("seen_at").notNull(),
+    deleted: integer("deleted", { mode: "boolean" }).notNull().default(false),
+    hlc: text("hlc").notNull(),
+    changeSeq,
   },
-  (table) => [primaryKey({ columns: [table.userId, table.provider, table.recordingId] })],
+  (table) => [
+    primaryKey({ columns: [table.userId, table.provider, table.recordingId] }),
+    uniqueIndex("library_remote_track_id_idx").on(table.id),
+    index("library_remote_track_seq_idx").on(table.changeSeq),
+  ],
 );
 
 export const libraryRemotePlaylist = sqliteTable(

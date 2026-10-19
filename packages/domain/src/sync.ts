@@ -10,7 +10,7 @@ import {
 } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 7;
+export const syncProtocolVersion = 8;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -272,8 +272,36 @@ export class ProviderAccountRow extends Schema.Class<ProviderAccountRow>("Provid
   hlc: HybridLogicalClock,
 }) {}
 
+/** A song of a linked provider library, with the fields to show while it has no source */
+export class LibraryRemoteTrackRow extends Schema.Class<LibraryRemoteTrackRow>(
+  "LibraryRemoteTrackRow",
+)({
+  table: Schema.Literal("library_remote_track"),
+  /** `<user_id>:<provider>:<recording_id>` */
+  id: Schema.String,
+  userId: UserId,
+  provider: Schema.String,
+  recordingId: Uuid,
+  remoteId: Schema.String,
+  catalogId: Schema.NullOr(Schema.String),
+  sourceId: Schema.NullOr(Schema.String),
+  rawTitle: Schema.String,
+  rawArtist: Schema.NullOr(Schema.String),
+  rawAlbum: Schema.NullOr(Schema.String),
+  rawDurationMs: Schema.NullOr(Schema.Number),
+  /** Import state of the replica with the credential; it changes without a new `hlc` */
+  seenAt: Schema.Number,
+  deleted: Schema.Boolean,
+  hlc: HybridLogicalClock,
+}) {}
+
 /** One row that a server replica sends to another, without its `change_seq` */
-export const PeerRow = Schema.Union([SyncRow, CatalogInputRow, ProviderAccountRow]);
+export const PeerRow = Schema.Union([
+  SyncRow,
+  CatalogInputRow,
+  ProviderAccountRow,
+  LibraryRemoteTrackRow,
+]);
 export type PeerRow = typeof PeerRow.Type;
 
 /** A position in the rows of a server, in `(change_seq, table, id)` order */

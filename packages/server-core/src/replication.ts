@@ -2,6 +2,7 @@ import {
   catalogAssertion,
   entityMerge,
   libraryItem,
+  libraryRemoteTrack,
   playEvent,
   playlist,
   playlistEntry,
@@ -49,6 +50,7 @@ const peerTables = {
   playlist: peerTable("playlist", playlist),
   playlist_entry: peerTable("playlist_entry", playlistEntry),
   provider_account: peerTable("provider_account", providerAccount),
+  library_remote_track: peerTable("library_remote_track", libraryRemoteTrack),
   rating: peerTable("rating", rating),
   source: peerTable("source", source),
   source_preference: peerTable("source_preference", sourcePreference),
@@ -147,7 +149,7 @@ const isSyncRow = (row: PeerRow): row is SyncRow =>
 
 // RETURN TYPE: the predicate narrows the union for `mergeCatalogRow`
 const isCatalogRow = (row: PeerRow): row is CatalogInputRow =>
-  !isSyncRow(row) && row.table !== "provider_account";
+  !isSyncRow(row) && row.table !== "provider_account" && row.table !== "library_remote_track";
 
 // RETURN TYPE: the branches return different row unions
 const mergePeerRow = (current: PeerRow | undefined, row: PeerRow): Option.Option<PeerRow> => {
@@ -160,7 +162,8 @@ const mergePeerRow = (current: PeerRow | undefined, row: PeerRow): Option.Option
       row,
     );
   }
-  if (current?.table !== "provider_account") return Option.some(row);
+  // Each write of the other rows sets all fields
+  if (current === undefined || isSyncRow(current) || isCatalogRow(current)) return Option.some(row);
   return row.hlc > current.hlc ? Option.some(row) : Option.none();
 };
 

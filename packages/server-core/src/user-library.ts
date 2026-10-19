@@ -337,6 +337,7 @@ const loadLibraryView = (userId: UserId, boundIds: ReadonlyArray<string>) =>
         and(
           eq(libraryRemoteTrack.userId, userId),
           inArray(libraryRemoteTrack.recordingId, boundIds),
+          eq(libraryRemoteTrack.deleted, false),
         ),
       );
 

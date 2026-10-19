@@ -425,5 +425,21 @@
     "hash": "5d20c773461c8f177d45e2032c9b2b084209594f4ddeec6fbe27a0956665c48e",
     "bps": true,
     "sql": ["DROP TABLE `replica`;", "\nDROP TABLE `sync_rejection`;"]
+  },
+  {
+    "name": "20261019114708_replicate_library_remote_track",
+    "folderMillis": 1792410428000,
+    "hash": "b101df806635b2743de338f9b307924873f55a55d94e9147670d9989ca4c8562",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `library_remote_track` ADD `id` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `library_remote_track` ADD `deleted` integer DEFAULT false NOT NULL;",
+      "\nALTER TABLE `library_remote_track` ADD `hlc` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `library_remote_track` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\n-- A new `change_seq`, so that paired replicas pull the existing rows\nUPDATE `replica_identity` SET `change_seq` = `change_seq` + 1 WHERE EXISTS (SELECT 1 FROM `library_remote_track`);",
+      "\nUPDATE `library_remote_track` SET\n  `id` = `user_id` || ':' || `provider` || ':' || `recording_id`,\n  `hlc` = printf('%015d-0000-%s', `seen_at`, (SELECT `replica_id` FROM `replica_identity`)),\n  `change_seq` = (SELECT `change_seq` FROM `replica_identity`);",
+      "\nCREATE UNIQUE INDEX `library_remote_track_id_idx` ON `library_remote_track` (`id`);",
+      "\nCREATE INDEX `library_remote_track_seq_idx` ON `library_remote_track` (`change_seq`);\n"
+    ]
   }
 ]
