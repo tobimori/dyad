@@ -33,28 +33,28 @@ export const youtubePlugin = new Plugin({
       // After the bot check or refused URLs, anonymous `/player` requests rest for an hour
       const anonymousPausedUntil = yield* Ref.make(0);
 
-      const anonymously = <A>(resolve: Effect.Effect<A, ProviderError, HttpClient.HttpClient>) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
-          if (now < (yield* Ref.get(anonymousPausedUntil))) return yield* new BotCheck();
-          return yield* resolve.pipe(
-            Effect.provide(services),
-            Effect.catchIf(
-              (error) =>
-                error.reason.includes("not a bot") ||
-                error.reason === "YouTube answered status 403",
-              () =>
-                Ref.set(anonymousPausedUntil, now + 60 * 60 * 1000).pipe(
-                  Effect.andThen(
-                    Effect.logWarning(
-                      "YouTube refuses anonymous plays from this server. No anonymous plays for 1 hour.",
-                    ),
+      const anonymously = Effect.fn("anonymously")(function* <A>(
+        resolve: Effect.Effect<A, ProviderError, HttpClient.HttpClient>,
+      ) {
+        const now = yield* Clock.currentTimeMillis;
+        if (now < (yield* Ref.get(anonymousPausedUntil))) return yield* new BotCheck();
+        return yield* resolve.pipe(
+          Effect.provide(services),
+          Effect.catchIf(
+            (error) =>
+              error.reason.includes("not a bot") || error.reason === "YouTube answered status 403",
+            () =>
+              Ref.set(anonymousPausedUntil, now + 60 * 60 * 1000).pipe(
+                Effect.andThen(
+                  Effect.logWarning(
+                    "YouTube refuses anonymous plays from this server. No anonymous plays for 1 hour.",
                   ),
-                  Effect.andThen(Effect.fail(new BotCheck())),
                 ),
-            ),
-          );
-        });
+                Effect.andThen(Effect.fail(new BotCheck())),
+              ),
+          ),
+        );
+      });
 
       yield* context.provider.add(
         provider,

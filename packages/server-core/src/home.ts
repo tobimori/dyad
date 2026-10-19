@@ -109,7 +109,7 @@ const forYouLimit = 25;
 const forYouSearches = 8;
 const PersonalShelves = Schema.Array(SuggestionShelf);
 
-const forYouShelves = (
+const forYouShelves = Effect.fn("forYouShelves")(function* (
   linked: ReadonlyArray<{
     readonly id: string;
     readonly recommender: Recommender;
@@ -117,52 +117,51 @@ const forYouShelves = (
   }>,
   searches: number,
   state: PageState,
-) =>
-  Effect.gen(function* () {
-    const items = linked
-      .flatMap(({ id, recommender, shelves }) =>
-        shelves.flatMap((shelf) =>
-          shelf.songs.map((suggestion, position) => ({
-            suggestion,
-            recommender: id,
-            score: (recommender.priority ?? 0) / 100 + 0.5 / (1 + position),
-            reason: `From ${shelf.title} on ${recommender.name}`,
-          })),
-        ),
-      )
-      .toSorted((a, b) => b.score - a.score);
-    const found = yield* resolveSuggestions(items, searches);
-    const picks = items.flatMap((item, index) => {
-      const summary = found[index];
-      return summary === undefined ? [] : [new Pick({ ...item, summary })];
-    });
-    const songs = choose(yield* loadTaste, picks, {
-      exclude: new Set(),
-      limit: forYouLimit,
-      explainArtist: true,
-    });
-
-    const releases = linked.flatMap(({ id, shelves }) =>
+) {
+  const items = linked
+    .flatMap(({ id, recommender, shelves }) =>
       shelves.flatMap((shelf) =>
-        shelf.releases.length === 0
-          ? []
-          : [
-              new HomeShelf({
-                title: shelf.title,
-                tracks: [],
-                albums: shelf.releases.map((release) => releaseCard(id, release)),
-              }),
-            ],
+        shelf.songs.map((suggestion, position) => ({
+          suggestion,
+          recommender: id,
+          score: (recommender.priority ?? 0) / 100 + 0.5 / (1 + position),
+          reason: `From ${shelf.title} on ${recommender.name}`,
+        })),
       ),
-    );
-    return new HomeGroup({
-      providerName: null,
-      shelves: [new HomeShelf({ title: "For you", tracks: songs, albums: [] }), ...releases].filter(
-        (shelf) => shelf.tracks.length > 0 || shelf.albums.length > 0,
-      ),
-      state,
-    });
+    )
+    .toSorted((a, b) => b.score - a.score);
+  const found = yield* resolveSuggestions(items, searches);
+  const picks = items.flatMap((item, index) => {
+    const summary = found[index];
+    return summary === undefined ? [] : [new Pick({ ...item, summary })];
   });
+  const songs = choose(yield* loadTaste, picks, {
+    exclude: new Set(),
+    limit: forYouLimit,
+    explainArtist: true,
+  });
+
+  const releases = linked.flatMap(({ id, shelves }) =>
+    shelves.flatMap((shelf) =>
+      shelf.releases.length === 0
+        ? []
+        : [
+            new HomeShelf({
+              title: shelf.title,
+              tracks: [],
+              albums: shelf.releases.map((release) => releaseCard(id, release)),
+            }),
+          ],
+    ),
+  );
+  return new HomeGroup({
+    providerName: null,
+    shelves: [new HomeShelf({ title: "For you", tracks: songs, albums: [] }), ...releases].filter(
+      (shelf) => shelf.tracks.length > 0 || shelf.albums.length > 0,
+    ),
+    state,
+  });
+});
 
 /**
  * The suggestions of the user's linked recommenders, merged and ranked by the user's plays. The

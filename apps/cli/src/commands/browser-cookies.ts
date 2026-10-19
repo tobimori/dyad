@@ -273,8 +273,8 @@ export const parseSafariCookies = (data: Buffer) => {
   return cookies;
 };
 
-const firefoxCookies = (database: DatabaseSync) =>
-  Effect.gen(function* () {
+const firefoxCookies = Effect.fn("firefoxCookies")(
+  function* (database: DatabaseSync) {
     const version = yield* Schema.decodeUnknownEffect(
       Schema.Struct({ user_version: Schema.Finite }),
     )(yield* Effect.try(() => database.prepare("PRAGMA user_version").get()));
@@ -297,22 +297,20 @@ const firefoxCookies = (database: DatabaseSync) =>
           expires: Number(row.expiry) / (version.user_version >= 16 ? 1000 : 1),
         }),
     );
-  }).pipe(
-    Effect.mapError(
-      () =>
-        new CookieImportError({
-          reason: "Cannot read Firefox cookies. Close the browser and try again.",
-        }),
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.mapError(
+        () =>
+          new CookieImportError({
+            reason: "Cannot read Firefox cookies. Close the browser and try again.",
+          }),
+      ),
     ),
-  );
+);
 
-const chromiumCookies = (
-  database: DatabaseSync,
-  browser: CookieBrowser,
-  login: BrowserLogin,
-  now: number,
-) =>
-  Effect.gen(function* () {
+const chromiumCookies = Effect.fn("chromiumCookies")(
+  function* (database: DatabaseSync, browser: CookieBrowser, login: BrowserLogin, now: number) {
     const meta = yield* Schema.decodeUnknownEffect(DatabaseVersion)(
       yield* Effect.try(() =>
         database.prepare("SELECT value FROM meta WHERE key = 'version'").get(),
@@ -372,17 +370,20 @@ const chromiumCookies = (
           reason: "Cannot decrypt browser cookies. Export a cookie file instead.",
         }),
     });
-  }).pipe(
-    Effect.catchIf(
-      (error) => !(error instanceof CookieImportError),
-      () =>
-        Effect.fail(
-          new CookieImportError({
-            reason: "Cannot read Chromium cookies. Close the browser and try again.",
-          }),
-        ),
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catchIf(
+        (error) => !(error instanceof CookieImportError),
+        () =>
+          Effect.fail(
+            new CookieImportError({
+              reason: "Cannot read Chromium cookies. Close the browser and try again.",
+            }),
+          ),
+      ),
     ),
-  );
+);
 
 export const readBrowserCookies = (
   browser: CookieBrowser,

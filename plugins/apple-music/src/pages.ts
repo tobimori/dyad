@@ -132,77 +132,78 @@ const toCard = (artist: typeof AppleArtist.Type) =>
 export const includes = { ...songIncludes, "include[albums]": "artists" };
 
 // A view has 10 items and a `next` link. One more request gives up to 100 items.
-const allAlbums = (session: AppleSession, view: typeof AlbumView.Type) =>
-  Effect.gen(function* () {
-    if (view?.next === undefined) return view?.data ?? [];
+const allAlbums = Effect.fn("allAlbums")(function* (
+  session: AppleSession,
+  view: typeof AlbumView.Type,
+) {
+  if (view?.next === undefined) return view?.data ?? [];
 
-    const request = HttpClientRequest.get(new URL(view.next, amp)).pipe(
-      HttpClientRequest.setUrlParams({ ...includes, limit: 100 - view.data.length }),
-      authorize(session),
-    );
-    const rest = yield* requestJson(
-      request,
-      Schema.Struct({ data: Schema.Array(AppleAlbum) }),
-      "artist view",
-    );
-    return [...view.data, ...rest.data];
+  const request = HttpClientRequest.get(new URL(view.next, amp)).pipe(
+    HttpClientRequest.setUrlParams({ ...includes, limit: 100 - view.data.length }),
+    authorize(session),
+  );
+  const rest = yield* requestJson(
+    request,
+    Schema.Struct({ data: Schema.Array(AppleAlbum) }),
+    "artist view",
+  );
+  return [...view.data, ...rest.data];
+});
+
+export const readArtist = Effect.fn("readArtist")(function* (
+  session: AppleSession,
+  artistId: string,
+) {
+  const request = HttpClientRequest.get(
+    `${amp}/v1/catalog/${session.storefront}/artists/${encodeURIComponent(artistId)}`,
+  ).pipe(
+    HttpClientRequest.setUrlParams({
+      ...includes,
+      views:
+        "top-songs,similar-artists,full-albums,singles,compilation-albums,live-albums,appears-on-albums",
+    }),
+    authorize(session),
+  );
+  const [artist] = (yield* requestJson(request, ArtistResponse, "artist")).data;
+  const views = artist.views;
+
+  const [albums, singles, compilations, live, appearsOn] = yield* Effect.all(
+    [
+      allAlbums(session, views["full-albums"]),
+      allAlbums(session, views.singles),
+      allAlbums(session, views["compilation-albums"]),
+      allAlbums(session, views["live-albums"]),
+      allAlbums(session, views["appears-on-albums"]),
+    ],
+    { concurrency: "unbounded" },
+  );
+
+  return new ProviderArtist({
+    artist: toCard(artist),
+    topTracks: (views["top-songs"]?.data ?? []).map(toTrack),
+    tracks: [],
+    releases: [
+      ...[...albums, ...singles, ...compilations].map((album) =>
+        toRelease(album, artist.id, false),
+      ),
+      ...live.map((album) => toRelease(album, artist.id, true)),
+    ],
+    appearsOn: appearsOn.map((album) => toRelease(album, null, false)),
+    similar: (views["similar-artists"]?.data ?? []).map(toCard),
   });
+});
 
-export const readArtist = (session: AppleSession, artistId: string) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(
-      `${amp}/v1/catalog/${session.storefront}/artists/${encodeURIComponent(artistId)}`,
-    ).pipe(
-      HttpClientRequest.setUrlParams({
-        ...includes,
-        views:
-          "top-songs,similar-artists,full-albums,singles,compilation-albums,live-albums,appears-on-albums",
-      }),
-      authorize(session),
-    );
-    const [artist] = (yield* requestJson(request, ArtistResponse, "artist")).data;
-    const views = artist.views;
+export const readAlbum = Effect.fn("readAlbum")(function* (session: AppleSession, albumId: string) {
+  const request = HttpClientRequest.get(
+    `${amp}/v1/catalog/${session.storefront}/albums/${encodeURIComponent(albumId)}`,
+  ).pipe(
+    HttpClientRequest.setUrlParams({ ...songIncludes, include: "tracks,artists" }),
+    authorize(session),
+  );
+  const [album] = (yield* requestJson(request, AlbumResponse, "album")).data;
 
-    const [albums, singles, compilations, live, appearsOn] = yield* Effect.all(
-      [
-        allAlbums(session, views["full-albums"]),
-        allAlbums(session, views.singles),
-        allAlbums(session, views["compilation-albums"]),
-        allAlbums(session, views["live-albums"]),
-        allAlbums(session, views["appears-on-albums"]),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    return new ProviderArtist({
-      artist: toCard(artist),
-      topTracks: (views["top-songs"]?.data ?? []).map(toTrack),
-      tracks: [],
-      releases: [
-        ...[...albums, ...singles, ...compilations].map((album) =>
-          toRelease(album, artist.id, false),
-        ),
-        ...live.map((album) => toRelease(album, artist.id, true)),
-      ],
-      appearsOn: appearsOn.map((album) => toRelease(album, null, false)),
-      similar: (views["similar-artists"]?.data ?? []).map(toCard),
-    });
+  return new ProviderAlbum({
+    release: toRelease(album, null, false),
+    tracks: album.relationships.tracks.data.filter((track) => track.type === "songs").map(toTrack),
   });
-
-export const readAlbum = (session: AppleSession, albumId: string) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(
-      `${amp}/v1/catalog/${session.storefront}/albums/${encodeURIComponent(albumId)}`,
-    ).pipe(
-      HttpClientRequest.setUrlParams({ ...songIncludes, include: "tracks,artists" }),
-      authorize(session),
-    );
-    const [album] = (yield* requestJson(request, AlbumResponse, "album")).data;
-
-    return new ProviderAlbum({
-      release: toRelease(album, null, false),
-      tracks: album.relationships.tracks.data
-        .filter((track) => track.type === "songs")
-        .map(toTrack),
-    });
-  });
+});

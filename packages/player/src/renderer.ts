@@ -161,16 +161,15 @@ const readInfo = (entry: Entry) => {
   return Effect.succeed(info);
 };
 
-const openTrack = (entry: Entry, info: SourceInfo, input: number) =>
-  Effect.gen(function* () {
-    const scope = yield* Scope.make();
-    const source = yield* openSource(info).pipe(
-      Scope.provide(scope),
-      Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
-      Effect.mapError((cause) => new EntryError({ entry: entry.id, cause })),
-    );
-    return new Track({ entry, source, scope, input, ...entryLevel(entry.loudness) });
-  });
+const openTrack = Effect.fn("openTrack")(function* (entry: Entry, info: SourceInfo, input: number) {
+  const scope = yield* Scope.make();
+  const source = yield* openSource(info).pipe(
+    Scope.provide(scope),
+    Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
+    Effect.mapError((cause) => new EntryError({ entry: entry.id, cause })),
+  );
+  return new Track({ entry, source, scope, input, ...entryLevel(entry.loudness) });
+});
 
 // The track's true peak in `frames` lane frames from entry position `position`. In the bars of a
 // grid with bar peaks, it is the largest bar peak, else the source's true peak.
@@ -426,74 +425,71 @@ export const openRenderer = Effect.gen(function* () {
   };
 
   // A lane that opens `late` frames after its start keeps the timing of its fade and tempo
-  const openLane = (start: Start, late: number) =>
-    Effect.gen(function* () {
-      const info = yield* readInfo(start.entry);
-      if (info === undefined) return undefined;
+  const openLane = Effect.fn("openLane")(function* (start: Start, late: number) {
+    const info = yield* readInfo(start.entry);
+    if (info === undefined) return undefined;
 
-      const warp =
-        start.tempo === undefined
-          ? undefined
-          : new Warp(yield* openStretcher(), start.tempo, start.position + late);
-      const resampler = new Resampler(info.sampleRate, warp?.inputStart ?? start.position);
-      const track = yield* openTrack(start.entry, info, 0);
-      track.source.seek(resampler.inputEnd);
-      return new Lane({
-        resampler,
-        warp,
-        tracks: [track],
-        fadeIn: start.fadeIn,
-        fadeOut: undefined,
-        released: false,
-      });
+    const warp =
+      start.tempo === undefined
+        ? undefined
+        : new Warp(yield* openStretcher(), start.tempo, start.position + late);
+    const resampler = new Resampler(info.sampleRate, warp?.inputStart ?? start.position);
+    const track = yield* openTrack(start.entry, info, 0);
+    track.source.seek(resampler.inputEnd);
+    return new Lane({
+      resampler,
+      warp,
+      tracks: [track],
+      fadeIn: start.fadeIn,
+      fadeOut: undefined,
+      released: false,
     });
+  });
 
   // Gives false when the lane needs bytes that did not arrive yet
-  const feed = (lane: Lane) =>
-    Effect.gen(function* () {
-      const track = lane.tracks.at(-1)!;
-      const pcm = yield* track.source
-        .read(track.entry.bytes(), track.entry.complete(), track.entry.start?.() ?? 0)
-        .pipe(Effect.mapError((cause) => new EntryError({ entry: track.entry.id, cause })));
-      track.entry.needs?.(track.source.needs());
+  const feed = Effect.fn("feed")(function* (lane: Lane) {
+    const track = lane.tracks.at(-1)!;
+    const pcm = yield* track.source
+      .read(track.entry.bytes(), track.entry.complete(), track.entry.start?.() ?? 0)
+      .pipe(Effect.mapError((cause) => new EntryError({ entry: track.entry.id, cause })));
+    track.entry.needs?.(track.source.needs());
 
-      if (pcm !== undefined) {
-        lane.resampler.push(pcm.channels, pcm.frames, track.gain);
-        return pcm.frames > 0;
-      }
+    if (pcm !== undefined) {
+      lane.resampler.push(pcm.channels, pcm.frames, track.gain);
+      return pcm.frames > 0;
+    }
 
-      // The source ended. The next entry continues the lane if it has the same sample rate and
-      // crossfade is off or it is of the same album.
-      const following = queue[0];
-      const joins =
-        following !== undefined &&
-        next === undefined &&
-        lane === head() &&
-        !warping(lane) &&
-        (fadeFrames() === 0 || sameAlbum(track.entry, following));
-      if (!joins) {
-        lane.resampler.end();
-        return true;
-      }
-      const info = yield* readInfo(following);
-      if (info === undefined) return false;
-      if (info.sampleRate !== lane.resampler.rate) {
-        lane.resampler.end();
-        return true;
-      }
-
-      queue = queue.slice(1);
-      lane.tracks.push(yield* openTrack(following, info, lane.resampler.inputEnd));
+    // The source ended. The next entry continues the lane if it has the same sample rate and
+    // crossfade is off or it is of the same album.
+    const following = queue[0];
+    const joins =
+      following !== undefined &&
+      next === undefined &&
+      lane === head() &&
+      !warping(lane) &&
+      (fadeFrames() === 0 || sameAlbum(track.entry, following));
+    if (!joins) {
+      lane.resampler.end();
       return true;
-    });
+    }
+    const info = yield* readInfo(following);
+    if (info === undefined) return false;
+    if (info.sampleRate !== lane.resampler.rate) {
+      lane.resampler.end();
+      return true;
+    }
+
+    queue = queue.slice(1);
+    lane.tracks.push(yield* openTrack(following, info, lane.resampler.inputEnd));
+    return true;
+  });
 
   // Frees the decoders of tracks whose output is complete, so that the first track plays now
-  const dropPlayedTracks = (lane: Lane) =>
-    Effect.gen(function* () {
-      while (lane.tracks.length > 1 && trackStart(lane, lane.tracks[1]!) <= lane.resampler.output) {
-        yield* Scope.close(lane.tracks.shift()!.scope, Exit.void);
-      }
-    });
+  const dropPlayedTracks = Effect.fn("dropPlayedTracks")(function* (lane: Lane) {
+    while (lane.tracks.length > 1 && trackStart(lane, lane.tracks[1]!) <= lane.resampler.output) {
+      yield* Scope.close(lane.tracks.shift()!.scope, Exit.void);
+    }
+  });
 
   const closeFinished = Effect.gen(function* () {
     const closing = lanes.filter(finished);
@@ -545,48 +541,47 @@ export const openRenderer = Effect.gen(function* () {
   };
 
   // The current lane continues. Entries that play or wait after it must stay next.
-  const follow = (lane: Lane, rest: ReadonlyArray<Entry>) =>
-    Effect.gen(function* () {
-      const joined = lane.tracks.slice(1).map((track) => track.entry);
-      const later = laterEntries(lane);
-      const matches = (entries: ReadonlyArray<Entry>, offset: number) =>
-        entries.every((entry, index) => rest[offset + index]?.id === entry.id);
-      if (matches(joined, 0) && matches(later, joined.length)) {
-        queue = rest.slice(joined.length + later.length);
-        return;
+  const follow = Effect.fn("follow")(function* (lane: Lane, rest: ReadonlyArray<Entry>) {
+    const joined = lane.tracks.slice(1).map((track) => track.entry);
+    const later = laterEntries(lane);
+    const matches = (entries: ReadonlyArray<Entry>, offset: number) =>
+      entries.every((entry, index) => rest[offset + index]?.id === entry.id);
+    if (matches(joined, 0) && matches(later, joined.length)) {
+      queue = rest.slice(joined.length + later.length);
+      return;
+    }
+
+    const index = lanes.indexOf(lane);
+    lanes = lanes.map((other, position) =>
+      position > index && !other.released ? release(other) : other,
+    );
+    next = undefined;
+
+    if (matches(joined, 0)) {
+      if (lane.fadeOut !== undefined && lane.fadeOut.from >= clock(lane)) {
+        replace(lane, new Lane({ ...lane, fadeOut: undefined }));
       }
+      queue = rest.slice(joined.length);
+      return;
+    }
 
-      const index = lanes.indexOf(lane);
-      lanes = lanes.map((other, position) =>
-        position > index && !other.released ? release(other) : other,
-      );
-      next = undefined;
-
-      if (matches(joined, 0)) {
-        if (lane.fadeOut !== undefined && lane.fadeOut.from >= clock(lane)) {
-          replace(lane, new Lane({ ...lane, fadeOut: undefined }));
-        }
-        queue = rest.slice(joined.length);
-        return;
-      }
-
-      // The joined tracks must go, so the lane opens again at the same frame
-      const output = lane.resampler.output;
-      const fadeIn =
-        lane.fadeIn !== undefined && progress(lane.fadeIn, output) < 1 ? lane.fadeIn : undefined;
-      lanes = lanes.filter((other) => other !== lane);
-      yield* closeLane(lane);
-      next = new Start({
-        entry: lane.tracks[0]!.entry,
-        position: output - trackStart(lane, lane.tracks[0]!),
-        at: undefined,
-        fadeIn,
-      });
-      queue = rest;
+    // The joined tracks must go, so the lane opens again at the same frame
+    const output = lane.resampler.output;
+    const fadeIn =
+      lane.fadeIn !== undefined && progress(lane.fadeIn, output) < 1 ? lane.fadeIn : undefined;
+    lanes = lanes.filter((other) => other !== lane);
+    yield* closeLane(lane);
+    next = new Start({
+      entry: lane.tracks[0]!.entry,
+      position: output - trackStart(lane, lane.tracks[0]!),
+      at: undefined,
+      fadeIn,
     });
+    queue = rest;
+  });
 
-  const setQueue = (entries: ReadonlyArray<Entry>) =>
-    Effect.gen(function* () {
+  const setQueue = Effect.fn("setQueue")(
+    function* (entries: ReadonlyArray<Entry>) {
       const [first, ...rest] = entries;
       const lane = currentLane();
 
@@ -621,10 +616,12 @@ export const openRenderer = Effect.gen(function* () {
           ? undefined
           : new Start({ entry: first, position: 0, at: undefined, fadeIn: undefined });
       queue = rest;
-    }).pipe(Semaphore.withPermits(lock, 1));
+    },
+    (effect) => effect.pipe(Semaphore.withPermits(lock, 1)),
+  );
 
-  const seek = (position: number) =>
-    Effect.gen(function* () {
+  const seek = Effect.fn("seek")(
+    function* (position: number) {
       const target = Math.max(0, position);
       if (next !== undefined && next.at === undefined) {
         lanes = lanes.map((lane) => (lane.released ? lane : release(lane)));
@@ -649,7 +646,9 @@ export const openRenderer = Effect.gen(function* () {
         fadeIn: undefined,
       });
       queue = [...following, ...queue];
-    }).pipe(Semaphore.withPermits(lock, 1));
+    },
+    (effect) => effect.pipe(Semaphore.withPermits(lock, 1)),
+  );
 
   const setCrossfade = (seconds: number) =>
     Effect.sync(() => {
@@ -679,8 +678,8 @@ export const openRenderer = Effect.gen(function* () {
       }
     }).pipe(Semaphore.withPermits(lock, 1));
 
-  const render = (frames: number) =>
-    Effect.gen(function* () {
+  const render = Effect.fn("render")(
+    function* (frames: number) {
       const samples = new Float32Array(frames * 2);
       const spans: Array<Span> = [];
       let filled = 0;
@@ -761,7 +760,9 @@ export const openRenderer = Effect.gen(function* () {
       const block = new Block({ frame: timeline, samples, spans, waiting });
       timeline += frames;
       return block;
-    }).pipe(Semaphore.withPermits(lock, 1));
+    },
+    (effect) => effect.pipe(Semaphore.withPermits(lock, 1)),
+  );
 
   return new Renderer({ setQueue, seek, setCrossfade, setDj, render });
 });

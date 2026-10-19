@@ -85,117 +85,113 @@ const fail = (error: typeof BandcampError.Type) =>
   Effect.fail(new ProviderError({ reason: `Bandcamp: ${error.error_message}` }));
 
 /** The releases of a Bandcamp account. Bandcamp has no top tracks and no similar artists. */
-export const readBand = (bandId: string) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.post(bandUrl).pipe(
-      HttpClientRequest.bodyJsonUnsafe({ band_id: Number(bandId) }),
-    );
-    const band = yield* getJson(request, Schema.Union([Band, BandcampError])).pipe(
-      Effect.mapError(providerError("Bandcamp")),
-    );
-    if ("error" in band) return yield* fail(band);
+export const readBand = Effect.fn("readBand")(function* (bandId: string) {
+  const request = HttpClientRequest.post(bandUrl).pipe(
+    HttpClientRequest.bodyJsonUnsafe({ band_id: Number(bandId) }),
+  );
+  const band = yield* getJson(request, Schema.Union([Band, BandcampError])).pipe(
+    Effect.mapError(providerError("Bandcamp")),
+  );
+  if ("error" in band) return yield* fail(band);
 
-    const image = band.bio_image_id;
-    return new ProviderArtist({
-      artist: new ProviderArtistCard({
-        externalId: String(band.id),
-        name: band.name,
-        artworkUrl:
-          image === undefined || image === null
-            ? null
-            : `https://f4.bcbits.com/img/${image}_10.jpg`,
-      }),
-      topTracks: [],
-      tracks: [],
-      releases: band.discography.flatMap((item) => {
-        if (item.item_type !== "album" && item.item_type !== "track") return [];
-        const type = item.item_type === "album" ? "a" : "t";
+  const image = band.bio_image_id;
+  return new ProviderArtist({
+    artist: new ProviderArtistCard({
+      externalId: String(band.id),
+      name: band.name,
+      artworkUrl:
+        image === undefined || image === null ? null : `https://f4.bcbits.com/img/${image}_10.jpg`,
+    }),
+    topTracks: [],
+    tracks: [],
+    releases: band.discography.flatMap((item) => {
+      if (item.item_type !== "album" && item.item_type !== "track") return [];
+      const type = item.item_type === "album" ? "a" : "t";
 
-        return [
-          new ProviderRelease({
-            externalId: albumId(type, item.band_id, item.item_id),
-            title: item.title,
-            artist: item.artist_name ?? item.band_name,
-            artistId: String(item.band_id),
-            releaseDate: isoDate(item.release_date),
-            // Bandcamp does not separate EPs from albums
-            primaryType: type === "t" ? "single" : null,
-            secondaryTypes: [],
-            explicit: false,
-            trackCount: null,
-            artworkUrl: releaseArt(item.art_id),
-          }),
-        ];
-      }),
-      appearsOn: [],
-      similar: [],
-    });
+      return [
+        new ProviderRelease({
+          externalId: albumId(type, item.band_id, item.item_id),
+          title: item.title,
+          artist: item.artist_name ?? item.band_name,
+          artistId: String(item.band_id),
+          releaseDate: isoDate(item.release_date),
+          // Bandcamp does not separate EPs from albums
+          primaryType: type === "t" ? "single" : null,
+          secondaryTypes: [],
+          explicit: false,
+          trackCount: null,
+          artworkUrl: releaseArt(item.art_id),
+        }),
+      ];
+    }),
+    appearsOn: [],
+    similar: [],
   });
+});
 
-export const readRelease = (externalId: string) =>
-  Effect.gen(function* () {
-    const [type, , bandId, , id] = yield* Schema.decodeUnknownEffect(AlbumId)(externalId).pipe(
-      Effect.mapError(() => new ProviderError({ reason: "Invalid album ID" })),
-    );
-    const request = HttpClientRequest.get(detailsUrl).pipe(
-      HttpClientRequest.setUrlParams({ band_id: bandId, tralbum_type: type, tralbum_id: id }),
-    );
-    const release = yield* getJson(request, Schema.Union([Release, BandcampError])).pipe(
-      Effect.mapError(providerError("Bandcamp")),
-    );
-    if ("error" in release) return yield* fail(release);
+export const readRelease = Effect.fn("readRelease")(function* (externalId: string) {
+  const [type, , bandId, , id] = yield* Schema.decodeUnknownEffect(AlbumId)(externalId).pipe(
+    Effect.mapError(() => new ProviderError({ reason: "Invalid album ID" })),
+  );
+  const request = HttpClientRequest.get(detailsUrl).pipe(
+    HttpClientRequest.setUrlParams({ band_id: bandId, tralbum_type: type, tralbum_id: id }),
+  );
+  const release = yield* getJson(request, Schema.Union([Release, BandcampError])).pipe(
+    Effect.mapError(providerError("Bandcamp")),
+  );
+  if ("error" in release) return yield* fail(release);
 
-    const artist = release.tralbum_artist ?? release.band.name;
-    const artworkUrl = releaseArt(release.art_id);
-    const releaseDate = isoDate(
-      release.release_date === undefined || release.release_date === null
-        ? null
-        : release.release_date * 1000,
-    );
-    const account = new CreditedArtist({ id: String(bandId), name: release.band.name });
+  const artist = release.tralbum_artist ?? release.band.name;
+  const artworkUrl = releaseArt(release.art_id);
+  const releaseDate = isoDate(
+    release.release_date === undefined || release.release_date === null
+      ? null
+      : release.release_date * 1000,
+  );
+  const account = new CreditedArtist({ id: String(bandId), name: release.band.name });
 
-    return new ProviderAlbum({
-      release: new ProviderRelease({
-        externalId,
-        title: release.title,
-        artist,
-        artistId: String(bandId),
-        releaseDate,
-        primaryType: type === "t" ? "single" : null,
-        secondaryTypes: [],
-        explicit: false,
-        trackCount: release.tracks.length,
-        artworkUrl,
-      }),
-      tracks: release.tracks.map(
-        (track) =>
-          new ProviderTrack({
-            disc: null,
-            number: track.track_num ?? null,
-            streamable: track.is_streamable,
-            source: new ProviderSource({
-              externalId: `${bandId}-${track.track_id}`,
-              title: track.title,
-              artist: track.band_name ?? artist,
-              album: type === "a" ? release.title : null,
-              durationMs:
-                track.duration === undefined || track.duration === null
-                  ? null
-                  : Math.round(track.duration * 1000),
-              isrc: null,
-              container: "mp3",
-              codec: "mp3",
-              lossless: false,
-              encrypted: false,
-              artworkUrl,
-              artists: [],
-              explicit: null,
-              bitrate: 128_000,
-              uploader: account,
-              albumId: externalId,
-              releaseDate: type === "a" ? releaseDate : null,
-            }),
+  return new ProviderAlbum({
+    release: new ProviderRelease({
+      externalId,
+      title: release.title,
+      artist,
+      artistId: String(bandId),
+      releaseDate,
+      primaryType: type === "t" ? "single" : null,
+      secondaryTypes: [],
+      explicit: false,
+      trackCount: release.tracks.length,
+      artworkUrl,
+    }),
+    tracks: release.tracks.map(
+      (track) =>
+        new ProviderTrack({
+          disc: null,
+          number: track.track_num ?? null,
+          streamable: track.is_streamable,
+          source: new ProviderSource({
+            externalId: `${bandId}-${track.track_id}`,
+            title: track.title,
+            artist: track.band_name ?? artist,
+            album: type === "a" ? release.title : null,
+            durationMs:
+              track.duration === undefined || track.duration === null
+                ? null
+                : Math.round(track.duration * 1000),
+            isrc: null,
+            container: "mp3",
+            codec: "mp3",
+            lossless: false,
+            encrypted: false,
+            artworkUrl,
+            artists: [],
+            explicit: null,
+            bitrate: 128_000,
+            uploader: account,
+            albumId: externalId,
+            releaseDate: type === "a" ? releaseDate : null,
           }),
-      ),
-    });
+        }),
+    ),
   });
+});

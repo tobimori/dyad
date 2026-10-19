@@ -138,30 +138,27 @@ const flag = (arg: string) => {
 const badIndex = invalid("Bad song index");
 
 // `START:END`, `START:` or one position, as the half-open range `[start, end)`
-const range = (arg: string, length: number) =>
-  Effect.gen(function* () {
-    const [first = "", last] = arg.split(":");
-    const start = yield* integer(first);
-    const openEnd = last === "" ? length : start + 1;
-    const end = last === undefined || last === "" ? openEnd : yield* integer(last);
-    if (start < 0 || end < start || end > length) return yield* badIndex;
-    return [start, end] as const;
-  });
+const range = Effect.fn("range")(function* (arg: string, length: number) {
+  const [first = "", last] = arg.split(":");
+  const start = yield* integer(first);
+  const openEnd = last === "" ? length : start + 1;
+  const end = last === undefined || last === "" ? openEnd : yield* integer(last);
+  if (start < 0 || end < start || end > length) return yield* badIndex;
+  return [start, end] as const;
+});
 
-const entryWithId = (current: View, arg: string) =>
-  Effect.gen(function* () {
-    const id = yield* integer(arg);
-    const entry = current.entries.find((entry) => entry.id === id);
-    if (entry === undefined) return yield* commandAcks.entry_not_found;
-    return entry;
-  });
+const entryWithId = Effect.fn("entryWithId")(function* (current: View, arg: string) {
+  const id = yield* integer(arg);
+  const entry = current.entries.find((entry) => entry.id === id);
+  if (entry === undefined) return yield* commandAcks.entry_not_found;
+  return entry;
+});
 
-const entryAt = (current: View, arg: string) =>
-  Effect.gen(function* () {
-    const entry = current.entries[yield* integer(arg)];
-    if (entry === undefined) return yield* badIndex;
-    return entry;
-  });
+const entryAt = Effect.fn("entryAt")(function* (current: View, arg: string) {
+  const entry = current.entries[yield* integer(arg)];
+  if (entry === undefined) return yield* badIndex;
+  return entry;
+});
 
 const entryIdsIn = (current: View, positions: string) =>
   Effect.map(range(positions, current.entries.length), ([start, end]) =>
@@ -198,89 +195,91 @@ const volumeOf = (current: View) =>
     onSome: (output) => (output.volume === null ? -1 : Math.round(output.volume * 100)),
   });
 
-const setVolume = (volume: number) =>
-  Effect.gen(function* () {
-    const output = activeOutput(yield* view);
-    if (Option.isNone(output) || output.value.volume === null) {
-      return yield* new Ack({ code: ackCode.unknown, message: "No mixer" });
-    }
-    yield* control(Command.SetVolume.make({ outputId: output.value.id, volume: volume / 100 }));
-    return [];
-  });
+const setVolume = Effect.fn("setVolume")(function* (volume: number) {
+  const output = activeOutput(yield* view);
+  if (Option.isNone(output) || output.value.volume === null) {
+    return yield* new Ack({ code: ackCode.unknown, message: "No mixer" });
+  }
+  yield* control(Command.SetVolume.make({ outputId: output.value.id, volume: volume / 100 }));
+  return [];
+});
 
 // Moves the entries so that the first one is at `to` in the new order
-const move = (current: View, entryIds: ReadonlyArray<EntryId>, to: number) =>
-  Effect.gen(function* () {
-    const rest = current.entries.filter((entry) => !entryIds.includes(entry.id));
-    if (to < 0 || to > rest.length) return yield* badIndex;
-    if (!Arr.isReadonlyArrayNonEmpty(entryIds)) return [];
-    const after = to === 0 ? null : (rest[to - 1]?.id ?? null);
-    yield* control(Command.Move.make({ entryIds, after }), current.queueVersion);
-    return [];
-  });
+const move = Effect.fn("move")(function* (
+  current: View,
+  entryIds: ReadonlyArray<EntryId>,
+  to: number,
+) {
+  const rest = current.entries.filter((entry) => !entryIds.includes(entry.id));
+  if (to < 0 || to > rest.length) return yield* badIndex;
+  if (!Arr.isReadonlyArrayNonEmpty(entryIds)) return [];
+  const after = to === 0 ? null : (rest[to - 1]?.id ?? null);
+  yield* control(Command.Move.make({ entryIds, after }), current.queueVersion);
+  return [];
+});
 
 // Adds the sources at `position`, or at the end when it is `null`
-const enqueue = (
+const enqueue = Effect.fn("enqueue")(function* (
   sourceIds: ReadonlyArray<string>,
   position: number | null,
   context: typeof PlayContext.Type,
-) =>
-  Effect.gen(function* () {
-    if (!Arr.isReadonlyArrayNonEmpty(sourceIds)) return [];
-    const current = yield* view;
-    if (position !== null && (position < 0 || position > current.entries.length)) {
-      return yield* badIndex;
-    }
-    const before = position === null ? undefined : current.entries[position - 1];
-    const toEnd = position === null || position === current.entries.length;
-    // Dyad source IDs are UUIDs, so only the limit of the list can fail
-    const command = yield* Command.Enqueue.makeEffect({
-      sourceIds,
-      context,
-      after: toEnd || before === undefined ? "end" : before.id,
-    }).pipe(Effect.mapError(() => commandAcks.queue_full));
-    const entryIds = yield* control(command, toEnd ? null : current.queueVersion);
-    // `Enqueue` cannot insert at the start
-    if (!toEnd && before === undefined && Arr.isReadonlyArrayNonEmpty(entryIds)) {
-      yield* control(Command.Move.make({ entryIds, after: null }));
-    }
-    return entryIds;
-  });
+) {
+  if (!Arr.isReadonlyArrayNonEmpty(sourceIds)) return [];
+  const current = yield* view;
+  if (position !== null && (position < 0 || position > current.entries.length)) {
+    return yield* badIndex;
+  }
+  const before = position === null ? undefined : current.entries[position - 1];
+  const toEnd = position === null || position === current.entries.length;
+  // Dyad source IDs are UUIDs, so only the limit of the list can fail
+  const command = yield* Command.Enqueue.makeEffect({
+    sourceIds,
+    context,
+    after: toEnd || before === undefined ? "end" : before.id,
+  }).pipe(Effect.mapError(() => commandAcks.queue_full));
+  const entryIds = yield* control(command, toEnd ? null : current.queueVersion);
+  // `Enqueue` cannot insert at the start
+  if (!toEnd && before === undefined && Arr.isReadonlyArrayNonEmpty(entryIds)) {
+    yield* control(Command.Move.make({ entryIds, after: null }));
+  }
+  return entryIds;
+});
 
-const sourcesAt = (uri: string, connection: Connection) =>
-  Effect.gen(function* () {
-    const sourceId = sourceIdOf(uri);
-    if (Option.isSome(sourceId)) return [sourceId.value];
+const sourcesAt = Effect.fn("sourcesAt")(function* (uri: string, connection: Connection) {
+  const sourceId = sourceIdOf(uri);
+  if (Option.isSome(sourceId)) return [sourceId.value];
 
-    const tree = directoryTree((yield* library(connection)).songs);
-    const path = directoryPath(uri);
-    if (!tree.has(path)) {
-      return yield* new Ack({ code: ackCode.noExist, message: "No such directory" });
-    }
-    return walk(tree, path).flatMap((entry) => (Predicate.isString(entry) ? [] : [entry.id]));
-  });
+  const tree = directoryTree((yield* library(connection)).songs);
+  const path = directoryPath(uri);
+  if (!tree.has(path)) {
+    return yield* new Ack({ code: ackCode.noExist, message: "No such directory" });
+  }
+  return walk(tree, path).flatMap((entry) => (Predicate.isString(entry) ? [] : [entry.id]));
+});
 
-const findSongs = (args: ReadonlyArray<string>, mode: "find" | "catalog", connection: Connection) =>
-  Effect.gen(function* () {
-    const filter = yield* parseFilter(args, mode);
-    if (filter.query === null) return (yield* library(connection)).songs.filter(filter.matches);
-    const found = yield* mirror.pipe(
-      Effect.flatMap((mirror) => mirror.search(filter.query ?? "")),
-      Effect.mapError(fromMirror),
-    );
-    const mark = yield* artistMarks(connection);
-    return found.map(mark).filter(filter.matches);
-  });
+const findSongs = Effect.fn("findSongs")(function* (
+  args: ReadonlyArray<string>,
+  mode: "find" | "catalog",
+  connection: Connection,
+) {
+  const filter = yield* parseFilter(args, mode);
+  if (filter.query === null) return (yield* library(connection)).songs.filter(filter.matches);
+  const found = yield* mirror.pipe(
+    Effect.flatMap((mirror) => mirror.search(filter.query ?? "")),
+    Effect.mapError(fromMirror),
+  );
+  const mark = yield* artistMarks(connection);
+  return found.map(mark).filter(filter.matches);
+});
 
-const findInQueue = (
+const findInQueue = Effect.fn("findInQueue")(function* (
   args: ReadonlyArray<string>,
   mode: "find" | "search",
   connection: Connection,
-) =>
-  Effect.gen(function* () {
-    const filter = yield* parseFilter(args, mode);
-    return yield* queueLines(yield* view, connection, (_, __, song) => filter.matches(song));
-  });
+) {
+  const filter = yield* parseFilter(args, mode);
+  return yield* queueLines(yield* view, connection, (_, __, song) => filter.matches(song));
+});
 
 // Splits trailing `group TAG` arguments off a filter
 const groupsOf = (args: ReadonlyArray<string>) => {
@@ -313,17 +312,16 @@ const playlistsByName = Effect.gen(function* () {
   return named;
 });
 
-const playlistSongs = (name: string) =>
-  Effect.gen(function* () {
-    const id = (yield* playlistsByName).get(name);
-    if (id === undefined) {
-      return yield* new Ack({ code: ackCode.noExist, message: "No such playlist" });
-    }
-    return yield* mirror.pipe(
-      Effect.flatMap((mirror) => mirror.playlistSongs(id)),
-      Effect.mapError(fromMirror),
-    );
-  });
+const playlistSongs = Effect.fn("playlistSongs")(function* (name: string) {
+  const id = (yield* playlistsByName).get(name);
+  if (id === undefined) {
+    return yield* new Ack({ code: ackCode.noExist, message: "No such playlist" });
+  }
+  return yield* mirror.pipe(
+    Effect.flatMap((mirror) => mirror.playlistSongs(id)),
+    Effect.mapError(fromMirror),
+  );
+});
 
 const outputNumber = (server: Server, outputId: string) => {
   const number = server.outputNumbers.get(outputId) ?? server.outputNumbers.size;
@@ -331,13 +329,16 @@ const outputNumber = (server: Server, outputId: string) => {
   return number;
 };
 
-const outputWithNumber = (current: View, server: Server, arg: string) =>
-  Effect.gen(function* () {
-    const number = yield* integer(arg);
-    const output = current.outputs.find((output) => outputNumber(server, output.id) === number);
-    if (output === undefined) return yield* commandAcks.output_unavailable;
-    return output;
-  });
+const outputWithNumber = Effect.fn("outputWithNumber")(function* (
+  current: View,
+  server: Server,
+  arg: string,
+) {
+  const number = yield* integer(arg);
+  const output = current.outputs.find((output) => outputNumber(server, output.id) === number);
+  if (output === undefined) return yield* commandAcks.output_unavailable;
+  return output;
+});
 
 // The outputs that play: the active output and the timed outputs in sync with it
 const enabledOutputs = (current: View) =>
@@ -390,13 +391,12 @@ const artwork = (picture: boolean) =>
     }),
   );
 
-const skip = (direction: 1 | -1) =>
-  Effect.gen(function* () {
-    const { playback } = yield* view;
-    if (playback.entryId === null || playback.state === "stopped") return yield* notPlaying;
-    yield* control(Command.Skip.make({ fromEntryId: playback.entryId, direction }));
-    return [];
-  });
+const skip = Effect.fn("skip")(function* (direction: 1 | -1) {
+  const { playback } = yield* view;
+  if (playback.entryId === null || playback.state === "stopped") return yield* notPlaying;
+  yield* control(Command.Skip.make({ fromEntryId: playback.entryId, direction }));
+  return [];
+});
 
 const resume = Effect.gen(function* () {
   if ((yield* view).entries.length === 0) return [];
@@ -407,28 +407,30 @@ const resume = Effect.gen(function* () {
 const play = (entry: QueueEntry) =>
   Effect.as(control(Command.JumpTo.make({ entryId: entry.id, positionMs: 0 })), []);
 
-const seek = (current: View, entry: QueueEntry, time: string) =>
-  Effect.gen(function* () {
-    const positionMs = Math.max(0, (yield* decimal(time)) * 1000);
-    const { entryId, state } = current.playback;
-    // `Seek` keeps a pause, but it does not start a stopped entry
-    yield* control(
-      entry.id === entryId && state !== "stopped"
-        ? Command.Seek.make({ entryId: entry.id, positionMs })
-        : Command.JumpTo.make({ entryId: entry.id, positionMs }),
-    );
-    return [];
-  });
+const seek = Effect.fn("seek")(function* (current: View, entry: QueueEntry, time: string) {
+  const positionMs = Math.max(0, (yield* decimal(time)) * 1000);
+  const { entryId, state } = current.playback;
+  // `Seek` keeps a pause, but it does not start a stopped entry
+  yield* control(
+    entry.id === entryId && state !== "stopped"
+      ? Command.Seek.make({ entryId: entry.id, positionMs })
+      : Command.JumpTo.make({ entryId: entry.id, positionMs }),
+  );
+  return [];
+});
 
 // Accepts the entries in `positions` that changed after the queue version `version`
-const changedSince = (current: View, version: string, positions: string | undefined) =>
-  Effect.gen(function* () {
-    const since = yield* integer(version);
-    const length = current.entries.length;
-    const [start, end] = positions === undefined ? [0, length] : yield* range(positions, length);
-    return (_: QueueEntry, position: number) =>
-      position >= start && position < end && (current.changedAt[position] ?? 0) > since;
-  });
+const changedSince = Effect.fn("changedSince")(function* (
+  current: View,
+  version: string,
+  positions: string | undefined,
+) {
+  const since = yield* integer(version);
+  const length = current.entries.length;
+  const [start, end] = positions === undefined ? [0, length] : yield* range(positions, length);
+  return (_: QueueEntry, position: number) =>
+    position >= start && position < end && (current.changedAt[position] ?? 0) > since;
+});
 
 /** Commands that work before `password` */
 export const openCommands: ReadonlyMap<string, Handler<never>> = new Map(

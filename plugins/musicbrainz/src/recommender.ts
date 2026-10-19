@@ -119,8 +119,8 @@ export const listenbrainzRecommender = Effect.gen(function* () {
   const userName = (credentials: Credentials) =>
     Cache.get(userNames, Redacted.value(credentials.get("token") ?? Redacted.make("")));
 
-  const shelves = (credentials: Credentials) =>
-    Effect.gen(function* () {
+  const shelves = Effect.fn("shelves")(
+    function* (credentials: Credentials) {
       const user = yield* userName(credentials);
       const list = yield* getJson(
         authorized(
@@ -154,7 +154,9 @@ export const listenbrainzRecommender = Effect.gen(function* () {
           ];
         }),
       ).pipe(Effect.map((found) => found.flat()));
-    }).pipe(Effect.provide(services));
+    },
+    (effect) => effect.pipe(Effect.provide(services)),
+  );
 
   // LB Radio answers 401 without a token (2026)
   const radio = (seed: { readonly artist: string }, credentials: Credentials) =>
@@ -231,14 +233,17 @@ export const listenbrainzRecommender = Effect.gen(function* () {
       Effect.provide(services),
     );
 
-  const link = (credentials: Credentials) =>
-    Effect.gen(function* () {
+  const link = Effect.fn("link")(
+    function* (credentials: Credentials) {
       yield* Cache.invalidate(
         userNames,
         Redacted.value(credentials.get("token") ?? Redacted.make("")),
       );
       return yield* userName(credentials);
-    }).pipe(Effect.mapError((error) => new AccountLinkFailed({ reason: error.reason })));
+    },
+    (effect) =>
+      effect.pipe(Effect.mapError((error) => new AccountLinkFailed({ reason: error.reason }))),
+  );
 
   return new Recommender({
     name: "ListenBrainz",

@@ -24,25 +24,24 @@ export const nextChangeSeq = Effect.gen(function* () {
  * Sets a new `revision` on the current root of each recording, so that clients load its merge
  * group again. Call it after the change.
  */
-export const touchGroups = (recordingIds: Iterable<string>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const ids = [...new Set(recordingIds)];
-    if (ids.length === 0) return;
+export const touchGroups = Effect.fn("touchGroups")(function* (recordingIds: Iterable<string>) {
+  const db = yield* Database;
+  const ids = [...new Set(recordingIds)];
+  if (ids.length === 0) return;
 
-    yield* db.transaction(() =>
-      Effect.gen(function* () {
-        const rows = yield* db
-          .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
-          .from(recording)
-          .where(inArray(recording.id, ids));
-        const roots = [...new Set(rows.map((row) => row.mergedIntoId ?? row.id))];
-        if (roots.length === 0) return;
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      const rows = yield* db
+        .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
+        .from(recording)
+        .where(inArray(recording.id, ids));
+      const roots = [...new Set(rows.map((row) => row.mergedIntoId ?? row.id))];
+      if (roots.length === 0) return;
 
-        yield* db
-          .update(recording)
-          .set({ revision: yield* nextChangeSeq })
-          .where(inArray(recording.id, roots));
-      }),
-    );
-  });
+      yield* db
+        .update(recording)
+        .set({ revision: yield* nextChangeSeq })
+        .where(inArray(recording.id, roots));
+    }),
+  );
+});

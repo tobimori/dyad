@@ -38,50 +38,49 @@ const envelope = (serviceType: string, action: string, args: SoapArguments) => {
 };
 
 /** Calls a UPnP action and decodes its output arguments with `output` */
-export const soap = <S extends Schema.Constraint>(
+export const soap = Effect.fn("soap")(function* <S extends Schema.Constraint>(
   device: string,
   service: UpnpService,
   action: string,
   args: SoapArguments,
   output: S,
-) =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.post(service.controlUrl).pipe(
-      HttpClientRequest.setHeader("SOAPACTION", `"${service.serviceType}#${action}"`),
-      HttpClientRequest.bodyText(
-        envelope(service.serviceType, action, args),
-        'text/xml; charset="utf-8"',
-      ),
-    );
-    const failed = (reason: string) => new CommandFailed({ device, command: action, reason });
+) {
+  const client = yield* HttpClient.HttpClient;
+  const request = HttpClientRequest.post(service.controlUrl).pipe(
+    HttpClientRequest.setHeader("SOAPACTION", `"${service.serviceType}#${action}"`),
+    HttpClientRequest.bodyText(
+      envelope(service.serviceType, action, args),
+      'text/xml; charset="utf-8"',
+    ),
+  );
+  const failed = (reason: string) => new CommandFailed({ device, command: action, reason });
 
-    const text = yield* client.execute(request).pipe(
-      Effect.flatMap((response) => response.text),
-      Effect.timeout("5 seconds"),
-      Effect.mapError((error) => new TargetUnreachable({ device, reason: error.message })),
-    );
-    const body = yield* decodeXml(Envelope, text).pipe(
-      Effect.map((parsed) => parsed.Envelope.Body),
-      Effect.mapError((error) => failed(`Unexpected SOAP response: ${error.reason}`)),
-    );
+  const text = yield* client.execute(request).pipe(
+    Effect.flatMap((response) => response.text),
+    Effect.timeout("5 seconds"),
+    Effect.mapError((error) => new TargetUnreachable({ device, reason: error.message })),
+  );
+  const body = yield* decodeXml(Envelope, text).pipe(
+    Effect.map((parsed) => parsed.Envelope.Body),
+    Effect.mapError((error) => failed(`Unexpected SOAP response: ${error.reason}`)),
+  );
 
-    if ("Fault" in body) {
-      const fault = yield* Schema.decodeUnknownEffect(Fault)(body.Fault).pipe(
-        Effect.mapError(() => failed("Unexpected SOAP fault")),
-      );
-      const { errorCode, errorDescription } = fault.detail.UPnPError;
-      const reason = `UPnP error ${errorCode} ${errorDescription ?? ""}`.trim();
-
-      if (formatErrors.has(errorCode)) return yield* new UnsupportedFormat({ device, reason });
-      if (busyErrors.has(errorCode)) return yield* new DeviceBusy({ device, reason });
-      return yield* failed(reason);
-    }
-
-    return yield* Schema.decodeUnknownEffect(output)(body[`${action}Response`]).pipe(
-      Effect.mapError((error) => failed(`Unexpected ${action} response: ${error.message}`)),
+  if ("Fault" in body) {
+    const fault = yield* Schema.decodeUnknownEffect(Fault)(body.Fault).pipe(
+      Effect.mapError(() => failed("Unexpected SOAP fault")),
     );
-  });
+    const { errorCode, errorDescription } = fault.detail.UPnPError;
+    const reason = `UPnP error ${errorCode} ${errorDescription ?? ""}`.trim();
+
+    if (formatErrors.has(errorCode)) return yield* new UnsupportedFormat({ device, reason });
+    if (busyErrors.has(errorCode)) return yield* new DeviceBusy({ device, reason });
+    return yield* failed(reason);
+  }
+
+  return yield* Schema.decodeUnknownEffect(output)(body[`${action}Response`]).pipe(
+    Effect.mapError((error) => failed(`Unexpected ${action} response: ${error.message}`)),
+  );
+});
 
 /** Calls a UPnP action without reading its output */
 export const soapCommand = (

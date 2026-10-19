@@ -144,131 +144,131 @@ export const collectBeatAudio = () => {
   };
 
   /** Analyzes the collected audio. Gives `undefined` for less than 8 s of sound. */
-  const analyze = (start: number, end: number) =>
-    Effect.gen(function* () {
-      if (end - start < 8) return undefined;
-      const module = yield* Effect.promise(loadEssentia);
-      const algorithms = new module.EssentiaJS(false);
-      const seconds = levels.slice(Math.floor(start), Math.floor(end)).map(decibels);
-      const main = seconds.toSorted((a, b) => a - b)[Math.floor(seconds.length * 0.75)] ?? 0;
+  const analyze = Effect.fn("analyze")(function* (start: number, end: number) {
+    if (end - start < 8) return undefined;
+    const module = yield* Effect.promise(loadEssentia);
+    const algorithms = new module.EssentiaJS(false);
+    const seconds = levels.slice(Math.floor(start), Math.floor(end)).map(decibels);
+    const main = seconds.toSorted((a, b) => a - b)[Math.floor(seconds.length * 0.75)] ?? 0;
 
-      const analyzeWindow = (from: number, to: number, contextFrom: number, contextTo: number) =>
-        Effect.gen(function* () {
-          const context = audio(contextFrom, contextTo);
-          const signal = module.arrayToVector(context);
-          const rhythm = algorithms.RhythmExtractor2013(signal, 208, "degara", 40);
-          const ticks = [...module.vectorToArray(rhythm.ticks)].map((tick) => tick + contextFrom);
-          for (const vector of [signal, rhythm.ticks, rhythm.estimates, rhythm.bpmIntervals]) {
-            vector.delete();
-          }
-          // Lets I/O run between the long steps
-          yield* Effect.yieldNow;
+    const analyzeWindow = Effect.fn("analyzeWindow")(function* (
+      from: number,
+      to: number,
+      contextFrom: number,
+      contextTo: number,
+    ) {
+      const context = audio(contextFrom, contextTo);
+      const signal = module.arrayToVector(context);
+      const rhythm = algorithms.RhythmExtractor2013(signal, 208, "degara", 40);
+      const ticks = [...module.vectorToArray(rhythm.ticks)].map((tick) => tick + contextFrom);
+      for (const vector of [signal, rhythm.ticks, rhythm.estimates, rhythm.bpmIntervals]) {
+        vector.delete();
+      }
+      // Lets I/O run between the long steps
+      yield* Effect.yieldNow;
 
-          const margin = Math.max(0, from - 1);
-          const pcm = audio(margin, to + 1);
-          const envelope = lowEnvelope(pcm, margin);
-          const prior = tickGrid(
-            ticks.filter((tick) => tick >= from && tick < to),
-            rhythm.bpm,
-          );
-          const grid = kickGrid(envelope, prior, from, to);
-          yield* Effect.yieldNow;
-
-          const bars = downbeat(pcm, margin, envelope, grid, from, to);
-          const bar = 4 * grid.period;
-          const peaksFrom = bars.beat + Math.floor((from - bars.beat) / bar) * bar;
-          const truePeaks: Array<number> = [];
-          for (let at = peaksFrom; at < to; at += bar) {
-            // Rounded up to stay a bound. A bar of digital silence has no finite peak.
-            truePeaks.push(Math.max(-100, Math.ceil(peakOf(at, at + bar) * 100) / 100));
-          }
-          const barLevels: Array<number> = [];
-          const firstBar = peaksFrom < from - 1e-6 ? peaksFrom + bar : peaksFrom;
-          for (let at = firstBar; at + bar <= to + 1e-6; at += bar) {
-            barLevels.push(decibels(meanSquare(pcm, at - margin, at + bar - margin)));
-          }
-          yield* Effect.yieldNow;
-          return {
-            window: new BeatWindow({
-              bpm: 60 / grid.period,
-              beat: bars.beat,
-              confidence: grid.confidence,
-              downbeatConfidence: bars.confidence,
-              peaksFrom,
-              truePeaks,
-            }),
-            firstBar,
-            barLevels,
-            bar,
-          };
-        });
-
-      const intro = yield* analyzeWindow(
-        start,
-        Math.min(end, start + windowSeconds),
-        start,
-        Math.min(end, start + contextSeconds),
+      const margin = Math.max(0, from - 1);
+      const pcm = audio(margin, to + 1);
+      const envelope = lowEnvelope(pcm, margin);
+      const prior = tickGrid(
+        ticks.filter((tick) => tick >= from && tick < to),
+        rhythm.bpm,
       );
-      const outro = yield* analyzeWindow(
-        Math.max(start, end - windowSeconds),
-        end,
-        Math.max(start, end - contextSeconds),
-        end,
-      );
+      const grid = kickGrid(envelope, prior, from, to);
+      yield* Effect.yieldNow;
 
-      // The first and the last 8-bar block within 3 dB of the main level
-      const full = (bars: ReadonlyArray<number>) =>
-        bars.reduce((sum, level) => sum + level, 0) / bars.length >= main - 3;
-      const introBlock = Array.from(
-        { length: Math.floor(intro.barLevels.length / 8) },
-        (_, block) => block * 8,
-      ).find((first) => full(intro.barLevels.slice(first, first + 8)));
-      const outroBlocks = Math.floor(outro.barLevels.length / 8);
-      const outroBlock = Array.from(
-        { length: outroBlocks },
-        (_, block) => outro.barLevels.length - block * 8,
-      ).find((last) => full(outro.barLevels.slice(last - 8, last)));
-      const outroBars = outro.barLevels.length - (outroBlock ?? outro.barLevels.length);
-      const outroEnd = outro.firstBar + outro.barLevels.length * outro.bar;
-
-      const introAudio = audio(start, Math.min(end, start + windowSeconds));
-      const outroAudio = audio(Math.max(start + windowSeconds, end - windowSeconds), end);
-      const keyAudio = new Float32Array(introAudio.length + outroAudio.length);
-      keyAudio.set(introAudio);
-      keyAudio.set(outroAudio, introAudio.length);
-      const keySignal = module.arrayToVector(keyAudio);
-      const found = algorithms.KeyExtractor(
-        keySignal,
-        true,
-        4096,
-        4096,
-        12,
-        3500,
-        60,
-        25,
-        0.2,
-        "bgate",
-        rate,
-        0.0001,
-        440,
-        "cosine",
-        "hann",
-      );
-      keySignal.delete();
-
-      return new BeatAnalysis({
-        intro: intro.window,
-        outro: outro.window,
-        start,
-        end,
-        introEnd: Math.min(
-          end,
-          intro.firstBar + (introBlock ?? intro.barLevels.length) * intro.bar,
-        ),
-        outroStart: Math.max(start, outroEnd - outroBars * outro.bar),
-        key: camelot(found.key, found.scale),
-      });
+      const bars = downbeat(pcm, margin, envelope, grid, from, to);
+      const bar = 4 * grid.period;
+      const peaksFrom = bars.beat + Math.floor((from - bars.beat) / bar) * bar;
+      const truePeaks: Array<number> = [];
+      for (let at = peaksFrom; at < to; at += bar) {
+        // Rounded up to stay a bound. A bar of digital silence has no finite peak.
+        truePeaks.push(Math.max(-100, Math.ceil(peakOf(at, at + bar) * 100) / 100));
+      }
+      const barLevels: Array<number> = [];
+      const firstBar = peaksFrom < from - 1e-6 ? peaksFrom + bar : peaksFrom;
+      for (let at = firstBar; at + bar <= to + 1e-6; at += bar) {
+        barLevels.push(decibels(meanSquare(pcm, at - margin, at + bar - margin)));
+      }
+      yield* Effect.yieldNow;
+      return {
+        window: new BeatWindow({
+          bpm: 60 / grid.period,
+          beat: bars.beat,
+          confidence: grid.confidence,
+          downbeatConfidence: bars.confidence,
+          peaksFrom,
+          truePeaks,
+        }),
+        firstBar,
+        barLevels,
+        bar,
+      };
     });
+
+    const intro = yield* analyzeWindow(
+      start,
+      Math.min(end, start + windowSeconds),
+      start,
+      Math.min(end, start + contextSeconds),
+    );
+    const outro = yield* analyzeWindow(
+      Math.max(start, end - windowSeconds),
+      end,
+      Math.max(start, end - contextSeconds),
+      end,
+    );
+
+    // The first and the last 8-bar block within 3 dB of the main level
+    const full = (bars: ReadonlyArray<number>) =>
+      bars.reduce((sum, level) => sum + level, 0) / bars.length >= main - 3;
+    const introBlock = Array.from(
+      { length: Math.floor(intro.barLevels.length / 8) },
+      (_, block) => block * 8,
+    ).find((first) => full(intro.barLevels.slice(first, first + 8)));
+    const outroBlocks = Math.floor(outro.barLevels.length / 8);
+    const outroBlock = Array.from(
+      { length: outroBlocks },
+      (_, block) => outro.barLevels.length - block * 8,
+    ).find((last) => full(outro.barLevels.slice(last - 8, last)));
+    const outroBars = outro.barLevels.length - (outroBlock ?? outro.barLevels.length);
+    const outroEnd = outro.firstBar + outro.barLevels.length * outro.bar;
+
+    const introAudio = audio(start, Math.min(end, start + windowSeconds));
+    const outroAudio = audio(Math.max(start + windowSeconds, end - windowSeconds), end);
+    const keyAudio = new Float32Array(introAudio.length + outroAudio.length);
+    keyAudio.set(introAudio);
+    keyAudio.set(outroAudio, introAudio.length);
+    const keySignal = module.arrayToVector(keyAudio);
+    const found = algorithms.KeyExtractor(
+      keySignal,
+      true,
+      4096,
+      4096,
+      12,
+      3500,
+      60,
+      25,
+      0.2,
+      "bgate",
+      rate,
+      0.0001,
+      440,
+      "cosine",
+      "hann",
+    );
+    keySignal.delete();
+
+    return new BeatAnalysis({
+      intro: intro.window,
+      outro: outro.window,
+      start,
+      end,
+      introEnd: Math.min(end, intro.firstBar + (introBlock ?? intro.barLevels.length) * intro.bar),
+      outroStart: Math.max(start, outroEnd - outroBars * outro.bar),
+      key: camelot(found.key, found.scale),
+    });
+  });
 
   return { push, analyze };
 };

@@ -146,107 +146,102 @@ const request = <S extends Schema.Constraint>(
  * The tracklist of the one mix page whose DJs are the set's artists, whose title and categories
  * name the event, and whose file has the duration of the set
  */
-export const setTracklists = (
+export const setTracklists = Effect.fn("setTracklists")(function* (
   pace: Effect.Success<ReturnType<typeof makePacer>>,
   set: {
     readonly artists: ReadonlyArray<string>;
     readonly title: string;
     readonly durationMs: number | null;
   },
-) =>
-  Effect.gen(function* () {
-    const words = eventWords(set.title, set.artists);
-    if (set.artists.length === 0 || words.length === 0) return [];
+) {
+  const words = eventWords(set.title, set.artists);
+  if (set.artists.length === 0 || words.length === 0) return [];
 
-    const search = (searchWords: ReadonlyArray<string>) =>
-      request(
-        pace,
-        {
-          action: "query",
-          list: "search",
-          srsearch: [...set.artists, ...searchWords].join(" "),
-          srlimit: "10",
-          srprop: "",
-        },
-        Search,
-      ).pipe(
-        Effect.map((found) =>
-          found.query.search
-            .map((result) => result.title)
-            .filter((title) => sameArtists(set.artists, title))
-            .slice(0, pageLimit),
-        ),
-      );
-    // The search finds only pages with all words, so it tries again without lowercase words such
-    // as `above` in `Ben Böhmer live above Cappadocia in Turkey for Cercle`
-    const named = eventWords(
-      set.title
-        .split(/\s+/)
-        .filter((word) => !/^\p{Ll}/u.test(word))
-        .join(" "),
-      set.artists,
-    );
-    const first = yield* search(words);
-    const titles =
-      first.length > 0 || named.length === 0 || named.length === words.length
-        ? first
-        : yield* search(named);
-    if (titles.length === 0) return [];
-
-    const pages = yield* request(
+  const search = (searchWords: ReadonlyArray<string>) =>
+    request(
       pace,
       {
         action: "query",
-        prop: "revisions",
-        rvprop: "content",
-        rvslots: "main",
-        titles: titles.join("|"),
+        list: "search",
+        srsearch: [...set.artists, ...searchWords].join(" "),
+        srlimit: "10",
+        srprop: "",
       },
-      Pages,
+      Search,
+    ).pipe(
+      Effect.map((found) =>
+        found.query.search
+          .map((result) => result.title)
+          .filter((title) => sameArtists(set.artists, title))
+          .slice(0, pageLimit),
+      ),
     );
+  // The search finds only pages with all words, so it tries again without lowercase words such
+  // as `above` in `Ben Böhmer live above Cappadocia in Turkey for Cercle`
+  const named = eventWords(
+    set.title
+      .split(/\s+/)
+      .filter((word) => !/^\p{Ll}/u.test(word))
+      .join(" "),
+    set.artists,
+  );
+  const first = yield* search(words);
+  const titles =
+    first.length > 0 || named.length === 0 || named.length === words.length
+      ? first
+      : yield* search(named);
+  if (titles.length === 0) return [];
 
-    const matches = pages.query.pages.flatMap((page) => {
-      const wikitext = page.revisions[0]?.slots.main.content ?? "";
-      const categories = [...wikitext.matchAll(/\[\[Category:([^\]|]+)/g)].map((match) => match[1]);
-      const pageWords = new Set(eventWords([page.title, ...categories].join(" "), []));
-      const shared = words.filter((word) => pageWords.has(word));
-      // A year tells two sets of one event apart
-      const years = words.filter((word) => /^(?:19|20)\d\d$/.test(word));
-      if (shared.length * 2 < words.length || years.some((year) => !pageWords.has(year))) return [];
+  const pages = yield* request(
+    pace,
+    {
+      action: "query",
+      prop: "revisions",
+      rvprop: "content",
+      rvslots: "main",
+      titles: titles.join("|"),
+    },
+    Pages,
+  );
 
-      const duration = pageDuration(wikitext);
-      const offMs =
-        duration === null || set.durationMs === null
-          ? null
-          : Math.abs(duration.ms - set.durationMs);
-      if (offMs !== null && offMs > durationTolerance * (set.durationMs ?? 0)) return [];
+  const matches = pages.query.pages.flatMap((page) => {
+    const wikitext = page.revisions[0]?.slots.main.content ?? "";
+    const categories = [...wikitext.matchAll(/\[\[Category:([^\]|]+)/g)].map((match) => match[1]);
+    const pageWords = new Set(eventWords([page.title, ...categories].join(" "), []));
+    const shared = words.filter((word) => pageWords.has(word));
+    // A year tells two sets of one event apart
+    const years = words.filter((word) => /^(?:19|20)\d\d$/.test(word));
+    if (shared.length * 2 < words.length || years.some((year) => !pageWords.has(year))) return [];
 
-      const entries = parseTracklist(wikitext);
-      if (entries.filter((entry) => entry.artist !== null).length < minimumTracks) return [];
-      return [{ page, entries, offMs, exact: duration?.exact === true }];
-    });
+    const duration = pageDuration(wikitext);
+    const offMs =
+      duration === null || set.durationMs === null ? null : Math.abs(duration.ms - set.durationMs);
+    if (offMs !== null && offMs > durationTolerance * (set.durationMs ?? 0)) return [];
 
-    // Two pages that fit without a duration to tell them apart are not a match
-    const [best, second] = matches.toSorted(
-      (a, b) => (a.offMs ?? Infinity) - (b.offMs ?? Infinity),
-    );
-    if (best === undefined || (second !== undefined && best.offMs === null)) return [];
-
-    const timed =
-      best.exact &&
-      best.offMs !== null &&
-      best.offMs <= timedToleranceMs &&
-      best.entries.filter((entry) => entry.startMs !== null).length >= minimumTracks;
-    return [
-      new ProviderTracklist({
-        part: `${best.page.pageid}#tracklist`,
-        entries: timed
-          ? best.entries
-          : best.entries.map(
-              (entry) =>
-                new TracklistEntry({ startMs: null, artist: entry.artist, title: entry.title }),
-            ),
-        confidence: timed ? 0.7 : 0.5,
-      }),
-    ];
+    const entries = parseTracklist(wikitext);
+    if (entries.filter((entry) => entry.artist !== null).length < minimumTracks) return [];
+    return [{ page, entries, offMs, exact: duration?.exact === true }];
   });
+
+  // Two pages that fit without a duration to tell them apart are not a match
+  const [best, second] = matches.toSorted((a, b) => (a.offMs ?? Infinity) - (b.offMs ?? Infinity));
+  if (best === undefined || (second !== undefined && best.offMs === null)) return [];
+
+  const timed =
+    best.exact &&
+    best.offMs !== null &&
+    best.offMs <= timedToleranceMs &&
+    best.entries.filter((entry) => entry.startMs !== null).length >= minimumTracks;
+  return [
+    new ProviderTracklist({
+      part: `${best.page.pageid}#tracklist`,
+      entries: timed
+        ? best.entries
+        : best.entries.map(
+            (entry) =>
+              new TracklistEntry({ startMs: null, artist: entry.artist, title: entry.title }),
+          ),
+      confidence: timed ? 0.7 : 0.5,
+    }),
+  ];
+});

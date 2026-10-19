@@ -20,12 +20,14 @@ import { Sessions } from "./sessions.ts";
 export const randomBytes = (size: number) =>
   Crypto.Crypto.use((crypto) => crypto.randomBytes(size)).pipe(Effect.orDie);
 
-export const sha256 = (value: string) =>
-  Effect.gen(function* () {
+export const sha256 = Effect.fn("sha256")(
+  function* (value: string) {
     const crypto = yield* Crypto.Crypto;
     const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(value));
     return hex(digest);
-  }).pipe(Effect.orDie);
+  },
+  (effect) => effect.pipe(Effect.orDie),
+);
 
 // No 0, O, 1 or I, so that a code read from a screen is typed correctly
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -83,43 +85,40 @@ export const createPairingCode = Effect.gen(function* () {
 });
 
 /** Removes the code, because a code works once. `false` if it is wrong or expired. */
-export const redeemCode = (code: string) =>
-  Effect.gen(function* () {
-    const codes = yield* PairingCodes;
-    const now = yield* Clock.currentTimeMillis;
-    const normalized = normalizeCode(code);
-    const expiresAt = yield* Ref.modify(codes, (pending) => {
-      const next = new Map(pending);
-      next.delete(normalized);
-      return [pending.get(normalized), next];
-    });
-    return expiresAt !== undefined && expiresAt > now;
+export const redeemCode = Effect.fn("redeemCode")(function* (code: string) {
+  const codes = yield* PairingCodes;
+  const now = yield* Clock.currentTimeMillis;
+  const normalized = normalizeCode(code);
+  const expiresAt = yield* Ref.modify(codes, (pending) => {
+    const next = new Map(pending);
+    next.delete(normalized);
+    return [pending.get(normalized), next];
   });
+  return expiresAt !== undefined && expiresAt > now;
+});
 
 /** Adds a device and returns its token */
-export const createDevice = (name: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const crypto = yield* Crypto.Crypto;
-    const token = hex(yield* randomBytes(32));
-    const id = DeviceId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
+export const createDevice = Effect.fn("createDevice")(function* (name: string) {
+  const db = yield* Database;
+  const crypto = yield* Crypto.Crypto;
+  const token = hex(yield* randomBytes(32));
+  const id = DeviceId.make(yield* crypto.randomUUIDv7().pipe(Effect.orDie));
 
-    yield* db.insert(device).values({
-      id,
-      name,
-      tokenHash: yield* sha256(token),
-      createdAt: yield* Clock.currentTimeMillis,
-    });
-
-    return new DeviceSession({ token, principal: new Principal({ deviceId: id }) });
+  yield* db.insert(device).values({
+    id,
+    name,
+    tokenHash: yield* sha256(token),
+    createdAt: yield* Clock.currentTimeMillis,
   });
 
-export const pair = (code: string, deviceName: string) =>
-  Effect.gen(function* () {
-    if (!(yield* redeemCode(code)))
-      return yield* new AuthenticationFailed({ reason: "invalid_code" });
-    return yield* createDevice(deviceName);
-  });
+  return new DeviceSession({ token, principal: new Principal({ deviceId: id }) });
+});
+
+export const pair = Effect.fn("pair")(function* (code: string, deviceName: string) {
+  if (!(yield* redeemCode(code)))
+    return yield* new AuthenticationFailed({ reason: "invalid_code" });
+  return yield* createDevice(deviceName);
+});
 
 export const listDevices = Effect.gen(function* () {
   const db = yield* Database;
@@ -137,37 +136,35 @@ export const listDevices = Effect.gen(function* () {
   );
 });
 
-export const removeDevice = (deviceId: DeviceId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    yield* db.delete(device).where(eq(device.id, deviceId));
+export const removeDevice = Effect.fn("removeDevice")(function* (deviceId: DeviceId) {
+  const db = yield* Database;
+  yield* db.delete(device).where(eq(device.id, deviceId));
 
-    // Authentication checks a token only when a request starts, so open streams must end
-    yield* (yield* Sessions).session.removeDevice(deviceId);
-  });
+  // Authentication checks a token only when a request starts, so open streams must end
+  yield* (yield* Sessions).session.removeDevice(deviceId);
+});
 
 /** The device of a device token */
-export const principalOf = (token: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const tokenHash = yield* sha256(token);
-    const [row] = yield* db
-      .select({ id: device.id })
-      .from(device)
-      .where(eq(device.tokenHash, tokenHash))
-      .limit(1)
-      .pipe(orDieOnDatabaseError("authenticate"));
-    if (row !== undefined) return new Principal({ deviceId: DeviceId.make(row.id) });
+export const principalOf = Effect.fn("principalOf")(function* (token: string) {
+  const db = yield* Database;
+  const tokenHash = yield* sha256(token);
+  const [row] = yield* db
+    .select({ id: device.id })
+    .from(device)
+    .where(eq(device.tokenHash, tokenHash))
+    .limit(1)
+    .pipe(orDieOnDatabaseError("authenticate"));
+  if (row !== undefined) return new Principal({ deviceId: DeviceId.make(row.id) });
 
-    // A paired replica uses its replica ID as device ID
-    const [peer] = yield* db
-      .select({ replicaId: serverPeer.replicaId })
-      .from(serverPeer)
-      .where(eq(serverPeer.tokenHash, tokenHash))
-      .pipe(orDieOnDatabaseError("authenticate"));
-    if (peer === undefined) return yield* new Unauthorized();
-    return new Principal({ deviceId: DeviceId.make(peer.replicaId) });
-  });
+  // A paired replica uses its replica ID as device ID
+  const [peer] = yield* db
+    .select({ replicaId: serverPeer.replicaId })
+    .from(serverPeer)
+    .where(eq(serverPeer.tokenHash, tokenHash))
+    .pipe(orDieOnDatabaseError("authenticate"));
+  if (peer === undefined) return yield* new Unauthorized();
+  return new Principal({ deviceId: DeviceId.make(peer.replicaId) });
+});
 
 export const authenticationLayer = Layer.effect(
   Authentication,

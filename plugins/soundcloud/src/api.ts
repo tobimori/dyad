@@ -134,59 +134,60 @@ export const trackSource = (track: Track) =>
   });
 
 /** Tracks that play in full without an account, in SoundCloud's order of relevance */
-export const searchTracks = (withClientId: Effect.Success<typeof clientIdCache>, query: string) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(`${api}/search/tracks`).pipe(
-      HttpClientRequest.setUrlParams({ q: query, limit: 30 }),
-    );
-    const response = yield* requestApi(withClientId, request, SearchResults);
+export const searchTracks = Effect.fn("searchTracks")(function* (
+  withClientId: Effect.Success<typeof clientIdCache>,
+  query: string,
+) {
+  const request = HttpClientRequest.get(`${api}/search/tracks`).pipe(
+    HttpClientRequest.setUrlParams({ q: query, limit: 30 }),
+  );
+  const response = yield* requestApi(withClientId, request, SearchResults);
 
-    return response.collection.filter((track) => fullStream(track) !== undefined).map(trackSource);
-  });
+  return response.collection.filter((track) => fullStream(track) !== undefined).map(trackSource);
+});
 
 /** Streams the HLS AAC transcoding of a track as one fragmented MP4 file */
-export const resolveTrack = (
+export const resolveTrack = Effect.fn("resolveTrack")(function* (
   withClientId: Effect.Success<typeof clientIdCache>,
   externalId: string,
-) =>
-  Effect.gen(function* () {
-    const trackId = yield* decodeTrackId(externalId);
+) {
+  const trackId = yield* decodeTrackId(externalId);
 
-    const track = yield* requestApi(
-      withClientId,
-      HttpClientRequest.get(`${api}/tracks/${trackId}`),
-      Track,
-    );
+  const track = yield* requestApi(
+    withClientId,
+    HttpClientRequest.get(`${api}/tracks/${trackId}`),
+    Track,
+  );
 
-    const transcoding = fullStream(track);
-    if (transcoding === undefined) {
-      return yield* new ProviderError({
-        reason: "The track does not play in full without an account",
-      });
-    }
-
-    // The web client sends the track authorization with each stream request
-    const streamRequest = HttpClientRequest.get(transcoding.url).pipe(
-      HttpClientRequest.setUrlParam("track_authorization", track.track_authorization),
-    );
-    const stream = yield* requestApi(withClientId, streamRequest, StreamUrl);
-
-    const segments = yield* readSegments(stream.url).pipe(
-      Effect.mapError(() => new ProviderError({ reason: "Cannot read the playlist" })),
-    );
-    if (segments.length === 0) {
-      return yield* new ProviderError({ reason: "The playlist has no segments" });
-    }
-
-    const services = yield* Effect.context<HttpClient.HttpClient>();
-    const read = (selected: typeof segments) =>
-      segmentBytes(selected).pipe(
-        // Errors contain the signed segment URL
-        Stream.mapError(() => new ProviderError({ reason: "Cannot read an audio segment" })),
-        Stream.provideContext(services),
-      );
-    return new ProviderAudio({
-      bytes: read(segments),
-      bytesFrom: (startMs) => read(segmentsFrom(segments, startMs)),
+  const transcoding = fullStream(track);
+  if (transcoding === undefined) {
+    return yield* new ProviderError({
+      reason: "The track does not play in full without an account",
     });
+  }
+
+  // The web client sends the track authorization with each stream request
+  const streamRequest = HttpClientRequest.get(transcoding.url).pipe(
+    HttpClientRequest.setUrlParam("track_authorization", track.track_authorization),
+  );
+  const stream = yield* requestApi(withClientId, streamRequest, StreamUrl);
+
+  const segments = yield* readSegments(stream.url).pipe(
+    Effect.mapError(() => new ProviderError({ reason: "Cannot read the playlist" })),
+  );
+  if (segments.length === 0) {
+    return yield* new ProviderError({ reason: "The playlist has no segments" });
+  }
+
+  const services = yield* Effect.context<HttpClient.HttpClient>();
+  const read = (selected: typeof segments) =>
+    segmentBytes(selected).pipe(
+      // Errors contain the signed segment URL
+      Stream.mapError(() => new ProviderError({ reason: "Cannot read an audio segment" })),
+      Stream.provideContext(services),
+    );
+  return new ProviderAudio({
+    bytes: read(segments),
+    bytesFrom: (startMs) => read(segmentsFrom(segments, startMs)),
   });
+});

@@ -9,54 +9,53 @@ import { playableSources, sourceSummary } from "./sources.ts";
 import { inLibrary, recordingMarks } from "./user-library.ts";
 
 /** The recording, its root and the other recordings merged into the root */
-export const recordingGroup = (recordingId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [bound] = yield* db
-      .select({ mergedIntoId: recording.mergedIntoId })
-      .from(recording)
-      .where(eq(recording.id, recordingId));
-    const root = bound?.mergedIntoId ?? recordingId;
-    const members = yield* db
-      .select({ id: recording.id })
-      .from(recording)
-      .where(or(eq(recording.id, root), eq(recording.mergedIntoId, root)));
-    return [...new Set([recordingId, ...members.map((row) => row.id)])];
-  });
+export const recordingGroup = Effect.fn("recordingGroup")(function* (recordingId: string) {
+  const db = yield* Database;
+  const [bound] = yield* db
+    .select({ mergedIntoId: recording.mergedIntoId })
+    .from(recording)
+    .where(eq(recording.id, recordingId));
+  const root = bound?.mergedIntoId ?? recordingId;
+  const members = yield* db
+    .select({ id: recording.id })
+    .from(recording)
+    .where(or(eq(recording.id, root), eq(recording.mergedIntoId, root)));
+  return [...new Set([recordingId, ...members.map((row) => row.id)])];
+});
 
 /** Adds the series that the title parse found for the recording of each source */
-export const withSeries = (summaries: ReadonlyArray<SourceSummary>) =>
-  Effect.gen(function* () {
-    const recordingIds = [...new Set(summaries.flatMap((summary) => summary.recordingId ?? []))];
-    if (recordingIds.length === 0) return summaries;
-    const series = yield* resolvedValues(recordingIds, "series", fields.series);
-    return summaries.map((summary) => {
-      const name = series.get(summary.recordingId ?? "")?.name ?? null;
-      return name === null ? summary : new SourceSummary({ ...summary, series: name });
-    });
+export const withSeries = Effect.fn("withSeries")(function* (
+  summaries: ReadonlyArray<SourceSummary>,
+) {
+  const recordingIds = [...new Set(summaries.flatMap((summary) => summary.recordingId ?? []))];
+  if (recordingIds.length === 0) return summaries;
+  const series = yield* resolvedValues(recordingIds, "series", fields.series);
+  return summaries.map((summary) => {
+    const name = series.get(summary.recordingId ?? "")?.name ?? null;
+    return name === null ? summary : new SourceSummary({ ...summary, series: name });
   });
+});
 
 /** Each set that the user can play, at the first time that it plays the recording */
-export const heardInSets = (recordingId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const segments = yield* db
-      .select({ sourceId: sourceSegment.sourceId, startMs: sourceSegment.startMs })
-      .from(sourceSegment)
-      .where(inArray(sourceSegment.recordingId, yield* recordingGroup(recordingId)))
-      .orderBy(asc(sourceSegment.position));
-    const starts = new Map<string, number | null>();
-    for (const segment of segments) {
-      if (!starts.has(segment.sourceId)) starts.set(segment.sourceId, segment.startMs);
-    }
-    if (starts.size === 0) return [];
+export const heardInSets = Effect.fn("heardInSets")(function* (recordingId: string) {
+  const db = yield* Database;
+  const segments = yield* db
+    .select({ sourceId: sourceSegment.sourceId, startMs: sourceSegment.startMs })
+    .from(sourceSegment)
+    .where(inArray(sourceSegment.recordingId, yield* recordingGroup(recordingId)))
+    .orderBy(asc(sourceSegment.position));
+  const starts = new Map<string, number | null>();
+  for (const segment of segments) {
+    if (!starts.has(segment.sourceId)) starts.set(segment.sourceId, segment.startMs);
+  }
+  if (starts.size === 0) return [];
 
-    const rows = yield* playableSources(inArray(source.id, [...starts.keys()]));
-    const sets = yield* withSeries(rows.map(sourceSummary));
-    return sets
-      .map((set) => new HeardInSet({ set, startMs: starts.get(set.id) ?? null }))
-      .toSorted((a, b) => (a.set.title ?? "").localeCompare(b.set.title ?? ""));
-  });
+  const rows = yield* playableSources(inArray(source.id, [...starts.keys()]));
+  const sets = yield* withSeries(rows.map(sourceSummary));
+  return sets
+    .map((set) => new HeardInSet({ set, startMs: starts.get(set.id) ?? null }))
+    .toSorted((a, b) => (a.set.title ?? "").localeCompare(b.set.title ?? ""));
+});
 
 /** The last played first. Copies of one recording on several providers give one set. */
 export const listSets = Effect.gen(function* () {

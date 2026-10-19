@@ -189,55 +189,53 @@ export const listItemSource = (item: typeof ListItem.Type, song: boolean) => {
   });
 };
 
-export const musicSources = (query: string, song: boolean) =>
-  Effect.gen(function* () {
-    const response = yield* getJson(
-      HttpClientRequest.post("https://music.youtube.com/youtubei/v1/search").pipe(
-        HttpClientRequest.setUrlParam("prettyPrint", "false"),
-        HttpClientRequest.bodyJsonUnsafe({
-          context: { client: remix },
-          query,
-          params: song ? songsOnly : videosOnly,
-        }),
-      ),
-      MusicSearch,
-    ).pipe(Effect.mapError(providerError("YouTube Music")));
+export const musicSources = Effect.fn("musicSources")(function* (query: string, song: boolean) {
+  const response = yield* getJson(
+    HttpClientRequest.post("https://music.youtube.com/youtubei/v1/search").pipe(
+      HttpClientRequest.setUrlParam("prettyPrint", "false"),
+      HttpClientRequest.bodyJsonUnsafe({
+        context: { client: remix },
+        query,
+        params: song ? songsOnly : videosOnly,
+      }),
+    ),
+    MusicSearch,
+  ).pipe(Effect.mapError(providerError("YouTube Music")));
 
-    // Podcast episodes and live streams have no length
-    return response.contents.tabbedSearchResultsRenderer.tabs
-      .flatMap((tab) => tab.tabRenderer.content.sectionListRenderer.contents)
-      .flatMap((section) => section.musicShelfRenderer?.contents ?? [])
-      .flatMap(({ musicResponsiveListItemRenderer: item }) => {
-        const source = item === undefined ? undefined : listItemSource(item, song);
-        return source === undefined || source.durationMs === null ? [] : [source];
-      });
-  });
+  // Podcast episodes and live streams have no length
+  return response.contents.tabbedSearchResultsRenderer.tabs
+    .flatMap((tab) => tab.tabRenderer.content.sectionListRenderer.contents)
+    .flatMap((section) => section.musicShelfRenderer?.contents ?? [])
+    .flatMap(({ musicResponsiveListItemRenderer: item }) => {
+      const source = item === undefined ? undefined : listItemSource(item, song);
+      return source === undefined || source.durationMs === null ? [] : [source];
+    });
+});
 
 /**
  * Songs and music videos of YouTube Music, then the long YouTube videos of their channels that
  * YouTube Music does not list, for example some Cercle and Boiler Room sets
  */
-export const searchMusic = (query: string) =>
-  Effect.gen(function* () {
-    const [songs, videos, uploads] = yield* Effect.all(
-      [musicSources(query, true), musicSources(query, false), searchVideos(query)],
-      { concurrency: 3 },
-    );
-    // Other channels of long videos are often not music, for example travel or game videos
-    const channels = new Set([...songs, ...videos].flatMap((source) => source.uploader?.id ?? []));
-    const sets = uploads.filter(
-      (source) =>
-        (source.durationMs ?? 0) >= setMs &&
-        source.uploader !== null &&
-        channels.has(source.uploader.id),
-    );
+export const searchMusic = Effect.fn("searchMusic")(function* (query: string) {
+  const [songs, videos, uploads] = yield* Effect.all(
+    [musicSources(query, true), musicSources(query, false), searchVideos(query)],
+    { concurrency: 3 },
+  );
+  // Other channels of long videos are often not music, for example travel or game videos
+  const channels = new Set([...songs, ...videos].flatMap((source) => source.uploader?.id ?? []));
+  const sets = uploads.filter(
+    (source) =>
+      (source.durationMs ?? 0) >= setMs &&
+      source.uploader !== null &&
+      channels.has(source.uploader.id),
+  );
 
-    const seen = new Set<string>();
-    return Array.from({ length: Math.max(songs.length, videos.length, sets.length) }, (_, index) =>
-      [songs[index], videos[index], sets[index]].flatMap((source) => {
-        if (source === undefined || seen.has(source.externalId)) return [];
-        seen.add(source.externalId);
-        return [source];
-      }),
-    ).flat();
-  });
+  const seen = new Set<string>();
+  return Array.from({ length: Math.max(songs.length, videos.length, sets.length) }, (_, index) =>
+    [songs[index], videos[index], sets[index]].flatMap((source) => {
+      if (source === undefined || seen.has(source.externalId)) return [];
+      seen.add(source.externalId);
+      return [source];
+    }),
+  ).flat();
+});

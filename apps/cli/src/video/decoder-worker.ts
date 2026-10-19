@@ -147,59 +147,59 @@ const decoder = Effect.gen(function* () {
     send(session, ms, frame);
   };
 
-  const open = (session: Session) =>
-    Effect.gen(function* () {
-      yield* call(() => libav.mkreaderdev(session.device));
-      const [demuxer, streams] = yield* call(() => libav.ff_init_demuxer_file(session.device));
-      session.demuxer = demuxer;
-      const stream = streams.find((item) => item.codec_type === libav.AVMEDIA_TYPE_VIDEO);
-      if (stream === undefined) return yield* new DecodeError({ cause: "The stream has no video" });
+  const open = Effect.fn("open")(function* (session: Session) {
+    yield* call(() => libav.mkreaderdev(session.device));
+    const [demuxer, streams] = yield* call(() => libav.ff_init_demuxer_file(session.device));
+    session.demuxer = demuxer;
+    const stream = streams.find((item) => item.codec_type === libav.AVMEDIA_TYPE_VIDEO);
+    if (stream === undefined) return yield* new DecodeError({ cause: "The stream has no video" });
 
-      const [, codec, packet, frame] = yield* call(() =>
-        libav.ff_init_decoder("libvpx-vp9", { codecpar: stream.codecpar }),
-      );
-      session.codec = codec;
-      session.packet = packet;
-      session.frame = frame;
-      session.stream = stream.index;
-      session.msPerTick = (stream.time_base_num / stream.time_base_den) * 1000;
-    });
+    const [, codec, packet, frame] = yield* call(() =>
+      libav.ff_init_decoder("libvpx-vp9", { codecpar: stream.codecpar }),
+    );
+    session.codec = codec;
+    session.packet = packet;
+    session.frame = frame;
+    session.stream = stream.index;
+    session.msPerTick = (stream.time_base_num / stream.time_base_den) * 1000;
+  });
 
-  const decodeNext = (session: Session) =>
-    Effect.gen(function* () {
-      const [result, packets] = yield* call(() =>
-        libav.ff_read_frame_multi(session.demuxer, session.packet, { limit: 1 }),
-      );
-      const end = result === libav.AVERROR_EOF;
-      if (!end && result !== 0 && result !== -libav.EAGAIN) {
-        return yield* new DecodeError({ cause: `The demuxer failed with ${result}` });
-      }
-      const frames = yield* call(() =>
-        libav.ff_decode_multi(
-          session.codec,
-          session.packet,
-          session.frame,
-          packets[session.stream] ?? [],
-          { fin: end, ignoreErrors: true },
-        ),
-      );
-      for (const frame of frames) take(session, frame);
-      if (!end) return;
+  const decodeNext = Effect.fn("decodeNext")(function* (session: Session) {
+    const [result, packets] = yield* call(() =>
+      libav.ff_read_frame_multi(session.demuxer, session.packet, { limit: 1 }),
+    );
+    const end = result === libav.AVERROR_EOF;
+    if (!end && result !== 0 && result !== -libav.EAGAIN) {
+      return yield* new DecodeError({ cause: `The demuxer failed with ${result}` });
+    }
+    const frames = yield* call(() =>
+      libav.ff_decode_multi(
+        session.codec,
+        session.packet,
+        session.frame,
+        packets[session.stream] ?? [],
+        { fin: end, ignoreErrors: true },
+      ),
+    );
+    for (const frame of frames) take(session, frame);
+    if (!end) return;
 
-      if (session.late !== null) send(session, session.late.ms, session.late.frame);
-      session.late = null;
-      session.ended = true;
-      port.postMessage(End.make({ session: session.id }));
-    });
+    if (session.late !== null) send(session, session.late.ms, session.late.frame);
+    session.late = null;
+    session.ended = true;
+    port.postMessage(End.make({ session: session.id }));
+  });
 
-  const close = (session: Session) =>
-    Effect.gen(function* () {
+  const close = Effect.fn("close")(
+    function* (session: Session) {
       if (session.codec !== 0) {
         yield* call(() => libav.ff_free_decoder(session.codec, session.packet, session.frame));
       }
       if (session.demuxer !== 0) yield* call(() => libav.avformat_close_input_js(session.demuxer));
       yield* call(() => libav.unlink(session.device));
-    }).pipe(Effect.ignore);
+    },
+    (effect) => effect.pipe(Effect.ignore),
+  );
 
   // One loop makes all libav calls, because a suspended read cannot share the WASM stack
   const step = Effect.gen(function* () {

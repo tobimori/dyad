@@ -74,49 +74,47 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
     });
   };
 
-  const start = (bytes: Uint8Array, complete: boolean, first: number) =>
-    Effect.gen(function* () {
-      const next = findSeekPoint(bytes, info, target, first);
-      rewind = first > info.dataOffset && (next === undefined || next.frame > target);
-      if (rewind) return false;
-      // An MP3 seek counts frames from the first one, so it keeps all bytes
-      searchFrom = info.codec === "flac" && next !== undefined ? next.offset : undefined;
-      if (next === undefined) {
-        if (complete) return yield* new DecodeError({ cause: "The file has no audio frame" });
-        return false;
-      }
-      if (!complete && first + bytes.length - next.offset < seekMarginBytes) return false;
+  const start = Effect.fn("start")(function* (bytes: Uint8Array, complete: boolean, first: number) {
+    const next = findSeekPoint(bytes, info, target, first);
+    rewind = first > info.dataOffset && (next === undefined || next.frame > target);
+    if (rewind) return false;
+    // An MP3 seek counts frames from the first one, so it keeps all bytes
+    searchFrom = info.codec === "flac" && next !== undefined ? next.offset : undefined;
+    if (next === undefined) {
+      if (complete) return yield* new DecodeError({ cause: "The file has no audio frame" });
+      return false;
+    }
+    if (!complete && first + bytes.length - next.offset < seekMarginBytes) return false;
 
-      yield* decoder.reset;
-      yield* decoder.decode(next.prefix);
-      started = true;
-      offset = next.offset;
-      decoded = next.frame;
-      flushed = false;
-      return true;
-    });
+    yield* decoder.reset;
+    yield* decoder.decode(next.prefix);
+    started = true;
+    offset = next.offset;
+    decoded = next.frame;
+    flushed = false;
+    return true;
+  });
 
-  const read = (bytes: Uint8Array, complete: boolean, first = 0) =>
-    Effect.gen(function* () {
-      if (!started && !(yield* start(bytes, complete, first))) return empty;
+  const read = Effect.fn("read")(function* (bytes: Uint8Array, complete: boolean, first = 0) {
+    if (!started && !(yield* start(bytes, complete, first))) return empty;
 
-      while (decoded < end) {
-        if (offset < first + bytes.length) {
-          const chunk = bytes.subarray(offset - first, offset - first + chunkBytes);
-          offset += chunk.length;
-          const pcm = keep(yield* decoder.decode(chunk));
-          if (pcm.frames > 0) return pcm;
-          continue;
-        }
-
-        if (!complete) return empty;
-        if (flushed) return undefined;
-        flushed = true;
-        const pcm = keep(yield* decoder.flush);
+    while (decoded < end) {
+      if (offset < first + bytes.length) {
+        const chunk = bytes.subarray(offset - first, offset - first + chunkBytes);
+        offset += chunk.length;
+        const pcm = keep(yield* decoder.decode(chunk));
         if (pcm.frames > 0) return pcm;
+        continue;
       }
-      return undefined;
-    });
+
+      if (!complete) return empty;
+      if (flushed) return undefined;
+      flushed = true;
+      const pcm = keep(yield* decoder.flush);
+      if (pcm.frames > 0) return pcm;
+    }
+    return undefined;
+  });
 
   return new Source({
     seek: (frame) => {

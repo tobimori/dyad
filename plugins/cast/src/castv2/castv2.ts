@@ -75,45 +75,44 @@ const encodeMessage = (destinationId: string, namespace: string, payload: string
 };
 
 // Reads the length-delimited fields, which hold all strings of `CastMessage`
-const decodeMessage = (bytes: Uint8Array) =>
-  Effect.gen(function* () {
-    const strings = new Map<number, string>();
-    let offset = 0;
+const decodeMessage = Effect.fn("decodeMessage")(function* (bytes: Uint8Array) {
+  const strings = new Map<number, string>();
+  let offset = 0;
 
-    const readVarint = () => {
-      let value = 0;
-      let shift = 0;
-      while (offset < bytes.length) {
-        const byte = bytes[offset] ?? 0;
-        offset += 1;
-        value += (byte & 0x7f) * 2 ** shift;
-        if (byte < 0x80) return value;
-        shift += 7;
-      }
-      return value;
-    };
-
+  const readVarint = () => {
+    let value = 0;
+    let shift = 0;
     while (offset < bytes.length) {
-      const key = readVarint();
-      const wireType = key & 7;
-      if (wireType === 0) {
-        readVarint();
-        continue;
-      }
-      if (wireType !== 2) return yield* new ProtobufError();
-
-      const length = readVarint();
-      strings.set(key >>> 3, decoder.decode(bytes.subarray(offset, offset + length)));
-      offset += length;
+      const byte = bytes[offset] ?? 0;
+      offset += 1;
+      value += (byte & 0x7f) * 2 ** shift;
+      if (byte < 0x80) return value;
+      shift += 7;
     }
+    return value;
+  };
 
-    return yield* Schema.decodeUnknownEffect(CastMessage)({
-      sourceId: strings.get(2),
-      destinationId: strings.get(3),
-      namespace: strings.get(4),
-      payloadUtf8: strings.get(6),
-    });
+  while (offset < bytes.length) {
+    const key = readVarint();
+    const wireType = key & 7;
+    if (wireType === 0) {
+      readVarint();
+      continue;
+    }
+    if (wireType !== 2) return yield* new ProtobufError();
+
+    const length = readVarint();
+    strings.set(key >>> 3, decoder.decode(bytes.subarray(offset, offset + length)));
+    offset += length;
+  }
+
+  return yield* Schema.decodeUnknownEffect(CastMessage)({
+    sourceId: strings.get(2),
+    destinationId: strings.get(3),
+    namespace: strings.get(4),
+    payloadUtf8: strings.get(6),
   });
+});
 
 // One read can hold part of a frame or more than one frame
 const frameReader = (pull: Effect.Effect<ReadonlyArray<Uint8Array>, Socket.SocketError>) => {
@@ -165,100 +164,100 @@ export class CastChannel extends Data.Class<{
  * Opens a CASTV2 connection and calls `onEvent` for each JSON message. The receiver closes a
  * connection without a `PING` for some seconds, and this side closes it when the receiver is quiet.
  */
-export const openChannel = (
+export const openChannel = Effect.fn("openChannel")(function* (
   device: CastDevice,
   onEvent: (event: CastEvent) => Effect.Effect<void>,
-) =>
-  Effect.gen(function* () {
-    const unreachable = (reason: string) => new TargetUnreachable({ device: device.name, reason });
+) {
+  const unreachable = (reason: string) => new TargetUnreachable({ device: device.name, reason });
 
-    // Cast devices use a self-signed certificate. Device authentication is not needed to play.
-    const socket = yield* NodeSocket.makeTls({
-      host: device.host,
-      port: device.port,
-      rejectUnauthorized: false,
-      openTimeout: "5 seconds",
-    });
-    // `SocketOpenError` says only "An error occurred during Open". Its cause names the reason.
-    const pull = yield* Socket.readerBytes(socket).pipe(
-      Effect.mapError(({ reason }) =>
-        unreachable(
-          "cause" in reason && reason.cause instanceof Error
-            ? reason.cause.message
-            : reason.message,
-        ),
-      ),
-    );
-    const writer = yield* socket.writer;
-    const nextFrame = frameReader(pull);
-
-    const pending = new Map<number, Deferred.Deferred<CastEvent>>();
-    const closed = yield* Deferred.make<never, TargetUnreachable>();
-    let lastRequestId = 0;
-
-    const send = (namespace: string, destinationId: string, payload: Schema.JsonObject) =>
-      writer
-        .write(encodeMessage(destinationId, namespace, JSON.stringify(payload)))
-        .pipe(Effect.mapError((error) => unreachable(error.message)));
-
-    const request = (namespace: string, destinationId: string, payload: Schema.JsonObject) =>
-      Effect.gen(function* () {
-        lastRequestId += 1;
-        const requestId = lastRequestId;
-        const answer = yield* Deferred.make<CastEvent>();
-        pending.set(requestId, answer);
-
-        return yield* send(namespace, destinationId, { ...payload, requestId }).pipe(
-          Effect.andThen(Deferred.await(answer)),
-          Effect.raceFirst(Deferred.await(closed)),
-          Effect.timeoutOrElse({
-            duration: "10 seconds",
-            orElse: () => Effect.fail(unreachable(`No answer to ${String(payload.type)}`)),
-          }),
-          Effect.ensuring(Effect.sync(() => pending.delete(requestId))),
-        );
-      });
-
-    const receive = Effect.gen(function* () {
-      while (true) {
-        const frame = yield* nextFrame.pipe(
-          Effect.mapError(() => unreachable("The connection closed")),
-          Effect.timeoutOrElse({
-            duration: "20 seconds",
-            orElse: () => Effect.fail(unreachable("The device stopped answering")),
-          }),
-        );
-        const message = yield* decodeMessage(frame).pipe(Effect.option);
-        if (Option.isNone(message)) continue;
-
-        const { namespace, sourceId, payloadUtf8 } = message.value;
-        const envelope = yield* Schema.decodeEffect(Envelope)(payloadUtf8).pipe(Effect.option);
-        if (Option.isNone(envelope)) continue;
-
-        const { type, requestId } = envelope.value;
-        if (namespace === namespaces.heartbeat && type === "PING") {
-          yield* send(namespaces.heartbeat, sourceId, { type: "PONG" });
-          continue;
-        }
-
-        const event = new CastEvent({ namespace, type, payload: payloadUtf8 });
-        yield* onEvent(event);
-
-        const answer = requestId === undefined ? undefined : pending.get(requestId);
-        if (answer !== undefined) yield* Deferred.succeed(answer, event);
-      }
-    }).pipe(Effect.catch((error) => Deferred.fail(closed, error)));
-    yield* Effect.forkScoped(receive);
-
-    const connect = (destinationId: string) =>
-      send(namespaces.connection, destinationId, { type: "CONNECT" });
-
-    yield* connect(receiverId);
-    yield* send(namespaces.heartbeat, receiverId, { type: "PING" }).pipe(
-      Effect.repeat(Schedule.spaced("5 seconds")),
-      Effect.catch((error) => Deferred.fail(closed, error)),
-      Effect.forkScoped,
-    );
-
-    return new CastChannel({ request, connect, closed: Deferred.await(closed) });
+  // Cast devices use a self-signed certificate. Device authentication is not needed to play.
+  const socket = yield* NodeSocket.makeTls({
+    host: device.host,
+    port: device.port,
+    rejectUnauthorized: false,
+    openTimeout: "5 seconds",
   });
+  // `SocketOpenError` says only "An error occurred during Open". Its cause names the reason.
+  const pull = yield* Socket.readerBytes(socket).pipe(
+    Effect.mapError(({ reason }) =>
+      unreachable(
+        "cause" in reason && reason.cause instanceof Error ? reason.cause.message : reason.message,
+      ),
+    ),
+  );
+  const writer = yield* socket.writer;
+  const nextFrame = frameReader(pull);
+
+  const pending = new Map<number, Deferred.Deferred<CastEvent>>();
+  const closed = yield* Deferred.make<never, TargetUnreachable>();
+  let lastRequestId = 0;
+
+  const send = (namespace: string, destinationId: string, payload: Schema.JsonObject) =>
+    writer
+      .write(encodeMessage(destinationId, namespace, JSON.stringify(payload)))
+      .pipe(Effect.mapError((error) => unreachable(error.message)));
+
+  const request = Effect.fn("request")(function* (
+    namespace: string,
+    destinationId: string,
+    payload: Schema.JsonObject,
+  ) {
+    lastRequestId += 1;
+    const requestId = lastRequestId;
+    const answer = yield* Deferred.make<CastEvent>();
+    pending.set(requestId, answer);
+
+    return yield* send(namespace, destinationId, { ...payload, requestId }).pipe(
+      Effect.andThen(Deferred.await(answer)),
+      Effect.raceFirst(Deferred.await(closed)),
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () => Effect.fail(unreachable(`No answer to ${String(payload.type)}`)),
+      }),
+      Effect.ensuring(Effect.sync(() => pending.delete(requestId))),
+    );
+  });
+
+  const receive = Effect.gen(function* () {
+    while (true) {
+      const frame = yield* nextFrame.pipe(
+        Effect.mapError(() => unreachable("The connection closed")),
+        Effect.timeoutOrElse({
+          duration: "20 seconds",
+          orElse: () => Effect.fail(unreachable("The device stopped answering")),
+        }),
+      );
+      const message = yield* decodeMessage(frame).pipe(Effect.option);
+      if (Option.isNone(message)) continue;
+
+      const { namespace, sourceId, payloadUtf8 } = message.value;
+      const envelope = yield* Schema.decodeEffect(Envelope)(payloadUtf8).pipe(Effect.option);
+      if (Option.isNone(envelope)) continue;
+
+      const { type, requestId } = envelope.value;
+      if (namespace === namespaces.heartbeat && type === "PING") {
+        yield* send(namespaces.heartbeat, sourceId, { type: "PONG" });
+        continue;
+      }
+
+      const event = new CastEvent({ namespace, type, payload: payloadUtf8 });
+      yield* onEvent(event);
+
+      const answer = requestId === undefined ? undefined : pending.get(requestId);
+      if (answer !== undefined) yield* Deferred.succeed(answer, event);
+    }
+  }).pipe(Effect.catch((error) => Deferred.fail(closed, error)));
+  yield* Effect.forkScoped(receive);
+
+  const connect = (destinationId: string) =>
+    send(namespaces.connection, destinationId, { type: "CONNECT" });
+
+  yield* connect(receiverId);
+  yield* send(namespaces.heartbeat, receiverId, { type: "PING" }).pipe(
+    Effect.repeat(Schedule.spaced("5 seconds")),
+    Effect.catch((error) => Deferred.fail(closed, error)),
+    Effect.forkScoped,
+  );
+
+  return new CastChannel({ request, connect, closed: Deferred.await(closed) });
+});

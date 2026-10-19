@@ -51,137 +51,138 @@ const parseCached = (item: CachedSource) => {
  * The artist ID that the result credits, as in `writeSource`: the first artist, or the uploader
  * when the title names it as the artist. `null` for a reupload.
  */
-export const cachedArtistId = (item: CachedSource) =>
-  Effect.gen(function* () {
-    const { uploader } = item.source;
-    if (uploader === null) return item.source.artists[0]?.id ?? null;
-    return (yield* parseCached(item))?.uploaderRole === "artist" ? uploader.id : null;
-  });
+export const cachedArtistId = Effect.fn("cachedArtistId")(function* (item: CachedSource) {
+  const { uploader } = item.source;
+  if (uploader === null) return item.source.artists[0]?.id ?? null;
+  return (yield* parseCached(item))?.uploaderRole === "artist" ? uploader.id : null;
+});
 
-export const cachedSummary = (item: CachedSource, providerName: string) =>
-  Effect.gen(function* () {
-    const artist = item.source.artists[0] ?? item.source.uploader;
-    const albumId = item.source.albumId;
-    const parsed = yield* parseCached(item);
+export const cachedSummary = Effect.fn("cachedSummary")(function* (
+  item: CachedSource,
+  providerName: string,
+) {
+  const artist = item.source.artists[0] ?? item.source.uploader;
+  const albumId = item.source.albumId;
+  const parsed = yield* parseCached(item);
 
-    return new SourceSummary({
-      id: item.sourceId,
-      provider: item.provider,
-      title: parsed === null ? item.source.title : versionedTitle(parsed),
-      artist:
-        parsed === null || parsed.artists.length === 0
-          ? item.source.artist
-          : parsedCredit(parsed).name,
-      album: item.source.album,
-      durationMs: item.source.durationMs,
-      codec: item.source.codec,
-      artworkUrl: item.source.artworkUrl,
-      artistRef: artist === null ? null : providerArtistRef(item.provider, artist.id),
-      albumRef: albumId === null ? null : providerAlbumRef(item.provider, albumId),
-      explicit: item.source.explicit ?? false,
-      providerName,
-      recordingId: item.recordingId,
-      video: item.source.video,
-      series: parsed?.series?.name ?? null,
-    });
+  return new SourceSummary({
+    id: item.sourceId,
+    provider: item.provider,
+    title: parsed === null ? item.source.title : versionedTitle(parsed),
+    artist:
+      parsed === null || parsed.artists.length === 0
+        ? item.source.artist
+        : parsedCredit(parsed).name,
+    album: item.source.album,
+    durationMs: item.source.durationMs,
+    codec: item.source.codec,
+    artworkUrl: item.source.artworkUrl,
+    artistRef: artist === null ? null : providerArtistRef(item.provider, artist.id),
+    albumRef: albumId === null ? null : providerAlbumRef(item.provider, albumId),
+    explicit: item.source.explicit ?? false,
+    providerName,
+    recordingId: item.recordingId,
+    video: item.source.video,
+    series: parsed?.series?.name ?? null,
   });
+});
 
-export const toCachedSource = (provider: string, source: ProviderSource) =>
-  Effect.gen(function* () {
-    const id = yield* sourceId(provider, source.externalId);
-    const recordingId = RecordingId.make(yield* boundRecordingId(provider, source.externalId));
-    const isrc = source.isrc === null ? null : normalizeIsrc(source.isrc);
-    return new CachedSource({ sourceId: id, recordingId, provider, isrc, source });
-  });
+export const toCachedSource = Effect.fn("toCachedSource")(function* (
+  provider: string,
+  source: ProviderSource,
+) {
+  const id = yield* sourceId(provider, source.externalId);
+  const recordingId = RecordingId.make(yield* boundRecordingId(provider, source.externalId));
+  const isrc = source.isrc === null ? null : normalizeIsrc(source.isrc);
+  return new CachedSource({ sourceId: id, recordingId, provider, isrc, source });
+});
 
 /** Replaces the cached results of `provider` with the same external IDs, or keeps them with `keepKnown` */
-export const cacheProviderSources = (
+export const cacheProviderSources = Effect.fn("cacheProviderSources")(function* (
   provider: string,
   sources: ReadonlyArray<ProviderSource>,
   options: { readonly keepKnown?: true } = {},
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const fetchedAt = yield* Clock.currentTimeMillis;
+) {
+  const db = yield* Database;
+  const fetchedAt = yield* Clock.currentTimeMillis;
 
-    // Some lists give no duration, for example the YouTube home shelves. The known one stays.
-    const missing = sources.flatMap((source) =>
-      source.durationMs === null ? [source.externalId] : [],
-    );
-    const known = new Map(
-      missing.length === 0
-        ? []
-        : (yield* db
-            .select({
-              externalId: providerItem.externalId,
-              durationMs: sql<number | null>`json_extract(${providerItem.data}, '$.durationMs')`,
-            })
-            .from(providerItem)
-            .where(
-              and(eq(providerItem.provider, provider), inArray(providerItem.externalId, missing)),
-            )).map((row) => [row.externalId, row.durationMs]),
-    );
-    const cached = yield* Effect.forEach(sources, (source) =>
-      toCachedSource(
+  // Some lists give no duration, for example the YouTube home shelves. The known one stays.
+  const missing = sources.flatMap((source) =>
+    source.durationMs === null ? [source.externalId] : [],
+  );
+  const known = new Map(
+    missing.length === 0
+      ? []
+      : (yield* db
+          .select({
+            externalId: providerItem.externalId,
+            durationMs: sql<number | null>`json_extract(${providerItem.data}, '$.durationMs')`,
+          })
+          .from(providerItem)
+          .where(
+            and(eq(providerItem.provider, provider), inArray(providerItem.externalId, missing)),
+          )).map((row) => [row.externalId, row.durationMs]),
+  );
+  const cached = yield* Effect.forEach(sources, (source) =>
+    toCachedSource(
+      provider,
+      source.durationMs === null
+        ? new ProviderSource({ ...source, durationMs: known.get(source.externalId) ?? null })
+        : source,
+    ),
+  );
+  const rows = yield* Effect.forEach(cached, (item) =>
+    Effect.gen(function* () {
+      const data = yield* Schema.encodeEffect(ProviderSource)(item.source).pipe(Effect.orDie);
+      return {
+        sourceId: item.sourceId,
         provider,
-        source.durationMs === null
-          ? new ProviderSource({ ...source, durationMs: known.get(source.externalId) ?? null })
-          : source,
-      ),
-    );
-    const rows = yield* Effect.forEach(cached, (item) =>
-      Effect.gen(function* () {
-        const data = yield* Schema.encodeEffect(ProviderSource)(item.source).pipe(Effect.orDie);
-        return {
-          sourceId: item.sourceId,
-          provider,
-          externalId: item.source.externalId,
-          isrc: item.isrc,
-          data,
-          fetchedAt,
-        };
-      }),
-    );
+        externalId: item.source.externalId,
+        isrc: item.isrc,
+        data,
+        fetchedAt,
+      };
+    }),
+  );
 
-    yield* db.transaction((tx) =>
-      Effect.forEach(
-        rows,
-        (row) => {
-          const insert = tx.insert(providerItem).values(row);
-          return options.keepKnown === true
-            ? insert.onConflictDoNothing()
-            : insert.onConflictDoUpdate({ target: providerItem.sourceId, set: row });
-        },
-        { discard: true },
-      ),
-    );
+  yield* db.transaction((tx) =>
+    Effect.forEach(
+      rows,
+      (row) => {
+        const insert = tx.insert(providerItem).values(row);
+        return options.keepKnown === true
+          ? insert.onConflictDoNothing()
+          : insert.onConflictDoUpdate({ target: providerItem.sourceId, set: row });
+      },
+      { discard: true },
+    ),
+  );
 
-    return cached;
-  });
+  return cached;
+});
 
 /** The cached search result with this source ID */
-export const cachedProviderSource = (id: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({ provider: providerItem.provider, isrc: providerItem.isrc, data: providerItem.data })
-      .from(providerItem)
-      .where(eq(providerItem.sourceId, id))
-      .limit(1);
-    if (row === undefined) return Option.none();
+export const cachedProviderSource = Effect.fn("cachedProviderSource")(function* (id: string) {
+  const db = yield* Database;
+  const [row] = yield* db
+    .select({ provider: providerItem.provider, isrc: providerItem.isrc, data: providerItem.data })
+    .from(providerItem)
+    .where(eq(providerItem.sourceId, id))
+    .limit(1);
+  if (row === undefined) return Option.none();
 
-    const source = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(Effect.orDie);
-    const recordingId = RecordingId.make(yield* boundRecordingId(row.provider, source.externalId));
-    return Option.some(
-      new CachedSource({
-        sourceId: id,
-        recordingId,
-        provider: row.provider,
-        isrc: row.isrc,
-        source,
-      }),
-    );
-  });
+  const source = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(Effect.orDie);
+  const recordingId = RecordingId.make(yield* boundRecordingId(row.provider, source.externalId));
+  return Option.some(
+    new CachedSource({
+      sourceId: id,
+      recordingId,
+      provider: row.provider,
+      isrc: row.isrc,
+      source,
+    }),
+  );
+});
 
 /** Deletes expired search results and pages when the server starts and then every 6 hours */
 export const providerCacheSweepLayer = Layer.effectDiscard(

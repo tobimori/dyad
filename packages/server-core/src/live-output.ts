@@ -123,137 +123,140 @@ class Connection extends Data.Class<{
  * plays the stream, and the device must not pause or stop it until the scope closes; then it
  * pauses. Its lead is the audio that the device holds.
  */
-export const openLiveStream = (output: UrlOutput, origin: string, title: string) =>
-  Effect.gen(function* () {
-    const outputs = yield* Outputs;
-    const id = yield* Crypto.Crypto.use((crypto) => crypto.randomUUIDv4()).pipe(Effect.orDie);
-    const url = `${origin}/live/${id}`;
-    const lost = yield* Deferred.make<never, OutputError>();
-    const lose = (reason: string) => Deferred.fail(lost, new OutputError({ reason }));
+export const openLiveStream = Effect.fn("openLiveStream")(function* (
+  output: UrlOutput,
+  origin: string,
+  title: string,
+) {
+  const outputs = yield* Outputs;
+  const id = yield* Crypto.Crypto.use((crypto) => crypto.randomUUIDv4()).pipe(Effect.orDie);
+  const url = `${origin}/live/${id}`;
+  const lost = yield* Deferred.make<never, OutputError>();
+  const lose = (reason: string) => Deferred.fail(lost, new OutputError({ reason }));
 
-    const state = {
-      connection: Option.none<Connection>(),
-      // Server time at which stream frame 0 plays
-      anchorUs: Option.none<number>(),
-      blocks: Array.of<Block>(),
-    };
+  const state = {
+    connection: Option.none<Connection>(),
+    // Server time at which stream frame 0 plays
+    anchorUs: Option.none<number>(),
+    blocks: Array.of<Block>(),
+  };
 
-    // The audio of stream frames `from` to `from + blockFrames`, silence where no block is
-    const take = (from: number) => {
-      const pcm = new Float32Array(blockFrames * 2);
-      for (const block of state.blocks) {
-        const first = Math.max(from, block.frame);
-        const last = Math.min(from + blockFrames, block.frame + block.pcm.length / 2);
-        if (first >= last) continue;
-        const samples = block.pcm.subarray((first - block.frame) * 2, (last - block.frame) * 2);
-        pcm.set(samples, (first - from) * 2);
-      }
-      state.blocks = state.blocks.filter(
-        (block) => block.frame + block.pcm.length / 2 > from + blockFrames,
-      );
-      return pcm;
-    };
-
-    // Each request starts the stream again, so the device plays the stream of the last request
-    const connect = Effect.gen(function* () {
-      if (Option.isSome(state.anchorUs)) yield* lose("The device opened the stream again");
-      if (Option.isSome(state.connection)) Queue.endUnsafe(state.connection.value.queue);
-      const queue = yield* Queue.unbounded<Uint8Array, Cause.Done>();
-      Queue.offerUnsafe(queue, flacHeader());
-      state.connection = Option.some(new Connection({ queue, atUs: yield* nowUs }));
-      return Stream.fromQueue(queue);
-    });
-
-    // Real time from the connection on, after the burst
-    const send = Effect.gen(function* () {
-      if (Option.isNone(state.connection)) return;
-      const connection = state.connection.value;
-      const target = burstFrames + ((yield* nowUs) - connection.atUs) * (timelineRate / 1_000_000);
-      while (connection.written + blockFrames <= target) {
-        Queue.offerUnsafe(connection.queue, flacFrame(connection.frames, take(connection.written)));
-        connection.written += blockFrames;
-        connection.frames += 1;
-      }
-      if (Queue.sizeUnsafe(connection.queue) * blockFrames > backlogFrames) {
-        yield* lose("The device stopped reading the stream");
-      }
-    });
-
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        if (Option.isSome(state.connection)) Queue.endUnsafe(state.connection.value.queue);
-      }),
-    );
-    yield* outputs.addLiveStream(id, connect);
-    yield* Effect.forkScoped(Effect.repeat(send, Schedule.spaced(sendInterval)));
-    // Before the stream ends, so that the device does not play out its buffer. Another controller
-    // can play on it already.
-    yield* Effect.addFinalizer(() =>
-      output.status.pipe(
-        Stream.runHead,
-        Effect.flatMap((status) =>
-          Option.exists(status, (current) => current.url === url) ? output.pause : Effect.void,
-        ),
-        Effect.timeout("3 seconds"),
-        Effect.ignore,
-      ),
-    );
-
-    yield* output.load(
-      new UrlMedia({
-        url,
-        contentType,
-        title,
-        artist: null,
-        album: null,
-        artworkUrl: null,
-        durationMs: null,
-      }),
-    );
-    const started = yield* output.status.pipe(
-      Stream.filter((status) => status.url === url && status.state === "playing"),
-      Stream.runHead,
-      Effect.timeoutOption(startTimeout),
-      Effect.map(Option.flatten),
-    );
-    if (Option.isNone(started) || Option.isNone(state.connection)) {
-      return yield* new OutputError({ reason: "The device did not play the live stream" });
+  // The audio of stream frames `from` to `from + blockFrames`, silence where no block is
+  const take = (from: number) => {
+    const pcm = new Float32Array(blockFrames * 2);
+    for (const block of state.blocks) {
+      const first = Math.max(from, block.frame);
+      const last = Math.min(from + blockFrames, block.frame + block.pcm.length / 2);
+      if (first >= last) continue;
+      const samples = block.pcm.subarray((first - block.frame) * 2, (last - block.frame) * 2);
+      pcm.set(samples, (first - from) * 2);
     }
-    const anchorUs = yield* nowUs;
-    state.anchorUs = Option.some(anchorUs);
-    const heldMs = (state.connection.value.written * 1000) / timelineRate;
-    yield* Effect.logInfo("Live stream plays").pipe(
-      Effect.annotateLogs({ heldMs: Math.round(heldMs) }),
+    state.blocks = state.blocks.filter(
+      (block) => block.frame + block.pcm.length / 2 > from + blockFrames,
     );
+    return pcm;
+  };
 
-    // Another controller paused, stopped or replaced it
-    yield* output.status.pipe(
-      Stream.runForEach((status) =>
-        status.url === url && (status.state === "playing" || status.state === "buffering")
-          ? Effect.void
-          : lose(`The device left the live stream (${status.state})`),
-      ),
-      Effect.catch((error) => lose(error.reason)),
-      Effect.forkScoped,
-    );
-
-    return new TimedOutput({
-      // The device holds the burst and what came while it started; a frame goes out per send
-      leadMs: Math.ceil(heldMs + (1000 * blockFrames) / timelineRate) + 20,
-      write: (playAtUs, pcm) =>
-        Effect.sync(() => {
-          const frame = Math.round(((playAtUs - anchorUs) * timelineRate) / 1_000_000);
-          state.blocks.push(new Block({ frame, pcm }));
-        }),
-      flush: Effect.sync(() => {
-        state.blocks = [];
-      }),
-      // The core sets the volume of the URL output
-      setVolume: () => Effect.void,
-      setMedia: () => Effect.void,
-      closed: Deferred.await(lost),
-    });
+  // Each request starts the stream again, so the device plays the stream of the last request
+  const connect = Effect.gen(function* () {
+    if (Option.isSome(state.anchorUs)) yield* lose("The device opened the stream again");
+    if (Option.isSome(state.connection)) Queue.endUnsafe(state.connection.value.queue);
+    const queue = yield* Queue.unbounded<Uint8Array, Cause.Done>();
+    Queue.offerUnsafe(queue, flacHeader());
+    state.connection = Option.some(new Connection({ queue, atUs: yield* nowUs }));
+    return Stream.fromQueue(queue);
   });
+
+  // Real time from the connection on, after the burst
+  const send = Effect.gen(function* () {
+    if (Option.isNone(state.connection)) return;
+    const connection = state.connection.value;
+    const target = burstFrames + ((yield* nowUs) - connection.atUs) * (timelineRate / 1_000_000);
+    while (connection.written + blockFrames <= target) {
+      Queue.offerUnsafe(connection.queue, flacFrame(connection.frames, take(connection.written)));
+      connection.written += blockFrames;
+      connection.frames += 1;
+    }
+    if (Queue.sizeUnsafe(connection.queue) * blockFrames > backlogFrames) {
+      yield* lose("The device stopped reading the stream");
+    }
+  });
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      if (Option.isSome(state.connection)) Queue.endUnsafe(state.connection.value.queue);
+    }),
+  );
+  yield* outputs.addLiveStream(id, connect);
+  yield* Effect.forkScoped(Effect.repeat(send, Schedule.spaced(sendInterval)));
+  // Before the stream ends, so that the device does not play out its buffer. Another controller
+  // can play on it already.
+  yield* Effect.addFinalizer(() =>
+    output.status.pipe(
+      Stream.runHead,
+      Effect.flatMap((status) =>
+        Option.exists(status, (current) => current.url === url) ? output.pause : Effect.void,
+      ),
+      Effect.timeout("3 seconds"),
+      Effect.ignore,
+    ),
+  );
+
+  yield* output.load(
+    new UrlMedia({
+      url,
+      contentType,
+      title,
+      artist: null,
+      album: null,
+      artworkUrl: null,
+      durationMs: null,
+    }),
+  );
+  const started = yield* output.status.pipe(
+    Stream.filter((status) => status.url === url && status.state === "playing"),
+    Stream.runHead,
+    Effect.timeoutOption(startTimeout),
+    Effect.map(Option.flatten),
+  );
+  if (Option.isNone(started) || Option.isNone(state.connection)) {
+    return yield* new OutputError({ reason: "The device did not play the live stream" });
+  }
+  const anchorUs = yield* nowUs;
+  state.anchorUs = Option.some(anchorUs);
+  const heldMs = (state.connection.value.written * 1000) / timelineRate;
+  yield* Effect.logInfo("Live stream plays").pipe(
+    Effect.annotateLogs({ heldMs: Math.round(heldMs) }),
+  );
+
+  // Another controller paused, stopped or replaced it
+  yield* output.status.pipe(
+    Stream.runForEach((status) =>
+      status.url === url && (status.state === "playing" || status.state === "buffering")
+        ? Effect.void
+        : lose(`The device left the live stream (${status.state})`),
+    ),
+    Effect.catch((error) => lose(error.reason)),
+    Effect.forkScoped,
+  );
+
+  return new TimedOutput({
+    // The device holds the burst and what came while it started; a frame goes out per send
+    leadMs: Math.ceil(heldMs + (1000 * blockFrames) / timelineRate) + 20,
+    write: (playAtUs, pcm) =>
+      Effect.sync(() => {
+        const frame = Math.round(((playAtUs - anchorUs) * timelineRate) / 1_000_000);
+        state.blocks.push(new Block({ frame, pcm }));
+      }),
+    flush: Effect.sync(() => {
+      state.blocks = [];
+    }),
+    // The core sets the volume of the URL output
+    setVolume: () => Effect.void,
+    setMedia: () => Effect.void,
+    closed: Deferred.await(lost),
+  });
+});
 
 /** Live streams of URL outputs. The random ID in the URL is the grant. */
 export const liveRoute = HttpRouter.add(

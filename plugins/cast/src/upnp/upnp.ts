@@ -103,310 +103,303 @@ const didl = (url: string, metadata: TrackMetadata, mimeType: string) => {
  * Opens a UPnP MediaRenderer. For a Sonos speaker, transport commands go to the coordinator of its
  * group at open time, and the volume is the group volume.
  */
-export const openUpnp = (device: UpnpDevice) =>
-  Effect.gen(function* () {
-    const context = yield* Effect.context<HttpClient.HttpClient>();
-    const transport = device.kind === "sonos" ? yield* sonosCoordinator(device) : device;
-    const name = device.name;
-    const instance = ["InstanceID", 0] as const;
+export const openUpnp = Effect.fn("openUpnp")(function* (device: UpnpDevice) {
+  const context = yield* Effect.context<HttpClient.HttpClient>();
+  const transport = device.kind === "sonos" ? yield* sonosCoordinator(device) : device;
+  const name = device.name;
+  const instance = ["InstanceID", 0] as const;
 
-    const avTransport = findService(transport.services, "AVTransport");
-    if (avTransport === undefined) {
-      return yield* new CommandFailed({ device: name, command: "open", reason: "No AVTransport" });
-    }
+  const avTransport = findService(transport.services, "AVTransport");
+  if (avTransport === undefined) {
+    return yield* new CommandFailed({ device: name, command: "open", reason: "No AVTransport" });
+  }
 
-    const groupVolume = findService(transport.services, "GroupRenderingControl");
-    const renderingControl = findService(device.services, "RenderingControl");
-    const volumeControl =
-      device.kind === "sonos" && groupVolume !== undefined
-        ? { service: groupVolume, volume: "GroupVolume", mute: "GroupMute", args: [instance] }
-        : renderingControl && {
-            service: renderingControl,
-            volume: "Volume",
-            mute: "Mute",
-            args: [instance, ["Channel", "Master"] as const],
-          };
-    // Mute is optional in RenderingControl 1.0
-    const mutes = volumeControl?.service.actions.includes(`Set${volumeControl.mute}`) === true;
+  const groupVolume = findService(transport.services, "GroupRenderingControl");
+  const renderingControl = findService(device.services, "RenderingControl");
+  const volumeControl =
+    device.kind === "sonos" && groupVolume !== undefined
+      ? { service: groupVolume, volume: "GroupVolume", mute: "GroupMute", args: [instance] }
+      : renderingControl && {
+          service: renderingControl,
+          volume: "Volume",
+          mute: "Mute",
+          args: [instance, ["Channel", "Master"] as const],
+        };
+  // Mute is optional in RenderingControl 1.0
+  const mutes = volumeControl?.service.actions.includes(`Set${volumeControl.mute}`) === true;
 
-    const state = yield* SubscriptionRef.make(idleState);
-    const update = (change: Partial<ConstructorParameters<typeof TargetState>[0]>) =>
-      SubscriptionRef.update(state, (current) => new TargetState({ ...current, ...change }));
+  const state = yield* SubscriptionRef.make(idleState);
+  const update = (change: Partial<ConstructorParameters<typeof TargetState>[0]>) =>
+    SubscriptionRef.update(state, (current) => new TargetState({ ...current, ...change }));
 
-    const transportCommand = (action: string, args: ReadonlyArray<readonly [string, string]>) =>
-      soapCommand(name, avTransport, action, [instance, ...args]).pipe(
-        Effect.provideContext(context),
-      );
-
-    const readVolume =
-      volumeControl === undefined
-        ? Effect.succeed({ volume: null, muted: false })
-        : Effect.all({
-            volume: soap(
-              name,
-              volumeControl.service,
-              `Get${volumeControl.volume}`,
-              volumeControl.args,
-              Volume,
-            ).pipe(Effect.map((answer) => answer.CurrentVolume / 100)),
-            muted: mutes
-              ? soap(
-                  name,
-                  volumeControl.service,
-                  `Get${volumeControl.mute}`,
-                  volumeControl.args,
-                  Mute,
-                ).pipe(Effect.map((answer) => isTrue(answer.CurrentMute)))
-              : Effect.succeed(false),
-          });
-
-    const applyEvent = (variables: ReadonlyMap<string, string>) => {
-      const transportState = variables.get("TransportState");
-      const transportStatus = variables.get("TransportStatus");
-      const trackUri = variables.get("CurrentTrackURI");
-      const trackDuration = variables.get("CurrentTrackDuration");
-      const volume = volumeControl && variables.get(volumeControl.volume);
-      const mute = volumeControl && variables.get(volumeControl.mute);
-
-      return SubscriptionRef.update(
-        state,
-        (current) =>
-          new TargetState({
-            status: transportState === undefined ? current.status : statusOf(transportState),
-            url: trackUri === undefined ? current.url : urlOf(trackUri),
-            // The event of a new track comes before the poll of its position
-            positionMs:
-              trackUri === undefined || urlOf(trackUri) === current.url ? current.positionMs : 0,
-            durationMs: trackDuration === undefined ? current.durationMs : parseTime(trackDuration),
-            volume: volume === undefined || volume === "" ? current.volume : Number(volume) / 100,
-            muted: mute === undefined || mute === "" ? current.muted : isTrue(mute),
-            error: transportStatus === undefined ? current.error : errorOf(transportStatus),
-          }),
-      );
-    };
-
-    const evented =
-      volumeControl === undefined ? [avTransport] : [avTransport, volumeControl.service];
-    const events = yield* subscribeEvents(transport.host, evented, applyEvent).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("UPnP events are not available, polling", name, String(error)).pipe(
-          Effect.as({ active: Effect.succeed(false) }),
-        ),
-      ),
-    );
-
-    const answeredAt = yield* Ref.make(yield* Clock.currentTimeMillis);
-    const unreachable = yield* Deferred.make<never, TargetUnreachable>();
-
-    // AVTransport does not send the position as an event
-    const poll = Effect.gen(function* () {
-      const active = yield* events.active;
-      const current = yield* SubscriptionRef.get(state);
-
-      if (!active) {
-        const info = yield* soap(name, avTransport, "GetTransportInfo", [instance], TransportInfo);
-        yield* update({
-          status: statusOf(info.CurrentTransportState),
-          error: errorOf(info.CurrentTransportStatus),
-          ...(yield* readVolume),
-        });
-      }
-      if (active && (current.status === "idle" || current.status === "paused")) return;
-
-      const position = yield* soap(name, avTransport, "GetPositionInfo", [instance], PositionInfo);
-      const positionMs = parseTime(position.RelTime) ?? 0;
-      const durationMs = parseTime(position.TrackDuration);
-      const url = urlOf(position.TrackURI);
-      // Rygel 45.2 reports position 0 at the end of a track, shortly before it stops
-      const ends =
-        positionMs === 0 &&
-        url === current.url &&
-        durationMs !== null &&
-        current.positionMs > durationMs - 2000;
-      yield* update({ positionMs: ends ? current.positionMs : positionMs, durationMs, url });
-    }).pipe(
-      Effect.andThen(Clock.currentTimeMillis),
-      Effect.flatMap((now) => Ref.set(answeredAt, now)),
-      Effect.catch((error: TargetError) =>
-        Effect.gen(function* () {
-          yield* update({ error: error.reason });
-          const now = yield* Clock.currentTimeMillis;
-          if (
-            error instanceof TargetUnreachable &&
-            now - (yield* Ref.get(answeredAt)) > unreachableAfterMs
-          ) {
-            yield* Deferred.fail(unreachable, error);
-          }
-        }),
-      ),
+  const transportCommand = (action: string, args: ReadonlyArray<readonly [string, string]>) =>
+    soapCommand(name, avTransport, action, [instance, ...args]).pipe(
       Effect.provideContext(context),
     );
-    yield* Effect.forkScoped(Effect.repeat(poll, Schedule.spaced("1 second")));
 
-    // Sends the MIME type in the spelling that the renderer lists
-    const protocolMimeType = (mimeType: string) =>
-      Effect.gen(function* () {
-        const listed = device.capabilities.mimeTypes;
-        if (listed.length === 0) return mimeType;
-
-        const spellings = mimeAliases.get(mimeType) ?? [mimeType];
-        const match = spellings.find((spelling) => listed.includes(spelling));
-        if (match !== undefined) return match;
-
-        return yield* new UnsupportedFormat({
-          device: name,
-          reason: `${name} does not list ${mimeType}`,
+  const readVolume =
+    volumeControl === undefined
+      ? Effect.succeed({ volume: null, muted: false })
+      : Effect.all({
+          volume: soap(
+            name,
+            volumeControl.service,
+            `Get${volumeControl.volume}`,
+            volumeControl.args,
+            Volume,
+          ).pipe(Effect.map((answer) => answer.CurrentVolume / 100)),
+          muted: mutes
+            ? soap(
+                name,
+                volumeControl.service,
+                `Get${volumeControl.mute}`,
+                volumeControl.args,
+                Mute,
+              ).pipe(Effect.map((answer) => isTrue(answer.CurrentMute)))
+            : Effect.succeed(false),
         });
-      });
 
-    // A renderer can reject `Seek` until it plays
-    const waitUntilPlaying = SubscriptionRef.changes(state).pipe(
-      Stream.filter((current) => current.status === "playing"),
-      Stream.runHead,
-      Effect.timeout("10 seconds"),
-      Effect.ignore,
+  const applyEvent = (variables: ReadonlyMap<string, string>) => {
+    const transportState = variables.get("TransportState");
+    const transportStatus = variables.get("TransportStatus");
+    const trackUri = variables.get("CurrentTrackURI");
+    const trackDuration = variables.get("CurrentTrackDuration");
+    const volume = volumeControl && variables.get(volumeControl.volume);
+    const mute = volumeControl && variables.get(volumeControl.mute);
+
+    return SubscriptionRef.update(
+      state,
+      (current) =>
+        new TargetState({
+          status: transportState === undefined ? current.status : statusOf(transportState),
+          url: trackUri === undefined ? current.url : urlOf(trackUri),
+          // The event of a new track comes before the poll of its position
+          positionMs:
+            trackUri === undefined || urlOf(trackUri) === current.url ? current.positionMs : 0,
+          durationMs: trackDuration === undefined ? current.durationMs : parseTime(trackDuration),
+          volume: volume === undefined || volume === "" ? current.volume : Number(volume) / 100,
+          muted: mute === undefined || mute === "" ? current.muted : isTrue(mute),
+          error: transportStatus === undefined ? current.error : errorOf(transportStatus),
+        }),
     );
+  };
 
-    const seek = (positionMs: number) =>
-      transportCommand("Seek", [
-        ["Unit", "REL_TIME"],
-        ["Target", formatTime(positionMs)],
-      ]);
+  const evented =
+    volumeControl === undefined ? [avTransport] : [avTransport, volumeControl.service];
+  const events = yield* subscribeEvents(transport.host, evented, applyEvent).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("UPnP events are not available, polling", name, String(error)).pipe(
+        Effect.as({ active: Effect.succeed(false) }),
+      ),
+    ),
+  );
 
-    // Sonos 97.2 stops at once when `SetNextAVTransportURI` removes the next item, but not when a
-    // queue item is removed
-    const sonosQueue =
-      device.kind === "sonos" && avTransport.actions.includes("AddURIToQueue")
-        ? `x-rincon-queue:${transport.id.replace(/^uuid:/, "")}#0`
-        : null;
+  const answeredAt = yield* Ref.make(yield* Clock.currentTimeMillis);
+  const unreachable = yield* Deferred.make<never, TargetUnreachable>();
 
-    const enqueue = (url: string, metadata: TrackMetadata) =>
-      Effect.gen(function* () {
-        const mimeType = yield* protocolMimeType(metadata.mimeType);
-        yield* transportCommand("AddURIToQueue", [
-          ["EnqueuedURI", url],
-          ["EnqueuedURIMetaData", didl(url, metadata, mimeType)],
-          ["DesiredFirstTrackNumberEnqueued", "0"],
-          ["EnqueueAsNext", "0"],
-        ]);
+  // AVTransport does not send the position as an event
+  const poll = Effect.gen(function* () {
+    const active = yield* events.active;
+    const current = yield* SubscriptionRef.get(state);
+
+    if (!active) {
+      const info = yield* soap(name, avTransport, "GetTransportInfo", [instance], TransportInfo);
+      yield* update({
+        status: statusOf(info.CurrentTransportState),
+        error: errorOf(info.CurrentTransportStatus),
+        ...(yield* readVolume),
       });
+    }
+    if (active && (current.status === "idle" || current.status === "paused")) return;
 
-    // The queue keeps only the current item, so that it does not grow and ends with that item
-    const trimQueue = Effect.gen(function* () {
-      const { Track: track } = yield* soap(
-        name,
-        avTransport,
-        "GetPositionInfo",
-        [instance],
-        QueuePosition,
-      );
-      const { NrTracks: length } = yield* soap(
-        name,
-        avTransport,
-        "GetMediaInfo",
-        [instance],
-        MediaInfo,
-      );
-      const remove = (first: number, count: number) =>
-        count > 0
-          ? transportCommand("RemoveTrackRangeFromQueue", [
-              ["UpdateID", "0"],
-              ["StartingIndex", String(first)],
-              ["NumberOfTracks", String(count)],
-            ])
-          : Effect.void;
-      yield* remove(track + 1, length - track);
-      yield* remove(1, track - 1);
-    }).pipe(Effect.provideContext(context));
-
-    const load = (url: string, metadata: TrackMetadata, startMs: number) =>
+    const position = yield* soap(name, avTransport, "GetPositionInfo", [instance], PositionInfo);
+    const positionMs = parseTime(position.RelTime) ?? 0;
+    const durationMs = parseTime(position.TrackDuration);
+    const url = urlOf(position.TrackURI);
+    // Rygel 45.2 reports position 0 at the end of a track, shortly before it stops
+    const ends =
+      positionMs === 0 &&
+      url === current.url &&
+      durationMs !== null &&
+      current.positionMs > durationMs - 2000;
+    yield* update({ positionMs: ends ? current.positionMs : positionMs, durationMs, url });
+  }).pipe(
+    Effect.andThen(Clock.currentTimeMillis),
+    Effect.flatMap((now) => Ref.set(answeredAt, now)),
+    Effect.catch((error: TargetError) =>
       Effect.gen(function* () {
-        const mimeType = yield* protocolMimeType(metadata.mimeType);
-        if (sonosQueue === null) {
-          // Rygel 45.2 plays a new URI at once when it played before, and then rejects `Play`
-          const { status } = yield* SubscriptionRef.get(state);
-          if (status !== "idle") yield* transportCommand("Stop", []);
-          yield* transportCommand("SetAVTransportURI", [
-            ["CurrentURI", url],
-            ["CurrentURIMetaData", didl(url, metadata, mimeType)],
-          ]);
-        } else {
-          yield* transportCommand("RemoveAllTracksFromQueue", []);
-          yield* enqueue(url, metadata);
-          yield* transportCommand("SetAVTransportURI", [
-            ["CurrentURI", sonosQueue],
-            ["CurrentURIMetaData", ""],
-          ]);
+        yield* update({ error: error.reason });
+        const now = yield* Clock.currentTimeMillis;
+        if (
+          error instanceof TargetUnreachable &&
+          now - (yield* Ref.get(answeredAt)) > unreachableAfterMs
+        ) {
+          yield* Deferred.fail(unreachable, error);
         }
-        yield* update({ status: "buffering", url, positionMs: startMs, error: null });
-        yield* transportCommand("Play", [["Speed", "1"]]);
+      }),
+    ),
+    Effect.provideContext(context),
+  );
+  yield* Effect.forkScoped(Effect.repeat(poll, Schedule.spaced("1 second")));
 
-        if (startMs > 0) {
-          yield* waitUntilPlaying;
-          yield* seek(startMs);
-        }
-      });
+  // Sends the MIME type in the spelling that the renderer lists
+  const protocolMimeType = Effect.fn("protocolMimeType")(function* (mimeType: string) {
+    const listed = device.capabilities.mimeTypes;
+    if (listed.length === 0) return mimeType;
 
-    const next = (url: string, metadata: TrackMetadata) =>
-      Effect.gen(function* () {
-        if (sonosQueue !== null) {
-          yield* trimQueue;
-          return yield* enqueue(url, metadata);
-        }
-        if (!device.capabilities.queueNext) {
-          return yield* new CommandFailed({
-            device: name,
-            command: "next",
-            reason: `${name} has no SetNextAVTransportURI`,
-          });
-        }
+    const spellings = mimeAliases.get(mimeType) ?? [mimeType];
+    const match = spellings.find((spelling) => listed.includes(spelling));
+    if (match !== undefined) return match;
 
-        const mimeType = yield* protocolMimeType(metadata.mimeType);
-        yield* transportCommand("SetNextAVTransportURI", [
-          ["NextURI", url],
-          ["NextURIMetaData", didl(url, metadata, mimeType)],
-        ]);
-      });
-
-    // UPnP volume is from 0 to 100 on Sonos and on most renderers
-    const setVolume = (volume: number) => {
-      if (volumeControl === undefined) {
-        return Effect.fail(
-          new CommandFailed({ device: name, command: "setVolume", reason: "No RenderingControl" }),
-        );
-      }
-
-      const { service, args } = volumeControl;
-      const level = Math.round(Math.min(Math.max(volume, 0), 1) * 100);
-      return Effect.gen(function* () {
-        if (mutes && (yield* SubscriptionRef.get(state)).muted) {
-          yield* soapCommand(name, service, `Set${volumeControl.mute}`, [
-            ...args,
-            ["DesiredMute", 0],
-          ]);
-        }
-        yield* soapCommand(name, service, `Set${volumeControl.volume}`, [
-          ...args,
-          ["DesiredVolume", level],
-        ]);
-      }).pipe(Effect.provideContext(context));
-    };
-
-    return new UrlTarget({
-      device,
-      load,
-      play: transportCommand("Play", [["Speed", "1"]]),
-      pause: transportCommand("Pause", []),
-      seek,
-      stop: transportCommand("Stop", []),
-      setVolume,
-      next,
-      clearNext:
-        sonosQueue === null
-          ? Effect.fail(
-              new CommandFailed({ device: name, command: "clearNext", reason: "No queue" }),
-            )
-          : trimQueue,
-      state: SubscriptionRef.changes(state).pipe(Stream.interruptWhen(Deferred.await(unreachable))),
+    return yield* new UnsupportedFormat({
+      device: name,
+      reason: `${name} does not list ${mimeType}`,
     });
   });
+
+  // A renderer can reject `Seek` until it plays
+  const waitUntilPlaying = SubscriptionRef.changes(state).pipe(
+    Stream.filter((current) => current.status === "playing"),
+    Stream.runHead,
+    Effect.timeout("10 seconds"),
+    Effect.ignore,
+  );
+
+  const seek = (positionMs: number) =>
+    transportCommand("Seek", [
+      ["Unit", "REL_TIME"],
+      ["Target", formatTime(positionMs)],
+    ]);
+
+  // Sonos 97.2 stops at once when `SetNextAVTransportURI` removes the next item, but not when a
+  // queue item is removed
+  const sonosQueue =
+    device.kind === "sonos" && avTransport.actions.includes("AddURIToQueue")
+      ? `x-rincon-queue:${transport.id.replace(/^uuid:/, "")}#0`
+      : null;
+
+  const enqueue = Effect.fn("enqueue")(function* (url: string, metadata: TrackMetadata) {
+    const mimeType = yield* protocolMimeType(metadata.mimeType);
+    yield* transportCommand("AddURIToQueue", [
+      ["EnqueuedURI", url],
+      ["EnqueuedURIMetaData", didl(url, metadata, mimeType)],
+      ["DesiredFirstTrackNumberEnqueued", "0"],
+      ["EnqueueAsNext", "0"],
+    ]);
+  });
+
+  // The queue keeps only the current item, so that it does not grow and ends with that item
+  const trimQueue = Effect.gen(function* () {
+    const { Track: track } = yield* soap(
+      name,
+      avTransport,
+      "GetPositionInfo",
+      [instance],
+      QueuePosition,
+    );
+    const { NrTracks: length } = yield* soap(
+      name,
+      avTransport,
+      "GetMediaInfo",
+      [instance],
+      MediaInfo,
+    );
+    const remove = (first: number, count: number) =>
+      count > 0
+        ? transportCommand("RemoveTrackRangeFromQueue", [
+            ["UpdateID", "0"],
+            ["StartingIndex", String(first)],
+            ["NumberOfTracks", String(count)],
+          ])
+        : Effect.void;
+    yield* remove(track + 1, length - track);
+    yield* remove(1, track - 1);
+  }).pipe(Effect.provideContext(context));
+
+  const load = Effect.fn("load")(function* (url: string, metadata: TrackMetadata, startMs: number) {
+    const mimeType = yield* protocolMimeType(metadata.mimeType);
+    if (sonosQueue === null) {
+      // Rygel 45.2 plays a new URI at once when it played before, and then rejects `Play`
+      const { status } = yield* SubscriptionRef.get(state);
+      if (status !== "idle") yield* transportCommand("Stop", []);
+      yield* transportCommand("SetAVTransportURI", [
+        ["CurrentURI", url],
+        ["CurrentURIMetaData", didl(url, metadata, mimeType)],
+      ]);
+    } else {
+      yield* transportCommand("RemoveAllTracksFromQueue", []);
+      yield* enqueue(url, metadata);
+      yield* transportCommand("SetAVTransportURI", [
+        ["CurrentURI", sonosQueue],
+        ["CurrentURIMetaData", ""],
+      ]);
+    }
+    yield* update({ status: "buffering", url, positionMs: startMs, error: null });
+    yield* transportCommand("Play", [["Speed", "1"]]);
+
+    if (startMs > 0) {
+      yield* waitUntilPlaying;
+      yield* seek(startMs);
+    }
+  });
+
+  const next = Effect.fn("next")(function* (url: string, metadata: TrackMetadata) {
+    if (sonosQueue !== null) {
+      yield* trimQueue;
+      return yield* enqueue(url, metadata);
+    }
+    if (!device.capabilities.queueNext) {
+      return yield* new CommandFailed({
+        device: name,
+        command: "next",
+        reason: `${name} has no SetNextAVTransportURI`,
+      });
+    }
+
+    const mimeType = yield* protocolMimeType(metadata.mimeType);
+    yield* transportCommand("SetNextAVTransportURI", [
+      ["NextURI", url],
+      ["NextURIMetaData", didl(url, metadata, mimeType)],
+    ]);
+  });
+
+  // UPnP volume is from 0 to 100 on Sonos and on most renderers
+  const setVolume = (volume: number) => {
+    if (volumeControl === undefined) {
+      return Effect.fail(
+        new CommandFailed({ device: name, command: "setVolume", reason: "No RenderingControl" }),
+      );
+    }
+
+    const { service, args } = volumeControl;
+    const level = Math.round(Math.min(Math.max(volume, 0), 1) * 100);
+    return Effect.gen(function* () {
+      if (mutes && (yield* SubscriptionRef.get(state)).muted) {
+        yield* soapCommand(name, service, `Set${volumeControl.mute}`, [
+          ...args,
+          ["DesiredMute", 0],
+        ]);
+      }
+      yield* soapCommand(name, service, `Set${volumeControl.volume}`, [
+        ...args,
+        ["DesiredVolume", level],
+      ]);
+    }).pipe(Effect.provideContext(context));
+  };
+
+  return new UrlTarget({
+    device,
+    load,
+    play: transportCommand("Play", [["Speed", "1"]]),
+    pause: transportCommand("Pause", []),
+    seek,
+    stop: transportCommand("Stop", []),
+    setVolume,
+    next,
+    clearNext:
+      sonosQueue === null
+        ? Effect.fail(new CommandFailed({ device: name, command: "clearNext", reason: "No queue" }))
+        : trimQueue,
+    state: SubscriptionRef.changes(state).pipe(Stream.interruptWhen(Deferred.await(unreachable))),
+  });
+});

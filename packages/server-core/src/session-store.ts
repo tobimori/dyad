@@ -59,30 +59,29 @@ export const loadSession = Effect.gen(function* () {
   );
 });
 
-export const saveSession = (state: SessionState) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const playback = state.playback;
-    const row = {
-      entries: yield* Schema.encodeEffect(SavedEntries)(state.entries),
-      nextEntryId: state.nextEntryId,
-      queueVersion: state.queueVersion,
-      revision: playback.revision,
-      playback: yield* Schema.encodeEffect(SavedPlayback)(
-        new SavedPlayback({
-          state: playback.state,
-          entryId: playback.entryId,
-          positionMs: playback.positionMs,
-          outputId: playback.outputId,
-          group: playback.group,
-          shuffle: playback.shuffle,
-          repeat: playback.repeat,
-        }),
-      ),
-      updatedAt: yield* Clock.currentTimeMillis,
-    };
-    yield* db
-      .insert(playbackSession)
-      .values({ slot: 1, ...row })
-      .onConflictDoUpdate({ target: playbackSession.slot, set: row });
-  });
+export const saveSession = Effect.fn("saveSession")(function* (state: SessionState) {
+  const db = yield* Database;
+  const playback = state.playback;
+  const row = {
+    entries: yield* Schema.encodeEffect(SavedEntries)(state.entries),
+    nextEntryId: state.nextEntryId,
+    queueVersion: state.queueVersion,
+    revision: playback.revision,
+    playback: yield* Schema.encodeEffect(SavedPlayback)(
+      new SavedPlayback({
+        state: playback.state,
+        entryId: playback.entryId,
+        positionMs: playback.positionMs,
+        outputId: playback.outputId,
+        group: playback.group,
+        shuffle: playback.shuffle,
+        repeat: playback.repeat,
+      }),
+    ),
+    updatedAt: yield* Clock.currentTimeMillis,
+  };
+  yield* db
+    .insert(playbackSession)
+    .values({ slot: 1, ...row })
+    .onConflictDoUpdate({ target: playbackSession.slot, set: row });
+});

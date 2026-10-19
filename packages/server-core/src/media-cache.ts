@@ -153,25 +153,24 @@ const makeMediaCache = Effect.gen(function* () {
   yield* evict;
 
   /** The complete file of the variant. It becomes the newest file for eviction. */
-  const find = (variantId: string) =>
-    Effect.gen(function* () {
-      const file = files.get(variantId);
-      if (file === undefined) return Option.none<CachedAudio>();
+  const find = Effect.fn("find")(function* (variantId: string) {
+    const file = files.get(variantId);
+    if (file === undefined) return Option.none<CachedAudio>();
 
-      // The mtime is the eviction order on disk, because many systems mount with `noatime`
-      const now = yield* Clock.currentTimeMillis;
-      const touched = new CachedAudio({ ...file, modifiedAt: now });
-      files.set(variantId, touched);
-      return yield* fs.utimes(filePath(file), now / 1000, now / 1000).pipe(
-        Effect.as(Option.some(touched)),
-        Effect.catch(() =>
-          Effect.sync(() => {
-            files.delete(variantId);
-            return Option.none<CachedAudio>();
-          }),
-        ),
-      );
-    });
+    // The mtime is the eviction order on disk, because many systems mount with `noatime`
+    const now = yield* Clock.currentTimeMillis;
+    const touched = new CachedAudio({ ...file, modifiedAt: now });
+    files.set(variantId, touched);
+    return yield* fs.utimes(filePath(file), now / 1000, now / 1000).pipe(
+      Effect.as(Option.some(touched)),
+      Effect.catch(() =>
+        Effect.sync(() => {
+          files.delete(variantId);
+          return Option.none<CachedAudio>();
+        }),
+      ),
+    );
+  });
 
   /** Reads a complete file. Eviction keeps it until the stream ends. */
   const read = (file: CachedAudio) =>
@@ -238,29 +237,28 @@ const makeMediaCache = Effect.gen(function* () {
         });
         yield* Effect.addFinalizer(() => (state.open ? discard : Effect.void));
 
-        const write = (chunk: Uint8Array) =>
-          Effect.gen(function* () {
-            if (!state.open) return;
+        const write = Effect.fn("write")(function* (chunk: Uint8Array) {
+          if (!state.open) return;
 
-            state.size += chunk.length;
-            if (state.size > maxFileBytes) {
-              yield* Effect.logInfo("Audio is too large for the cache").pipe(
-                Effect.annotateLogs({ variantId }),
-              );
-              return yield* discard;
-            }
+          state.size += chunk.length;
+          if (state.size > maxFileBytes) {
+            yield* Effect.logInfo("Audio is too large for the cache").pipe(
+              Effect.annotateLogs({ variantId }),
+            );
+            return yield* discard;
+          }
 
-            yield* file
-              .writeAll(chunk)
-              .pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("Cannot write to the media cache", error).pipe(
-                    Effect.annotateLogs({ variantId }),
-                    Effect.andThen(discard),
-                  ),
+          yield* file
+            .writeAll(chunk)
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot write to the media cache", error).pipe(
+                  Effect.annotateLogs({ variantId }),
+                  Effect.andThen(discard),
                 ),
-              );
-          });
+              ),
+            );
+        });
 
         const commit = Effect.gen(function* () {
           if (!state.open) return;
@@ -379,17 +377,16 @@ const makeMediaCache = Effect.gen(function* () {
     );
 
   /** Replaces the hint of `session`. An empty list removes it. */
-  const hint = (session: string, items: ReadonlyArray<PrefetchItem>) =>
-    Effect.gen(function* () {
-      if (items.length === 0) hints.delete(session);
-      else hints.set(session, items);
+  const hint = Effect.fn("hint")(function* (session: string, items: ReadonlyArray<PrefetchItem>) {
+    if (items.length === 0) hints.delete(session);
+    else hints.set(session, items);
 
-      const wanted = hinted();
-      for (const variantId of failed) {
-        if (!wanted.has(variantId)) failed.delete(variantId);
-      }
-      yield* schedule;
-    });
+    const wanted = hinted();
+    for (const variantId of failed) {
+      if (!wanted.has(variantId)) failed.delete(variantId);
+    }
+    yield* schedule;
+  });
 
   /** The complete files. Unlike `find`, it does not change the eviction order. */
   const list = Effect.sync(() => [...files.values()]);

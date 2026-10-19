@@ -43,20 +43,18 @@ export class PeerEchoes extends Context.Service<PeerEchoes, Map<string, Set<numb
 
 export const peerEchoesLayer = Layer.sync(PeerEchoes, () => new Map());
 
-const addEcho = (peer: string, changeSeq: number | undefined) =>
-  Effect.gen(function* () {
-    if (changeSeq === undefined) return;
-    const echoes = yield* PeerEchoes;
-    echoes.set(peer, (echoes.get(peer) ?? new Set()).add(changeSeq));
-  });
+const addEcho = Effect.fn("addEcho")(function* (peer: string, changeSeq: number | undefined) {
+  if (changeSeq === undefined) return;
+  const echoes = yield* PeerEchoes;
+  echoes.set(peer, (echoes.get(peer) ?? new Set()).add(changeSeq));
+});
 
 // Values before the cursor are no longer read, so they go
-const echoesAfter = (peer: string, cursor: PeerCursor) =>
-  Effect.gen(function* () {
-    const echoes = (yield* PeerEchoes).get(peer) ?? new Set();
-    for (const changeSeq of echoes) if (changeSeq < cursor.changeSeq) echoes.delete(changeSeq);
-    return [...echoes];
-  });
+const echoesAfter = Effect.fn("echoesAfter")(function* (peer: string, cursor: PeerCursor) {
+  const echoes = (yield* PeerEchoes).get(peer) ?? new Set();
+  for (const changeSeq of echoes) if (changeSeq < cursor.changeSeq) echoes.delete(changeSeq);
+  return [...echoes];
+});
 
 const checkVersion = (protocolVersion: number) =>
   protocolVersion === syncProtocolVersion
@@ -64,36 +62,35 @@ const checkVersion = (protocolVersion: number) =>
     : Effect.fail(new UpgradeRequired({ serverProtocolVersion: syncProtocolVersion }));
 
 /** Makes a token for the redeeming server. Only its hash stays here. */
-const redeem = (request: PeerRedeemRequest) =>
-  Effect.gen(function* () {
-    yield* checkVersion(request.protocolVersion);
-    const db = yield* Database;
-    const identity = yield* ReplicaDatabase;
-    const now = yield* Clock.currentTimeMillis;
-    if (!(yield* redeemCode(request.code))) {
-      return yield* new ServerPairingFailed({ reason: "invalid_code" });
-    }
-    if (request.replicaId === identity.replicaId) {
-      return yield* new ServerPairingFailed({ reason: "same_server" });
-    }
-    // Two independent workspaces never merge
-    if (request.workspaceId !== null && request.workspaceId !== identity.workspaceId) {
-      return yield* new ServerPairingFailed({ reason: "workspace_mismatch" });
-    }
+const redeem = Effect.fn("redeem")(function* (request: PeerRedeemRequest) {
+  yield* checkVersion(request.protocolVersion);
+  const db = yield* Database;
+  const identity = yield* ReplicaDatabase;
+  const now = yield* Clock.currentTimeMillis;
+  if (!(yield* redeemCode(request.code))) {
+    return yield* new ServerPairingFailed({ reason: "invalid_code" });
+  }
+  if (request.replicaId === identity.replicaId) {
+    return yield* new ServerPairingFailed({ reason: "same_server" });
+  }
+  // Two independent workspaces never merge
+  if (request.workspaceId !== null && request.workspaceId !== identity.workspaceId) {
+    return yield* new ServerPairingFailed({ reason: "workspace_mismatch" });
+  }
 
-    const token = hex(yield* randomBytes(32));
-    const tokenHash = yield* sha256(token);
-    yield* db
-      .insert(serverPeer)
-      .values({ replicaId: request.replicaId, tokenHash, createdAt: now })
-      .onConflictDoUpdate({ target: serverPeer.replicaId, set: { tokenHash } });
+  const token = hex(yield* randomBytes(32));
+  const tokenHash = yield* sha256(token);
+  yield* db
+    .insert(serverPeer)
+    .values({ replicaId: request.replicaId, tokenHash, createdAt: now })
+    .onConflictDoUpdate({ target: serverPeer.replicaId, set: { tokenHash } });
 
-    return new PeerLink({
-      token,
-      replicaId: ReplicaId.make(identity.replicaId),
-      workspaceId: WorkspaceId.make(identity.workspaceId),
-    });
+  return new PeerLink({
+    token,
+    replicaId: ReplicaId.make(identity.replicaId),
+    workspaceId: WorkspaceId.make(identity.workspaceId),
   });
+});
 
 export const peerAuthenticationLayer = Layer.effect(
   PeerAuthentication,
@@ -118,31 +115,29 @@ export const peerAuthenticationLayer = Layer.effect(
   }),
 );
 
-const peerPull = (request: PeerPullRequest) =>
-  Effect.gen(function* () {
-    yield* checkVersion(request.protocolVersion);
-    const db = yield* Database;
-    const identity = yield* ReplicaDatabase;
+const peerPull = Effect.fn("peerPull")(function* (request: PeerPullRequest) {
+  yield* checkVersion(request.protocolVersion);
+  const db = yield* Database;
+  const identity = yield* ReplicaDatabase;
 
-    // After a restore from a backup, the counter can give values again that the peer has
-    const reset = request.epoch !== null && request.epoch !== identity.epoch;
-    const cursor = reset ? new PeerCursor({ changeSeq: 0, rowKey: null }) : request.cursor;
-    const echoes = yield* echoesAfter(yield* CurrentPeer, cursor);
-    const page = yield* db.transaction(() => readChanges(cursor, pageLimit, echoes));
-    return new PeerPullResponse({
-      replicaId: ReplicaId.make(identity.replicaId),
-      workspaceId: WorkspaceId.make(identity.workspaceId),
-      epoch: identity.epoch,
-      ...page,
-    });
+  // After a restore from a backup, the counter can give values again that the peer has
+  const reset = request.epoch !== null && request.epoch !== identity.epoch;
+  const cursor = reset ? new PeerCursor({ changeSeq: 0, rowKey: null }) : request.cursor;
+  const echoes = yield* echoesAfter(yield* CurrentPeer, cursor);
+  const page = yield* db.transaction(() => readChanges(cursor, pageLimit, echoes));
+  return new PeerPullResponse({
+    replicaId: ReplicaId.make(identity.replicaId),
+    workspaceId: WorkspaceId.make(identity.workspaceId),
+    epoch: identity.epoch,
+    ...page,
   });
+});
 
-const peerPush = (request: PeerPushRequest) =>
-  Effect.gen(function* () {
-    yield* checkVersion(request.protocolVersion);
-    const db = yield* Database;
-    yield* addEcho(yield* CurrentPeer, yield* db.transaction(() => mergePeerRows(request.rows)));
-  });
+const peerPush = Effect.fn("peerPush")(function* (request: PeerPushRequest) {
+  yield* checkVersion(request.protocolVersion);
+  const db = yield* Database;
+  yield* addEcho(yield* CurrentPeer, yield* db.transaction(() => mergePeerRows(request.rows)));
+});
 
 const peerRevoke = Effect.gen(function* () {
   const db = yield* Database;
@@ -200,8 +195,8 @@ const peerConnection = (url: string, token: string | null) =>
   );
 
 // The answer of a peer that cannot be reached is not a pairing reason
-const redeemAt = (url: string, workspaceId: WorkspaceId | null, code: string) =>
-  Effect.gen(function* () {
+const redeemAt = Effect.fn("redeemAt")(
+  function* (url: string, workspaceId: WorkspaceId | null, code: string) {
     const identity = yield* ReplicaDatabase;
     const connection = yield* PeerConnection;
     return yield* connection.peerRedeem(
@@ -212,15 +207,18 @@ const redeemAt = (url: string, workspaceId: WorkspaceId | null, code: string) =>
         protocolVersion: syncProtocolVersion,
       }),
     );
-  }).pipe(
-    Effect.provide(peerConnection(url, null)),
-    Effect.catchTag("UpgradeRequired", () =>
-      Effect.fail(new ServerPairingFailed({ reason: "upgrade_required" })),
+  },
+  (effect, url) =>
+    effect.pipe(
+      Effect.provide(peerConnection(url, null)),
+      Effect.catchTag("UpgradeRequired", () =>
+        Effect.fail(new ServerPairingFailed({ reason: "upgrade_required" })),
+      ),
+      Effect.catchTag("RpcClientError", () =>
+        Effect.fail(new ServerPairingFailed({ reason: "unreachable" })),
+      ),
     ),
-    Effect.catchTag("RpcClientError", () =>
-      Effect.fail(new ServerPairingFailed({ reason: "unreachable" })),
-    ),
-  );
+);
 
 /** Only a replica that is not paired yet can join a workspace */
 export class JoinFailed extends Data.TaggedError("JoinFailed")<{
@@ -231,32 +229,34 @@ export class JoinFailed extends Data.TaggedError("JoinFailed")<{
 class OtherServer extends Data.TaggedError("OtherServer")<{}> {}
 
 /** Joins the workspace of the replica at `url` before this replica starts for the first time */
-export const joinWorkspace = (options: { readonly url: URL; readonly code: string }) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    if ((yield* db.$count(serverPeer)) > 0)
-      return yield* new JoinFailed({ reason: "already_joined" });
+export const joinWorkspace = Effect.fn("joinWorkspace")(function* (options: {
+  readonly url: URL;
+  readonly code: string;
+}) {
+  const db = yield* Database;
+  if ((yield* db.$count(serverPeer)) > 0)
+    return yield* new JoinFailed({ reason: "already_joined" });
 
-    const url = options.url.origin;
-    const link = yield* redeemAt(url, null, options.code).pipe(
-      Effect.mapError((error) => new JoinFailed({ reason: error.reason })),
-    );
-    const now = yield* Clock.currentTimeMillis;
+  const url = options.url.origin;
+  const link = yield* redeemAt(url, null, options.code).pipe(
+    Effect.mapError((error) => new JoinFailed({ reason: error.reason })),
+  );
+  const now = yield* Clock.currentTimeMillis;
 
-    yield* db.transaction(() =>
-      Effect.gen(function* () {
-        yield* db.update(replicaIdentity).set({ workspaceId: link.workspaceId });
-        yield* db.update(catalogAssertion).set({ workspaceId: link.workspaceId });
-        yield* db.insert(serverPeer).values({
-          replicaId: link.replicaId,
-          url,
-          token: link.token,
-          createdAt: now,
-        });
-      }),
-    );
-    return link;
-  });
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      yield* db.update(replicaIdentity).set({ workspaceId: link.workspaceId });
+      yield* db.update(catalogAssertion).set({ workspaceId: link.workspaceId });
+      yield* db.insert(serverPeer).values({
+        replicaId: link.replicaId,
+        url,
+        token: link.token,
+        createdAt: now,
+      });
+    }),
+  );
+  return link;
+});
 
 const peerSummary = (row: typeof serverPeer.$inferSelect) =>
   new ServerPeer({
@@ -269,32 +269,34 @@ const peerSummary = (row: typeof serverPeer.$inferSelect) =>
   });
 
 /** Pairs with a server of the same workspace, for example again after an unpair */
-export const pairServer = (options: { readonly url: URL; readonly code: string }) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const identity = yield* ReplicaDatabase;
-    const url = options.url.origin;
+export const pairServer = Effect.fn("pairServer")(function* (options: {
+  readonly url: URL;
+  readonly code: string;
+}) {
+  const db = yield* Database;
+  const identity = yield* ReplicaDatabase;
+  const url = options.url.origin;
 
-    const link = yield* redeemAt(url, WorkspaceId.make(identity.workspaceId), options.code);
-    const values = {
-      url,
-      token: link.token,
-      epoch: null,
-      pulledSeq: 0,
-      pulledRowKey: null,
-      pushedSeq: 0,
-      pushedRowKey: null,
-      error: null,
-    };
-    const [row] = yield* db
-      .insert(serverPeer)
-      .values({ replicaId: link.replicaId, createdAt: yield* Clock.currentTimeMillis, ...values })
-      .onConflictDoUpdate({ target: serverPeer.replicaId, set: values })
-      .returning();
-    if (row === undefined) return yield* Effect.die("The peer row is missing");
-    yield* PubSub.publish(yield* SyncHub, undefined);
-    return peerSummary(row);
-  });
+  const link = yield* redeemAt(url, WorkspaceId.make(identity.workspaceId), options.code);
+  const values = {
+    url,
+    token: link.token,
+    epoch: null,
+    pulledSeq: 0,
+    pulledRowKey: null,
+    pushedSeq: 0,
+    pushedRowKey: null,
+    error: null,
+  };
+  const [row] = yield* db
+    .insert(serverPeer)
+    .values({ replicaId: link.replicaId, createdAt: yield* Clock.currentTimeMillis, ...values })
+    .onConflictDoUpdate({ target: serverPeer.replicaId, set: values })
+    .returning();
+  if (row === undefined) return yield* Effect.die("The peer row is missing");
+  yield* PubSub.publish(yield* SyncHub, undefined);
+  return peerSummary(row);
+});
 
 export const listServerPeers = Effect.gen(function* () {
   const db = yield* Database;
@@ -303,42 +305,43 @@ export const listServerPeers = Effect.gen(function* () {
 });
 
 /** Removes the pairing here, and on the peer when this server connects to it and reaches it */
-export const unpairServer = (replicaId: ReplicaId) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db.select().from(serverPeer).where(eq(serverPeer.replicaId, replicaId));
-    if (row === undefined) return yield* new ServerPairingFailed({ reason: "not_found" });
+export const unpairServer = Effect.fn("unpairServer")(function* (replicaId: ReplicaId) {
+  const db = yield* Database;
+  const [row] = yield* db.select().from(serverPeer).where(eq(serverPeer.replicaId, replicaId));
+  if (row === undefined) return yield* new ServerPairingFailed({ reason: "not_found" });
 
-    if (row.url !== null && row.token !== null) {
-      yield* Effect.gen(function* () {
-        yield* (yield* PeerConnection).peerRevoke();
-      }).pipe(
-        Effect.provide(peerConnection(row.url, row.token)),
-        Effect.timeout("5 seconds"),
-        Effect.catchCause(() =>
-          Effect.logWarning("The peer did not confirm the unpair").pipe(
-            Effect.annotateLogs({ peer: replicaId }),
-          ),
+  if (row.url !== null && row.token !== null) {
+    yield* Effect.gen(function* () {
+      yield* (yield* PeerConnection).peerRevoke();
+    }).pipe(
+      Effect.provide(peerConnection(row.url, row.token)),
+      Effect.timeout("5 seconds"),
+      Effect.catchCause(() =>
+        Effect.logWarning("The peer did not confirm the unpair").pipe(
+          Effect.annotateLogs({ peer: replicaId }),
         ),
-      );
-    }
-    yield* db.delete(serverPeer).where(eq(serverPeer.replicaId, replicaId));
-  });
+      ),
+    );
+  }
+  yield* db.delete(serverPeer).where(eq(serverPeer.replicaId, replicaId));
+});
 
 /** Stored on the peer row. Never a message: it can contain the URL. */
 class PeerSyncFailed extends Data.TaggedError("PeerSyncFailed")<{
   readonly reason: "revoked" | "upgrade_required" | "unreachable" | "other_server";
 }> {}
 
-const saveState = (replicaId: string, state: Partial<typeof serverPeer.$inferInsert>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    yield* db.update(serverPeer).set(state).where(eq(serverPeer.replicaId, replicaId));
-  });
+const saveState = Effect.fn("saveState")(function* (
+  replicaId: string,
+  state: Partial<typeof serverPeer.$inferInsert>,
+) {
+  const db = yield* Database;
+  yield* db.update(serverPeer).set(state).where(eq(serverPeer.replicaId, replicaId));
+});
 
 /** Pulls the peer's rows after the cursor, then pushes this replica's rows after the peer's cursor */
-const syncPeer = (peer: typeof serverPeer.$inferSelect) =>
-  Effect.gen(function* () {
+const syncPeer = Effect.fn("syncPeer")(
+  function* (peer: typeof serverPeer.$inferSelect) {
     const db = yield* Database;
     const connection = yield* PeerConnection;
     let epoch = peer.epoch;
@@ -390,16 +393,19 @@ const syncPeer = (peer: typeof serverPeer.$inferSelect) =>
     }
 
     yield* saveState(peer.replicaId, { syncedAt: yield* Clock.currentTimeMillis, error: null });
-  }).pipe(
-    Effect.provide(peerConnection(peer.url ?? "", peer.token)),
-    Effect.catchTags({
-      Unauthorized: () => Effect.fail(new PeerSyncFailed({ reason: "revoked" })),
-      UpgradeRequired: () => Effect.fail(new PeerSyncFailed({ reason: "upgrade_required" })),
-      RpcClientError: () => Effect.fail(new PeerSyncFailed({ reason: "unreachable" })),
-      OtherServer: () => Effect.fail(new PeerSyncFailed({ reason: "other_server" })),
-    }),
-    orDieOnDatabaseError("syncPeer"),
-  );
+  },
+  (effect, peer) =>
+    effect.pipe(
+      Effect.provide(peerConnection(peer.url ?? "", peer.token)),
+      Effect.catchTags({
+        Unauthorized: () => Effect.fail(new PeerSyncFailed({ reason: "revoked" })),
+        UpgradeRequired: () => Effect.fail(new PeerSyncFailed({ reason: "upgrade_required" })),
+        RpcClientError: () => Effect.fail(new PeerSyncFailed({ reason: "unreachable" })),
+        OtherServer: () => Effect.fail(new PeerSyncFailed({ reason: "other_server" })),
+      }),
+      orDieOnDatabaseError("syncPeer"),
+    ),
+);
 
 /**
  * Syncs with each peer that this server connects to, after each local commit and every 5 s. A

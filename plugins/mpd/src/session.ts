@@ -101,102 +101,98 @@ const emptyView = new View({
 });
 
 /** Follows `mirror` for the lifetime of the scope. Completes at the first `Snapshot`. */
-export const openSession = (mirror: SessionMirror["Service"]) =>
-  Effect.gen(function* () {
-    const session = Session.of({
-      mirror,
-      view: yield* SubscriptionRef.make(emptyView),
-      changed: yield* SubscriptionRef.make<ReadonlySet<string>>(new Set()),
-    });
-    const ready = yield* Deferred.make<void>();
-
-    const apply = (event: typeof SessionEvent.Type) =>
-      Effect.gen(function* () {
-        const receivedAt = yield* Clock.currentTimeMillis;
-        const before = yield* SubscriptionRef.get(session.view);
-        if (SessionEvent.guards.QueueChanged(event) && event.fromVersion !== before.queueVersion) {
-          return yield* new MissedQueueChange();
-        }
-        yield* updateView(session, (current) =>
-          SessionEvent.match(event, {
-            Snapshot: (snapshot) =>
-              new View({
-                ...withQueue(current, snapshot.queueVersion, snapshot.entries),
-                playback: snapshot.playback,
-                outputs: snapshot.outputs,
-                clockOffset: snapshot.serverTime - receivedAt,
-              }),
-            QueueChanged: (change) =>
-              new View({
-                ...current,
-                ...withQueue(
-                  current,
-                  change.version,
-                  applySplices(current.entries, change.splices),
-                ),
-              }),
-            // The sample with the shortest delay gives the best offset
-            PlaybackChanged: (change) =>
-              new View({
-                ...current,
-                playback: change.playback,
-                clockOffset: Math.max(current.clockOffset, change.serverTime - receivedAt),
-              }),
-            OutputsChanged: ({ outputs }) => new View({ ...current, outputs }),
-            Superseded: () => current,
-          }),
-        );
-        yield* Deferred.succeed(ready, undefined);
-      });
-
-    // Each run of `events` subscribes again and starts with a `Snapshot`
-    yield* mirror.events.pipe(
-      Stream.runForEach(apply),
-      Effect.ignore,
-      Effect.repeat(Schedule.spaced("1 second")),
-      Effect.forkScoped,
-    );
-    yield* Stream.runForEach(mirror.libraryChanges, (subsystem) => mark(session, [subsystem])).pipe(
-      Effect.forkScoped,
-    );
-
-    yield* Deferred.await(ready);
-    // The first `Snapshot` is no change for the client
-    yield* SubscriptionRef.set(session.changed, new Set());
-    return session;
+export const openSession = Effect.fn("openSession")(function* (mirror: SessionMirror["Service"]) {
+  const session = Session.of({
+    mirror,
+    view: yield* SubscriptionRef.make(emptyView),
+    changed: yield* SubscriptionRef.make<ReadonlySet<string>>(new Set()),
   });
+  const ready = yield* Deferred.make<void>();
+
+  const apply = Effect.fn("apply")(function* (event: typeof SessionEvent.Type) {
+    const receivedAt = yield* Clock.currentTimeMillis;
+    const before = yield* SubscriptionRef.get(session.view);
+    if (SessionEvent.guards.QueueChanged(event) && event.fromVersion !== before.queueVersion) {
+      return yield* new MissedQueueChange();
+    }
+    yield* updateView(session, (current) =>
+      SessionEvent.match(event, {
+        Snapshot: (snapshot) =>
+          new View({
+            ...withQueue(current, snapshot.queueVersion, snapshot.entries),
+            playback: snapshot.playback,
+            outputs: snapshot.outputs,
+            clockOffset: snapshot.serverTime - receivedAt,
+          }),
+        QueueChanged: (change) =>
+          new View({
+            ...current,
+            ...withQueue(current, change.version, applySplices(current.entries, change.splices)),
+          }),
+        // The sample with the shortest delay gives the best offset
+        PlaybackChanged: (change) =>
+          new View({
+            ...current,
+            playback: change.playback,
+            clockOffset: Math.max(current.clockOffset, change.serverTime - receivedAt),
+          }),
+        OutputsChanged: ({ outputs }) => new View({ ...current, outputs }),
+        Superseded: () => current,
+      }),
+    );
+    yield* Deferred.succeed(ready, undefined);
+  });
+
+  // Each run of `events` subscribes again and starts with a `Snapshot`
+  yield* mirror.events.pipe(
+    Stream.runForEach(apply),
+    Effect.ignore,
+    Effect.repeat(Schedule.spaced("1 second")),
+    Effect.forkScoped,
+  );
+  yield* Stream.runForEach(mirror.libraryChanges, (subsystem) => mark(session, [subsystem])).pipe(
+    Effect.forkScoped,
+  );
+
+  yield* Deferred.await(ready);
+  // The first `Snapshot` is no change for the client
+  yield* SubscriptionRef.set(session.changed, new Set());
+  return session;
+});
 
 /** Completes after the view shows the change */
-export const control = (command: typeof SessionCommand.Type, ifQueueVersion: number | null) =>
-  Effect.gen(function* () {
-    const session = yield* Session;
-    const result = yield* session.mirror.control(command, ifQueueVersion);
-    yield* SubscriptionRef.changes(session.view).pipe(
-      Stream.filter(
-        (view) =>
-          view.queueVersion >= result.queueVersion && view.playback.revision >= result.revision,
-      ),
-      Stream.runHead,
-    );
-    // These commands change no revision, so the view shows them before the event comes
-    yield* updateView(session, (view) =>
-      SessionCommand.matchOrElse(
-        command,
-        {
-          SetShuffle: ({ on }) =>
-            new View({ ...view, playback: new Playback({ ...view.playback, shuffle: on }) }),
-          SetRepeat: ({ mode }) =>
-            new View({ ...view, playback: new Playback({ ...view.playback, repeat: mode }) }),
-          SetVolume: ({ outputId, volume }) =>
-            new View({
-              ...view,
-              outputs: view.outputs.map((output) =>
-                output.id === outputId ? new Output({ ...output, volume }) : output,
-              ),
-            }),
-        },
-        () => view,
-      ),
-    );
-    return result.entryIds;
-  });
+export const control = Effect.fn("control")(function* (
+  command: typeof SessionCommand.Type,
+  ifQueueVersion: number | null,
+) {
+  const session = yield* Session;
+  const result = yield* session.mirror.control(command, ifQueueVersion);
+  yield* SubscriptionRef.changes(session.view).pipe(
+    Stream.filter(
+      (view) =>
+        view.queueVersion >= result.queueVersion && view.playback.revision >= result.revision,
+    ),
+    Stream.runHead,
+  );
+  // These commands change no revision, so the view shows them before the event comes
+  yield* updateView(session, (view) =>
+    SessionCommand.matchOrElse(
+      command,
+      {
+        SetShuffle: ({ on }) =>
+          new View({ ...view, playback: new Playback({ ...view.playback, shuffle: on }) }),
+        SetRepeat: ({ mode }) =>
+          new View({ ...view, playback: new Playback({ ...view.playback, repeat: mode }) }),
+        SetVolume: ({ outputId, volume }) =>
+          new View({
+            ...view,
+            outputs: view.outputs.map((output) =>
+              output.id === outputId ? new Output({ ...output, volume }) : output,
+            ),
+          }),
+      },
+      () => view,
+    ),
+  );
+  return result.entryIds;
+});

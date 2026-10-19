@@ -166,269 +166,267 @@ const frameAt = (epoch: Epoch, us: number) =>
   epoch.frame + Math.floor(((us - epoch.playAtUs) * timelineRate) / 1_000_000);
 
 /** `input` gives the audio of an entry. Closing the scope stops the renderer. */
-export const openSessionRenderer = <E, F>(
+export const openSessionRenderer = Effect.fn("openSessionRenderer")(function* <E, F>(
   input: (entry: QueueEntry) => Effect.Effect<RenderInput<F>, E>,
-) =>
-  Effect.gen(function* () {
-    const scope = yield* Effect.scope;
-    const lock = yield* Semaphore.make(1);
-    const locked = lock.withPermits(1);
-    const events = yield* PubSub.unbounded<RenderEvent>();
-    const outputs = new Map<
-      string,
-      { readonly output: TimedOutput; readonly watch: Fiber.Fiber<void> }
-    >();
-    const inputs = new Map<EntryId, Input<E | F>>();
-    const resolved = new Map<EntryId, Entry>();
+) {
+  const scope = yield* Effect.scope;
+  const lock = yield* Semaphore.make(1);
+  const locked = lock.withPermits(1);
+  const events = yield* PubSub.unbounded<RenderEvent>();
+  const outputs = new Map<
+    string,
+    { readonly output: TimedOutput; readonly watch: Fiber.Fiber<void> }
+  >();
+  const inputs = new Map<EntryId, Input<E | F>>();
+  const resolved = new Map<EntryId, Entry>();
 
-    let queue: ReadonlyArray<QueueEntry> = [];
-    let crossfadeSeconds = 0;
-    let djStyle: DjStyle | undefined;
-    // The next unused timeline frame. Epochs never reuse a frame.
-    let timeline = 0;
-    // What plays when no epoch has audio on the timeline
-    let start: RenderPosition | undefined;
+  let queue: ReadonlyArray<QueueEntry> = [];
+  let crossfadeSeconds = 0;
+  let djStyle: DjStyle | undefined;
+  // The next unused timeline frame. Epochs never reuse a frame.
+  let timeline = 0;
+  // What plays when no epoch has audio on the timeline
+  let start: RenderPosition | undefined;
 
-    let fiber: Fiber.Fiber<void> | undefined;
-    let player: Renderer | undefined;
-    let epoch: Epoch | undefined;
-    let spans: Array<Span> = [];
-    // The current entry at the last rendered frame
-    let rendered: string | undefined;
+  let fiber: Fiber.Fiber<void> | undefined;
+  let player: Renderer | undefined;
+  let epoch: Epoch | undefined;
+  let spans: Array<Span> = [];
+  // The current entry at the last rendered frame
+  let rendered: string | undefined;
 
-    const publish = (event: RenderEvent) => PubSub.publish(events, event);
-    const indexOf = (id: string | undefined) => queue.findIndex((entry) => String(entry.id) === id);
+  const publish = (event: RenderEvent) => PubSub.publish(events, event);
+  const indexOf = (id: string | undefined) => queue.findIndex((entry) => String(entry.id) === id);
 
-    const lose = (id: string, output: TimedOutput, error: OutputError) =>
-      Effect.gen(function* () {
-        if (outputs.get(id)?.output !== output) return;
-        outputs.delete(id);
-        yield* publish(new OutputLost({ outputId: id, error }));
-      });
+  const lose = Effect.fn("lose")(function* (id: string, output: TimedOutput, error: OutputError) {
+    if (outputs.get(id)?.output !== output) return;
+    outputs.delete(id);
+    yield* publish(new OutputLost({ outputId: id, error }));
+  });
 
-    const eachOutput = (f: (output: TimedOutput) => Effect.Effect<void, OutputError>) =>
-      Effect.forEach(
-        [...outputs],
-        ([id, { output }]) => f(output).pipe(Effect.catch((error) => lose(id, output, error))),
-        { concurrency: "unbounded", discard: true },
-      );
+  const eachOutput = (f: (output: TimedOutput) => Effect.Effect<void, OutputError>) =>
+    Effect.forEach(
+      [...outputs],
+      ([id, { output }]) => f(output).pipe(Effect.catch((error) => lose(id, output, error))),
+      { concurrency: "unbounded", discard: true },
+    );
 
-    const maxLeadUs = () =>
-      Math.max(0, ...[...outputs.values()].map(({ output }) => output.leadMs * 1000));
+  const maxLeadUs = () =>
+    Math.max(0, ...[...outputs.values()].map(({ output }) => output.leadMs * 1000));
 
-    const positionAt = (us: number) => {
-      if (epoch === undefined) return start;
-      const frame = frameAt(epoch, us);
-      const span = spans.findLast((each) => each.current && each.frame <= frame);
-      if (frame < epoch.frame || span === undefined) return start;
-      return new RenderPosition({
-        entryId: EntryId.make(Number(span.entry)),
-        positionMs: framesToMs(span.position + Math.min(frame - span.frame, span.frames)),
-      });
-    };
-
-    // The resolved entries from the one that the player renders now
-    const syncPlayer = Effect.suspend(() => {
-      if (player === undefined) return Effect.void;
-      const entries: Array<Entry> = [];
-      for (const entry of queue.slice(Math.max(0, indexOf(rendered)))) {
-        const ready = resolved.get(entry.id);
-        if (ready === undefined) break;
-        entries.push(ready);
-      }
-      return player.setQueue(entries);
+  const positionAt = (us: number) => {
+    if (epoch === undefined) return start;
+    const frame = frameAt(epoch, us);
+    const span = spans.findLast((each) => each.current && each.frame <= frame);
+    if (frame < epoch.frame || span === undefined) return start;
+    return new RenderPosition({
+      entryId: EntryId.make(Number(span.entry)),
+      positionMs: framesToMs(span.position + Math.min(frame - span.frame, span.frames)),
     });
+  };
 
-    const load = (entry: QueueEntry) =>
-      Effect.gen(function* () {
-        const ready = yield* Deferred.make<Entry, E | F>();
-        const loading = Effect.gen(function* () {
-          const audio = yield* input(entry);
-          const window = new ByteWindow();
-          const loaded = new Entry({
-            id: String(entry.id),
-            codec: audio.codec,
-            album: entry.source.albumRef ?? undefined,
-            bytes: () => window.bytes.subarray(0, window.length),
-            start: () => window.start,
-            complete: () => window.complete,
-            needs: (offset) => {
-              window.needs = offset;
-            },
-            loudness: audio.loudness,
-            dj: audio.dj,
-          });
-          resolved.set(entry.id, loaded);
-          yield* Deferred.succeed(ready, loaded);
-          yield* locked(syncPlayer);
+  // The resolved entries from the one that the player renders now
+  const syncPlayer = Effect.suspend(() => {
+    if (player === undefined) return Effect.void;
+    const entries: Array<Entry> = [];
+    for (const entry of queue.slice(Math.max(0, indexOf(rendered)))) {
+      const ready = resolved.get(entry.id);
+      if (ready === undefined) break;
+      entries.push(ready);
+    }
+    return player.setQueue(entries);
+  });
 
-          const waitWhileFull = Effect.gen(function* () {
-            while (window.full()) {
-              if (window.rewound()) return yield* new Rewound();
-              window.compact();
-              yield* Effect.sleep("20 millis");
-            }
-            if (window.rewound()) return yield* new Rewound();
-          });
-          const fill = Effect.gen(function* () {
-            window.reset();
-            yield* Stream.runForEach(audio.bytes, (chunk) =>
-              Effect.sync(() => window.append(chunk)).pipe(Effect.andThen(waitWhileFull)),
-            );
-            window.complete = true;
-            while (!window.rewound()) yield* Effect.sleep("50 millis");
-            return yield* new Rewound();
-          });
-          return yield* fill.pipe(
-            Effect.catchTag("Rewound", () => Effect.void),
-            Effect.forever,
-          );
-        }).pipe(
-          Effect.catch((cause) =>
-            Deferred.fail(ready, cause).pipe(
-              Effect.andThen(publish(new EntryFailed({ entryId: entry.id, cause }))),
-            ),
-          ),
-          Effect.asVoid,
-        );
-        inputs.set(entry.id, new Input({ ready, fiber: yield* Effect.forkIn(loading, scope) }));
+  const load = Effect.fn("load")(function* (entry: QueueEntry) {
+    const ready = yield* Deferred.make<Entry, E | F>();
+    const loading = Effect.gen(function* () {
+      const audio = yield* input(entry);
+      const window = new ByteWindow();
+      const loaded = new Entry({
+        id: String(entry.id),
+        codec: audio.codec,
+        album: entry.source.albumRef ?? undefined,
+        bytes: () => window.bytes.subarray(0, window.length),
+        start: () => window.start,
+        complete: () => window.complete,
+        needs: (offset) => {
+          window.needs = offset;
+        },
+        loudness: audio.loudness,
+        dj: audio.dj,
       });
+      resolved.set(entry.id, loaded);
+      yield* Deferred.succeed(ready, loaded);
+      yield* locked(syncPlayer);
 
-    // Loads the entries from the one that plays now, and frees the others. The entry before it
-    // can still fade out.
-    const loadWindow = Effect.gen(function* () {
-      const audible = positionAt(yield* nowUs);
-      const from = Math.max(0, indexOf(String(audible?.entryId)) - 1);
-      const wanted = queue.slice(from, Math.max(from, indexOf(rendered)) + inputWindow);
-      for (const [id, each] of inputs) {
-        if (wanted.some((entry) => entry.id === id)) continue;
-        inputs.delete(id);
-        resolved.delete(id);
-        yield* Fiber.interrupt(each.fiber);
-      }
-      yield* Effect.forEach(wanted, (entry) => (inputs.has(entry.id) ? Effect.void : load(entry)), {
-        discard: true,
-      });
-    });
-
-    const clearEpoch = () => {
-      fiber = undefined;
-      player = undefined;
-      epoch = undefined;
-      spans = [];
-      rendered = undefined;
-    };
-
-    const stopEpoch = Effect.gen(function* () {
-      const running = fiber;
-      if (running === undefined) return;
-      clearEpoch();
-      yield* Fiber.interrupt(running);
-      yield* eachOutput((output) => output.flush);
-    });
-
-    // Publishes `started` and shows its entry when it becomes audible
-    const announce = (started: EntryStarted) =>
-      Effect.gen(function* () {
-        yield* sleepUntil(started.atUs);
-        yield* publish(started);
-        const entry = queue.find((each) => each.id === started.entryId);
-        if (entry === undefined) return;
-        const media = new TimedMedia({
-          title: entry.source.title,
-          artist: entry.source.artist,
-          album: entry.source.album,
-          artworkUrl: entry.source.artworkUrl,
-          startAtUs: started.atUs - started.positionMs * 1000,
-          durationMs: entry.source.durationMs,
-        });
-        yield* Effect.forEach(
-          [...outputs.values()],
-          ({ output }) =>
-            output
-              .setMedia(media)
-              .pipe(Effect.catch((error) => Effect.logWarning("Timed media failed", error.reason))),
-          { concurrency: "unbounded", discard: true },
-        );
-      });
-
-    const runEpoch = (ready: Deferred.Deferred<Entry, E | F>, positionMs: number) =>
-      Effect.gen(function* () {
-        // The loader publishes the failure
-        if (Exit.isFailure(yield* Effect.exit(Deferred.await(ready)))) return;
-
-        const current = yield* openRenderer;
-        yield* current.setCrossfade(crossfadeSeconds);
-        yield* current.setDj(djStyle);
-        player = current;
-        yield* locked(syncPlayer);
-        yield* current.seek(Math.round((positionMs * timelineRate) / 1000));
-
-        // Nothing goes on the timeline before the first frame has its bytes
-        let block = yield* current.render(1);
-        while (block.waiting) {
+      const waitWhileFull = Effect.gen(function* () {
+        while (window.full()) {
+          if (window.rewound()) return yield* new Rewound();
+          window.compact();
           yield* Effect.sleep("20 millis");
-          block = yield* current.render(1);
         }
-        const at = new Epoch({
-          frame: timeline,
-          playAtUs: (yield* nowUs) + maxLeadUs() + startUs,
-          offset: timeline - block.frame,
-        });
-        epoch = at;
-
-        let announced: string | undefined;
-        let end = at.frame;
-        for (;;) {
-          const blockFrame = block.frame + at.offset;
-          timeline = blockFrame + block.samples.length / 2;
-          for (const span of block.spans) {
-            const shifted = new Span({ ...span, frame: span.frame + at.offset });
-            spans.push(shifted);
-            end = Math.max(end, shifted.frame + shifted.frames);
-            if (!shifted.current) continue;
-            rendered = shifted.entry;
-            if (shifted.entry === announced) continue;
-            announced = shifted.entry;
-            yield* Effect.forkChild(
-              announce(
-                new EntryStarted({
-                  entryId: EntryId.make(Number(shifted.entry)),
-                  positionMs: framesToMs(shifted.position),
-                  frame: shifted.frame,
-                  atUs: playAt(at, shifted.frame),
-                }),
-              ),
-            );
-          }
-          spans = spans.filter((span) => span.frame + span.frames > blockFrame - spanHistoryFrames);
-          if (block.waiting) yield* Effect.logWarning("Timed output underrun", { blockFrame });
-          yield* locked(loadWindow);
-
-          const blockAt = playAt(at, blockFrame);
-          yield* sleepUntil(blockAt - maxLeadUs() - aheadUs);
-          const samples = block.samples;
-          yield* eachOutput((output) => output.write(blockAt, samples));
-
-          // The block of silence after the end goes out too: a receiver can pad the last audio
-          // to its packet size
-          const resolving = queue
-            .slice(indexOf(rendered) + 1)
-            .some((entry) => !resolved.has(entry.id));
-          if (block.spans.length === 0 && !block.waiting && !resolving) break;
-          block = yield* current.render(blockFrames);
-        }
-
-        yield* sleepUntil(playAt(at, end));
-        yield* locked(
-          Effect.gen(function* () {
-            clearEpoch();
-            start = undefined;
-            yield* eachOutput((output) => output.flush);
-            yield* publish(new Ended({ atUs: playAt(at, end) }));
-          }),
+        if (window.rewound()) return yield* new Rewound();
+      });
+      const fill = Effect.gen(function* () {
+        window.reset();
+        yield* Stream.runForEach(audio.bytes, (chunk) =>
+          Effect.sync(() => window.append(chunk)).pipe(Effect.andThen(waitWhileFull)),
         );
-      }).pipe(
+        window.complete = true;
+        while (!window.rewound()) yield* Effect.sleep("50 millis");
+        return yield* new Rewound();
+      });
+      return yield* fill.pipe(
+        Effect.catchTag("Rewound", () => Effect.void),
+        Effect.forever,
+      );
+    }).pipe(
+      Effect.catch((cause) =>
+        Deferred.fail(ready, cause).pipe(
+          Effect.andThen(publish(new EntryFailed({ entryId: entry.id, cause }))),
+        ),
+      ),
+      Effect.asVoid,
+    );
+    inputs.set(entry.id, new Input({ ready, fiber: yield* Effect.forkIn(loading, scope) }));
+  });
+
+  // Loads the entries from the one that plays now, and frees the others. The entry before it
+  // can still fade out.
+  const loadWindow = Effect.gen(function* () {
+    const audible = positionAt(yield* nowUs);
+    const from = Math.max(0, indexOf(String(audible?.entryId)) - 1);
+    const wanted = queue.slice(from, Math.max(from, indexOf(rendered)) + inputWindow);
+    for (const [id, each] of inputs) {
+      if (wanted.some((entry) => entry.id === id)) continue;
+      inputs.delete(id);
+      resolved.delete(id);
+      yield* Fiber.interrupt(each.fiber);
+    }
+    yield* Effect.forEach(wanted, (entry) => (inputs.has(entry.id) ? Effect.void : load(entry)), {
+      discard: true,
+    });
+  });
+
+  const clearEpoch = () => {
+    fiber = undefined;
+    player = undefined;
+    epoch = undefined;
+    spans = [];
+    rendered = undefined;
+  };
+
+  const stopEpoch = Effect.gen(function* () {
+    const running = fiber;
+    if (running === undefined) return;
+    clearEpoch();
+    yield* Fiber.interrupt(running);
+    yield* eachOutput((output) => output.flush);
+  });
+
+  // Publishes `started` and shows its entry when it becomes audible
+  const announce = Effect.fn("announce")(function* (started: EntryStarted) {
+    yield* sleepUntil(started.atUs);
+    yield* publish(started);
+    const entry = queue.find((each) => each.id === started.entryId);
+    if (entry === undefined) return;
+    const media = new TimedMedia({
+      title: entry.source.title,
+      artist: entry.source.artist,
+      album: entry.source.album,
+      artworkUrl: entry.source.artworkUrl,
+      startAtUs: started.atUs - started.positionMs * 1000,
+      durationMs: entry.source.durationMs,
+    });
+    yield* Effect.forEach(
+      [...outputs.values()],
+      ({ output }) =>
+        output
+          .setMedia(media)
+          .pipe(Effect.catch((error) => Effect.logWarning("Timed media failed", error.reason))),
+      { concurrency: "unbounded", discard: true },
+    );
+  });
+
+  const runEpoch = Effect.fn("runEpoch")(
+    function* (ready: Deferred.Deferred<Entry, E | F>, positionMs: number) {
+      // The loader publishes the failure
+      if (Exit.isFailure(yield* Effect.exit(Deferred.await(ready)))) return;
+
+      const current = yield* openRenderer;
+      yield* current.setCrossfade(crossfadeSeconds);
+      yield* current.setDj(djStyle);
+      player = current;
+      yield* locked(syncPlayer);
+      yield* current.seek(Math.round((positionMs * timelineRate) / 1000));
+
+      // Nothing goes on the timeline before the first frame has its bytes
+      let block = yield* current.render(1);
+      while (block.waiting) {
+        yield* Effect.sleep("20 millis");
+        block = yield* current.render(1);
+      }
+      const at = new Epoch({
+        frame: timeline,
+        playAtUs: (yield* nowUs) + maxLeadUs() + startUs,
+        offset: timeline - block.frame,
+      });
+      epoch = at;
+
+      let announced: string | undefined;
+      let end = at.frame;
+      for (;;) {
+        const blockFrame = block.frame + at.offset;
+        timeline = blockFrame + block.samples.length / 2;
+        for (const span of block.spans) {
+          const shifted = new Span({ ...span, frame: span.frame + at.offset });
+          spans.push(shifted);
+          end = Math.max(end, shifted.frame + shifted.frames);
+          if (!shifted.current) continue;
+          rendered = shifted.entry;
+          if (shifted.entry === announced) continue;
+          announced = shifted.entry;
+          yield* Effect.forkChild(
+            announce(
+              new EntryStarted({
+                entryId: EntryId.make(Number(shifted.entry)),
+                positionMs: framesToMs(shifted.position),
+                frame: shifted.frame,
+                atUs: playAt(at, shifted.frame),
+              }),
+            ),
+          );
+        }
+        spans = spans.filter((span) => span.frame + span.frames > blockFrame - spanHistoryFrames);
+        if (block.waiting) yield* Effect.logWarning("Timed output underrun", { blockFrame });
+        yield* locked(loadWindow);
+
+        const blockAt = playAt(at, blockFrame);
+        yield* sleepUntil(blockAt - maxLeadUs() - aheadUs);
+        const samples = block.samples;
+        yield* eachOutput((output) => output.write(blockAt, samples));
+
+        // The block of silence after the end goes out too: a receiver can pad the last audio
+        // to its packet size
+        const resolving = queue
+          .slice(indexOf(rendered) + 1)
+          .some((entry) => !resolved.has(entry.id));
+        if (block.spans.length === 0 && !block.waiting && !resolving) break;
+        block = yield* current.render(blockFrames);
+      }
+
+      yield* sleepUntil(playAt(at, end));
+      yield* locked(
+        Effect.gen(function* () {
+          clearEpoch();
+          start = undefined;
+          yield* eachOutput((output) => output.flush);
+          yield* publish(new Ended({ atUs: playAt(at, end) }));
+        }),
+      );
+    },
+    (effect) =>
+      effect.pipe(
         Effect.scoped,
         Effect.catchTag("EntryError", (error) =>
           locked(
@@ -442,103 +440,101 @@ export const openSessionRenderer = <E, F>(
             }),
           ),
         ),
-      );
+      ),
+  );
 
-    const play = (entries: ReadonlyArray<QueueEntry>, positionMs: number) =>
-      Effect.gen(function* () {
-        yield* stopEpoch;
-        queue = entries;
-        const [first] = entries;
-        const position = Math.max(0, positionMs);
-        start =
-          first === undefined
-            ? undefined
-            : new RenderPosition({ entryId: first.id, positionMs: position });
-        yield* loadWindow;
-        const ready = first === undefined ? undefined : inputs.get(first.id)?.ready;
-        if (ready === undefined) return;
-        fiber = yield* Effect.forkIn(runEpoch(ready, position), scope);
-      });
-
-    const setQueue = (entries: ReadonlyArray<QueueEntry>) =>
-      Effect.gen(function* () {
-        const now = yield* nowUs;
-        const audible = positionAt(now);
-        if (epoch === undefined || audible === undefined) {
-          if (fiber === undefined) {
-            queue = entries;
-            return;
-          }
-          const from = entries[0]?.id === start?.entryId ? start?.positionMs : undefined;
-          return yield* play(entries, from ?? 0);
-        }
-        if (entries[0]?.id !== audible.entryId) return yield* play(entries, 0);
-
-        // Entries in the sent audio, without the one that fades out before the current one
-        const frame = frameAt(epoch, now);
-        const from = indexOf(String(audible.entryId));
-        const sent = new Set(
-          spans
-            .filter((span) => span.frame + span.frames > frame && indexOf(span.entry) >= from)
-            .map((span) => span.entry),
-        );
-        if (![...sent].every((id, index) => String(entries[index]?.id) === id)) {
-          return yield* play(entries, audible.positionMs);
-        }
-        queue = entries;
-        yield* loadWindow;
-        yield* syncPlayer;
-      });
-
-    const pause = Effect.gen(function* () {
-      const position = positionAt(yield* nowUs);
-      yield* stopEpoch;
-      start = position;
-      return position;
-    });
-
-    const setCrossfade = (seconds: number) =>
-      Effect.gen(function* () {
-        crossfadeSeconds = seconds;
-        if (player !== undefined) yield* player.setCrossfade(seconds);
-      });
-
-    const setDj = (style: DjStyle | undefined) =>
-      Effect.gen(function* () {
-        djStyle = style;
-        if (player !== undefined) yield* player.setDj(style);
-      });
-
-    const removeOutput = (id: string) =>
-      Effect.gen(function* () {
-        const removed = outputs.get(id);
-        if (removed === undefined) return;
-        outputs.delete(id);
-        yield* Fiber.interrupt(removed.watch);
-        yield* removed.output.flush.pipe(Effect.ignore);
-      });
-
-    const addOutput = (id: string, output: TimedOutput) =>
-      Effect.gen(function* () {
-        yield* removeOutput(id);
-        const watch = yield* output.closed.pipe(
-          Effect.as(new OutputError({ reason: "The device closed the connection" })),
-          Effect.catch((error) => Effect.succeed(error)),
-          Effect.flatMap((error) => lose(id, output, error)),
-          Effect.forkIn(scope),
-        );
-        outputs.set(id, { output, watch });
-      });
-
-    return new SessionRenderer({
-      play: (entries, positionMs) => locked(play(entries, positionMs)),
-      setQueue: (entries) => locked(setQueue(entries)),
-      pause: locked(pause),
-      setCrossfade: (seconds) => locked(setCrossfade(seconds)),
-      setDj: (style) => locked(setDj(style)),
-      position: Effect.map(nowUs, positionAt),
-      addOutput: (id, output) => locked(addOutput(id, output)),
-      removeOutput: (id) => locked(removeOutput(id)),
-      events: Stream.fromPubSub(events),
-    });
+  const play = Effect.fn("play")(function* (
+    entries: ReadonlyArray<QueueEntry>,
+    positionMs: number,
+  ) {
+    yield* stopEpoch;
+    queue = entries;
+    const [first] = entries;
+    const position = Math.max(0, positionMs);
+    start =
+      first === undefined
+        ? undefined
+        : new RenderPosition({ entryId: first.id, positionMs: position });
+    yield* loadWindow;
+    const ready = first === undefined ? undefined : inputs.get(first.id)?.ready;
+    if (ready === undefined) return;
+    fiber = yield* Effect.forkIn(runEpoch(ready, position), scope);
   });
+
+  const setQueue = Effect.fn("setQueue")(function* (entries: ReadonlyArray<QueueEntry>) {
+    const now = yield* nowUs;
+    const audible = positionAt(now);
+    if (epoch === undefined || audible === undefined) {
+      if (fiber === undefined) {
+        queue = entries;
+        return;
+      }
+      const from = entries[0]?.id === start?.entryId ? start?.positionMs : undefined;
+      return yield* play(entries, from ?? 0);
+    }
+    if (entries[0]?.id !== audible.entryId) return yield* play(entries, 0);
+
+    // Entries in the sent audio, without the one that fades out before the current one
+    const frame = frameAt(epoch, now);
+    const from = indexOf(String(audible.entryId));
+    const sent = new Set(
+      spans
+        .filter((span) => span.frame + span.frames > frame && indexOf(span.entry) >= from)
+        .map((span) => span.entry),
+    );
+    if (![...sent].every((id, index) => String(entries[index]?.id) === id)) {
+      return yield* play(entries, audible.positionMs);
+    }
+    queue = entries;
+    yield* loadWindow;
+    yield* syncPlayer;
+  });
+
+  const pause = Effect.gen(function* () {
+    const position = positionAt(yield* nowUs);
+    yield* stopEpoch;
+    start = position;
+    return position;
+  });
+
+  const setCrossfade = Effect.fn("setCrossfade")(function* (seconds: number) {
+    crossfadeSeconds = seconds;
+    if (player !== undefined) yield* player.setCrossfade(seconds);
+  });
+
+  const setDj = Effect.fn("setDj")(function* (style: DjStyle | undefined) {
+    djStyle = style;
+    if (player !== undefined) yield* player.setDj(style);
+  });
+
+  const removeOutput = Effect.fn("removeOutput")(function* (id: string) {
+    const removed = outputs.get(id);
+    if (removed === undefined) return;
+    outputs.delete(id);
+    yield* Fiber.interrupt(removed.watch);
+    yield* removed.output.flush.pipe(Effect.ignore);
+  });
+
+  const addOutput = Effect.fn("addOutput")(function* (id: string, output: TimedOutput) {
+    yield* removeOutput(id);
+    const watch = yield* output.closed.pipe(
+      Effect.as(new OutputError({ reason: "The device closed the connection" })),
+      Effect.catch((error) => Effect.succeed(error)),
+      Effect.flatMap((error) => lose(id, output, error)),
+      Effect.forkIn(scope),
+    );
+    outputs.set(id, { output, watch });
+  });
+
+  return new SessionRenderer({
+    play: (entries, positionMs) => locked(play(entries, positionMs)),
+    setQueue: (entries) => locked(setQueue(entries)),
+    pause: locked(pause),
+    setCrossfade: (seconds) => locked(setCrossfade(seconds)),
+    setDj: (style) => locked(setDj(style)),
+    position: Effect.map(nowUs, positionAt),
+    addOutput: (id, output) => locked(addOutput(id, output)),
+    removeOutput: (id) => locked(removeOutput(id)),
+    events: Stream.fromPubSub(events),
+  });
+});

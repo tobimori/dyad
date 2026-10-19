@@ -187,27 +187,26 @@ const getWebBearer = Effect.gen(function* () {
   }),
 );
 
-const getStorefront = (
+const getStorefront = Effect.fn("getStorefront")(function* (
   bearer: Redacted.Redacted<string>,
   mediaUserToken: Redacted.Redacted<string>,
-) =>
-  Effect.gen(function* () {
-    const account = yield* requestJson(
-      HttpClientRequest.get(`${amp}/v1/me/account?meta=subscription`).pipe(
-        authorize({ bearer, mediaUserToken }),
-      ),
-      Account,
-      "account",
-    );
-    if (!account.meta.subscription.active) {
-      return yield* new AppleAccountError({
-        stage: "account",
-        reason: "No active Apple Music subscription",
-      });
-    }
+) {
+  const account = yield* requestJson(
+    HttpClientRequest.get(`${amp}/v1/me/account?meta=subscription`).pipe(
+      authorize({ bearer, mediaUserToken }),
+    ),
+    Account,
+    "account",
+  );
+  if (!account.meta.subscription.active) {
+    return yield* new AppleAccountError({
+      stage: "account",
+      reason: "No active Apple Music subscription",
+    });
+  }
 
-    return account.meta.subscription.storefront;
-  });
+  return account.meta.subscription.storefront;
+});
 
 // Apple publishes a new web client token from time to time and rejects the old one later. A 401
 // replaces the token at once. The time limit also replaces it before Apple rejects it.
@@ -323,25 +322,24 @@ export const catalogSource = (song: AppleTrack) =>
   });
 
 /** The catalog needs only the web client token, not a subscriber */
-export const searchCatalog = (
+export const searchCatalog = Effect.fn("searchCatalog")(function* (
   bearer: Redacted.Redacted<string>,
   storefront: string,
   term: string,
-) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/search`).pipe(
-      HttpClientRequest.setUrlParams({ term, types: "songs", limit: 25, ...songIncludes }),
-      withBearer(bearer),
-    );
-    const response = yield* requestJson(request, SearchResults, "search");
-    const songs = response.results.songs?.data ?? [];
+) {
+  const request = HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/search`).pipe(
+    HttpClientRequest.setUrlParams({ term, types: "songs", limit: 25, ...songIncludes }),
+    withBearer(bearer),
+  );
+  const response = yield* requestJson(request, SearchResults, "search");
+  const songs = response.results.songs?.data ?? [];
 
-    return songs.map(catalogSource);
-  });
+  return songs.map(catalogSource);
+});
 
 /** URL of the HLS media playlist of the 256 kbps AAC web asset */
-export const resolveAacAsset = (session: AppleSession, songId: string) =>
-  Effect.gen(function* () {
+export const resolveAacAsset = Effect.fn("resolveAacAsset")(
+  function* (session: AppleSession, songId: string) {
     const request = yield* HttpClientRequest.post(`${playback}/webPlayback`).pipe(
       authorize(session),
       HttpClientRequest.bodyJson({ salableAdamId: songId, language: "en-US" }),
@@ -358,21 +356,19 @@ export const resolveAacAsset = (session: AppleSession, songId: string) =>
       });
     }
     return asset.URL;
-  }).pipe(
-    Effect.catchTag("HttpBodyError", () =>
-      Effect.fail(
-        new AppleMusicError({ stage: "playback asset", reason: "Cannot encode the request" }),
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catchTag("HttpBodyError", () =>
+        Effect.fail(
+          new AppleMusicError({ stage: "playback asset", reason: "Cannot encode the request" }),
+        ),
       ),
     ),
-  );
+);
 
-export const exchangeLicense = (
-  session: AppleSession,
-  songId: string,
-  uri: string,
-  challenge: Uint8Array,
-) =>
-  Effect.gen(function* () {
+export const exchangeLicense = Effect.fn("exchangeLicense")(
+  function* (session: AppleSession, songId: string, uri: string, challenge: Uint8Array) {
     const request = yield* HttpClientRequest.post(`${playback}/acquireWebPlaybackLicense`).pipe(
       authorize(session),
       HttpClientRequest.bodyJson({
@@ -390,8 +386,11 @@ export const exchangeLicense = (
       "license",
     );
     return response.license;
-  }).pipe(
-    Effect.catchTag("HttpBodyError", () =>
-      Effect.fail(new AppleMusicError({ stage: "license", reason: "Cannot encode the request" })),
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catchTag("HttpBodyError", () =>
+        Effect.fail(new AppleMusicError({ stage: "license", reason: "Cannot encode the request" })),
+      ),
     ),
-  );
+);

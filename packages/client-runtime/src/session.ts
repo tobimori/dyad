@@ -201,7 +201,7 @@ const sameNowPlaying = (left: NowPlaying | null, right: NowPlaying | null) => {
   );
 };
 
-const makeSessionClient = (options: {
+const makeSessionClient = Effect.fn("makeSessionClient")(function* (options: {
   /** `null` for a client that only controls */
   readonly player: {
     readonly capabilities: PlaybackCapabilities;
@@ -209,208 +209,206 @@ const makeSessionClient = (options: {
     /** What the device plays now, sent when it connects again */
     readonly resume: Effect.Effect<PlayerResume | null>;
   } | null;
-}) =>
-  Effect.gen(function* () {
-    const connection = yield* ServerConnection;
-    const crypto = yield* Crypto.Crypto;
-    const view = yield* SubscriptionRef.make(initialView);
-    // Commands reach the server in the order of the user's keys
-    const sending = yield* Semaphore.make(1);
-    const state = {
-      // Counts the snapshots, so that a retry stops when a new connection replaces the old one
-      epoch: 0,
-      pending: new Array<Pending>(),
-      // What this device plays while it is offline
-      local: Option.none<Playback>(),
-    };
+}) {
+  const connection = yield* ServerConnection;
+  const crypto = yield* Crypto.Crypto;
+  const view = yield* SubscriptionRef.make(initialView);
+  // Commands reach the server in the order of the user's keys
+  const sending = yield* Semaphore.make(1);
+  const state = {
+    // Counts the snapshots, so that a retry stops when a new connection replaces the old one
+    epoch: 0,
+    pending: new Array<Pending>(),
+    // What this device plays while it is offline
+    local: Option.none<Playback>(),
+  };
 
-    const update = (change: (current: SessionView) => Partial<SessionView>) =>
-      SubscriptionRef.update(view, (current) => {
-        const next = { ...current, ...change(current) };
-        // Each pending command adds one revision, until the server reaches it
-        state.pending = state.pending.filter(
-          (pending) => pending.revision === null || pending.revision > next.confirmed.revision,
-        );
-        const playback = Option.getOrElse(
-          state.local,
-          () =>
-            new Playback({
-              ...next.confirmed,
-              ...Object.assign({}, ...state.pending.map((pending) => pending.fields)),
-              revision: next.confirmed.revision + state.pending.length,
-            }),
-        );
-        return new SessionView({ ...next, playback });
-      });
-
-    const deviceIdOf = Effect.gen(function* () {
-      const known = (yield* SubscriptionRef.get(view)).deviceId;
-      if (known !== null) return known;
-
-      const devices = yield* connection.listDevices();
-      return devices.find((device) => device.current)?.id ?? null;
+  const update = (change: (current: SessionView) => Partial<SessionView>) =>
+    SubscriptionRef.update(view, (current) => {
+      const next = { ...current, ...change(current) };
+      // Each pending command adds one revision, until the server reaches it
+      state.pending = state.pending.filter(
+        (pending) => pending.revision === null || pending.revision > next.confirmed.revision,
+      );
+      const playback = Option.getOrElse(
+        state.local,
+        () =>
+          new Playback({
+            ...next.confirmed,
+            ...Object.assign({}, ...state.pending.map((pending) => pending.fields)),
+            revision: next.confirmed.revision + state.pending.length,
+          }),
+      );
+      return new SessionView({ ...next, playback });
     });
 
-    const follow = Effect.gen(function* () {
-      const deviceId = yield* deviceIdOf;
-      const superseded = (yield* SubscriptionRef.get(view)).superseded;
-      // After a newer connection took over, this client stays a controller
-      const player = superseded ? null : options.player;
-      const payload = {
-        player:
-          player === null
-            ? null
-            : { capabilities: player.capabilities, volume: yield* player.volume },
-        resume: player === null ? null : yield* player.resume,
-      };
+  const deviceIdOf = Effect.gen(function* () {
+    const known = (yield* SubscriptionRef.get(view)).deviceId;
+    if (known !== null) return known;
 
-      yield* connection.connectDevice(payload).pipe(
-        Stream.runForEach((event) =>
-          Effect.flatMap(Clock.currentTimeMillis, (receivedAt) =>
-            SessionEvent.match<Effect.Effect<void, MissedQueueChange>>(event, {
-              Snapshot: (snapshot) =>
-                Effect.suspend(() => {
-                  state.epoch += 1;
-                  state.pending = [];
-                  state.local = Option.none();
-                  return update(() => ({
-                    connected: true,
-                    deviceId,
-                    generation: snapshot.generation,
-                    queueVersion: snapshot.queueVersion,
-                    entries: snapshot.entries,
-                    confirmed: snapshot.playback,
-                    outputs: snapshot.outputs,
-                    clockOffset: snapshot.serverTime - receivedAt,
-                  }));
-                }),
-
-              QueueChanged: (change) =>
-                Effect.gen(function* () {
-                  const current = yield* SubscriptionRef.get(view);
-                  if (change.fromVersion !== current.queueVersion) {
-                    return yield* new MissedQueueChange();
-                  }
-                  yield* update(() => ({
-                    queueVersion: change.version,
-                    entries: applySplices(current.entries, change.splices),
-                  }));
-                }),
-
-              // The sample with the shortest delay gives the best offset
-              PlaybackChanged: (change) =>
-                update((current) => ({
-                  confirmed: change.playback,
-                  clockOffset: Math.max(current.clockOffset, change.serverTime - receivedAt),
-                })),
-
-              OutputsChanged: (change) => update(() => ({ outputs: change.outputs })),
-
-              Superseded: () => update(() => ({ superseded: true })),
-            }),
-          ),
-        ),
-      );
-    }).pipe(
-      Effect.catchCause((cause) => Effect.logDebug("The session stream ended", cause)),
-      Effect.andThen(update(() => ({ connected: false }))),
-    );
-
-    yield* Effect.forkScoped(Effect.repeat(follow, Schedule.spaced("1 second")));
-
-    /**
-     * A transport command shows in the view at once. A retry sends the same request ID, so that
-     * the server applies the command once.
-     */
-    const send = (command: Command) =>
-      Effect.gen(function* () {
-        const current = yield* SubscriptionRef.get(view);
-        if (!current.connected) return yield* new SessionOffline();
-
-        const requestId = yield* crypto.randomUUIDv4();
-        const epoch = state.epoch;
-        const now = (yield* Clock.currentTimeMillis) + current.clockOffset;
-
-        if (SessionCommand.guards.SetVolume(command)) {
-          yield* update((latest) => ({
-            outputs: latest.outputs.map((output) =>
-              output.id === command.outputId
-                ? new Output({ ...output, volume: command.volume, muted: false })
-                : output,
-            ),
-          }));
-        }
-        const fields = optimisticFields(current, command, now);
-        if (fields !== undefined) {
-          state.pending.push(new Pending({ requestId, fields, revision: null }));
-          yield* update(() => ({}));
-        }
-
-        const forget = Effect.suspend(() => {
-          state.pending = state.pending.filter((pending) => pending.requestId !== requestId);
-          return update(() => ({}));
-        });
-
-        const request = Effect.gen(function* () {
-          if (state.epoch !== epoch) return yield* new SessionOffline();
-          return yield* connection.controlSession({ requestId, command, ifQueueVersion: null });
-        }).pipe(
-          Effect.retry({
-            schedule: Schedule.spaced("500 millis"),
-            while: (error) =>
-              Predicate.isTagged(error, "RpcClientError") &&
-              state.epoch === epoch &&
-              SubscriptionRef.getUnsafe(view).connected,
-          }),
-        );
-
-        return yield* sending
-          .withPermits(1)(request)
-          .pipe(
-            Effect.tap((result) =>
-              Effect.suspend(() => {
-                state.pending = state.pending.map((pending) =>
-                  pending.requestId === requestId
-                    ? new Pending({ ...pending, revision: result.revision })
-                    : pending,
-                );
-                return update(() => ({}));
-              }),
-            ),
-            Effect.tapErrorTag("SessionCommandFailed", () => forget),
-            Effect.catchTag("RpcClientError", () => Effect.fail(new SessionOffline())),
-          );
-      });
-
-    const nowPlaying = SubscriptionRef.changes(view).pipe(
-      // While the output loads, plugins keep the previous source, so that a skip is one change
-      Stream.filter((current) => !isLoading(current)),
-      Stream.mapEffect((current) =>
-        Effect.map(Clock.currentTimeMillis, (now) => nowPlayingOf(current, now)),
-      ),
-      Stream.changesWith(sameNowPlaying),
-    );
-
-    /** While offline, the view shows what this device plays. The next snapshot replaces it. */
-    const showLocal = (local: { readonly playback: Playback; readonly volume: number }) =>
-      update((current) => {
-        if (current.connected) return {};
-        state.local = Option.some(local.playback);
-        const own = current.deviceId === null ? null : deviceOutputId(current.deviceId);
-        return {
-          outputs: current.outputs.map((output) =>
-            output.id === own ? new Output({ ...output, volume: local.volume }) : output,
-          ),
-        };
-      });
-
-    return {
-      view,
-      send,
-      nowPlaying,
-      showLocal,
-    };
+    const devices = yield* connection.listDevices();
+    return devices.find((device) => device.current)?.id ?? null;
   });
+
+  const follow = Effect.gen(function* () {
+    const deviceId = yield* deviceIdOf;
+    const superseded = (yield* SubscriptionRef.get(view)).superseded;
+    // After a newer connection took over, this client stays a controller
+    const player = superseded ? null : options.player;
+    const payload = {
+      player:
+        player === null
+          ? null
+          : { capabilities: player.capabilities, volume: yield* player.volume },
+      resume: player === null ? null : yield* player.resume,
+    };
+
+    yield* connection.connectDevice(payload).pipe(
+      Stream.runForEach((event) =>
+        Effect.flatMap(Clock.currentTimeMillis, (receivedAt) =>
+          SessionEvent.match<Effect.Effect<void, MissedQueueChange>>(event, {
+            Snapshot: (snapshot) =>
+              Effect.suspend(() => {
+                state.epoch += 1;
+                state.pending = [];
+                state.local = Option.none();
+                return update(() => ({
+                  connected: true,
+                  deviceId,
+                  generation: snapshot.generation,
+                  queueVersion: snapshot.queueVersion,
+                  entries: snapshot.entries,
+                  confirmed: snapshot.playback,
+                  outputs: snapshot.outputs,
+                  clockOffset: snapshot.serverTime - receivedAt,
+                }));
+              }),
+
+            QueueChanged: (change) =>
+              Effect.gen(function* () {
+                const current = yield* SubscriptionRef.get(view);
+                if (change.fromVersion !== current.queueVersion) {
+                  return yield* new MissedQueueChange();
+                }
+                yield* update(() => ({
+                  queueVersion: change.version,
+                  entries: applySplices(current.entries, change.splices),
+                }));
+              }),
+
+            // The sample with the shortest delay gives the best offset
+            PlaybackChanged: (change) =>
+              update((current) => ({
+                confirmed: change.playback,
+                clockOffset: Math.max(current.clockOffset, change.serverTime - receivedAt),
+              })),
+
+            OutputsChanged: (change) => update(() => ({ outputs: change.outputs })),
+
+            Superseded: () => update(() => ({ superseded: true })),
+          }),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.catchCause((cause) => Effect.logDebug("The session stream ended", cause)),
+    Effect.andThen(update(() => ({ connected: false }))),
+  );
+
+  yield* Effect.forkScoped(Effect.repeat(follow, Schedule.spaced("1 second")));
+
+  /**
+   * A transport command shows in the view at once. A retry sends the same request ID, so that
+   * the server applies the command once.
+   */
+  const send = Effect.fn("send")(function* (command: Command) {
+    const current = yield* SubscriptionRef.get(view);
+    if (!current.connected) return yield* new SessionOffline();
+
+    const requestId = yield* crypto.randomUUIDv4();
+    const epoch = state.epoch;
+    const now = (yield* Clock.currentTimeMillis) + current.clockOffset;
+
+    if (SessionCommand.guards.SetVolume(command)) {
+      yield* update((latest) => ({
+        outputs: latest.outputs.map((output) =>
+          output.id === command.outputId
+            ? new Output({ ...output, volume: command.volume, muted: false })
+            : output,
+        ),
+      }));
+    }
+    const fields = optimisticFields(current, command, now);
+    if (fields !== undefined) {
+      state.pending.push(new Pending({ requestId, fields, revision: null }));
+      yield* update(() => ({}));
+    }
+
+    const forget = Effect.suspend(() => {
+      state.pending = state.pending.filter((pending) => pending.requestId !== requestId);
+      return update(() => ({}));
+    });
+
+    const request = Effect.gen(function* () {
+      if (state.epoch !== epoch) return yield* new SessionOffline();
+      return yield* connection.controlSession({ requestId, command, ifQueueVersion: null });
+    }).pipe(
+      Effect.retry({
+        schedule: Schedule.spaced("500 millis"),
+        while: (error) =>
+          Predicate.isTagged(error, "RpcClientError") &&
+          state.epoch === epoch &&
+          SubscriptionRef.getUnsafe(view).connected,
+      }),
+    );
+
+    return yield* sending
+      .withPermits(1)(request)
+      .pipe(
+        Effect.tap((result) =>
+          Effect.suspend(() => {
+            state.pending = state.pending.map((pending) =>
+              pending.requestId === requestId
+                ? new Pending({ ...pending, revision: result.revision })
+                : pending,
+            );
+            return update(() => ({}));
+          }),
+        ),
+        Effect.tapErrorTag("SessionCommandFailed", () => forget),
+        Effect.catchTag("RpcClientError", () => Effect.fail(new SessionOffline())),
+      );
+  });
+
+  const nowPlaying = SubscriptionRef.changes(view).pipe(
+    // While the output loads, plugins keep the previous source, so that a skip is one change
+    Stream.filter((current) => !isLoading(current)),
+    Stream.mapEffect((current) =>
+      Effect.map(Clock.currentTimeMillis, (now) => nowPlayingOf(current, now)),
+    ),
+    Stream.changesWith(sameNowPlaying),
+  );
+
+  /** While offline, the view shows what this device plays. The next snapshot replaces it. */
+  const showLocal = (local: { readonly playback: Playback; readonly volume: number }) =>
+    update((current) => {
+      if (current.connected) return {};
+      state.local = Option.some(local.playback);
+      const own = current.deviceId === null ? null : deviceOutputId(current.deviceId);
+      return {
+        outputs: current.outputs.map((output) =>
+          output.id === own ? new Output({ ...output, volume: local.volume }) : output,
+        ),
+      };
+    });
+
+  return {
+    view,
+    send,
+    nowPlaying,
+    showLocal,
+  };
+});
 
 /**
  * Follows the user's session on the server. It subscribes again after the connection drops, and

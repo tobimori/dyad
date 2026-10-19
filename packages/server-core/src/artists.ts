@@ -94,43 +94,40 @@ const joinPhrases = (text: string, names: ReadonlyArray<string>) => {
  * The names of the resolved credit of a recording or an edition. A name without an ID links to an
  * uploader with the same name that the parse calls the artist.
  */
-export const creditNames = (
+export const creditNames = Effect.fn("creditNames")(function* (
   providers: ReadonlyMap<string, Provider>,
   own: ReadonlyArray<Assertion>,
-) =>
-  Effect.gen(function* () {
-    const resolved = resolveAssertion(providers, own, "artist_credit", fields.artist_credit);
-    if (resolved === null) return [];
+) {
+  const resolved = resolveAssertion(providers, own, "artist_credit", fields.artist_credit);
+  if (resolved === null) return [];
 
-    const scheme = schemeOf(resolved.assertion);
-    const uploaders = uploaderArtists(own);
-    const credit = resolved.value;
-    const parts =
-      credit.artists.length === 0
-        ? [{ id: null, name: credit.name, joinPhrase: undefined }]
-        : credit.artists;
-    const phrases = joinPhrases(
-      credit.name,
-      parts.map((part) => part.name),
-    );
+  const scheme = schemeOf(resolved.assertion);
+  const uploaders = uploaderArtists(own);
+  const credit = resolved.value;
+  const parts =
+    credit.artists.length === 0
+      ? [{ id: null, name: credit.name, joinPhrase: undefined }]
+      : credit.artists;
+  const phrases = joinPhrases(
+    credit.name,
+    parts.map((part) => part.name),
+  );
 
-    return yield* Effect.forEach(parts, (part, position) =>
-      Effect.gen(function* () {
-        const key = artistNameKey(part.name);
-        const uploader = uploaders.find((found) => key !== "" && artistNameKey(found.name) === key);
-        const linked =
-          part.id !== null && scheme !== null
-            ? { scheme, externalId: part.id }
-            : (uploader ?? null);
-        return {
-          position,
-          artistId: linked === null ? null : yield* artistIdOf(linked.scheme, linked.externalId),
-          name: part.name,
-          joinPhrase: part.joinPhrase ?? phrases[position] ?? "",
-        };
-      }),
-    );
-  });
+  return yield* Effect.forEach(parts, (part, position) =>
+    Effect.gen(function* () {
+      const key = artistNameKey(part.name);
+      const uploader = uploaders.find((found) => key !== "" && artistNameKey(found.name) === key);
+      const linked =
+        part.id !== null && scheme !== null ? { scheme, externalId: part.id } : (uploader ?? null);
+      return {
+        position,
+        artistId: linked === null ? null : yield* artistIdOf(linked.scheme, linked.externalId),
+        name: part.name,
+        joinPhrase: part.joinPhrase ?? phrases[position] ?? "",
+      };
+    }),
+  );
+});
 
 /** Whether two lists of credited names are the same */
 export const sameNames = (
@@ -160,16 +157,15 @@ const NameMention = Schema.Struct({
 });
 
 // The names that credits and uploaders give each external ID
-const mentionsOf = (externalIds: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const chunks = yield* Effect.forEach(Arr.chunksOf(externalIds, chunkSize), (chunk) =>
-      Effect.gen(function* () {
-        const list = sql.join(
-          chunk.map((id) => sql`${id}`),
-          sql`, `,
-        );
-        const credits = yield* db.all(sql`
+const mentionsOf = Effect.fn("mentionsOf")(function* (externalIds: ReadonlyArray<string>) {
+  const db = yield* Database;
+  const chunks = yield* Effect.forEach(Arr.chunksOf(externalIds, chunkSize), (chunk) =>
+    Effect.gen(function* () {
+      const list = sql.join(
+        chunk.map((id) => sql`${id}`),
+        sql`, `,
+      );
+      const credits = yield* db.all(sql`
           SELECT a.id AS id, json_extract(j.value, '$.id') AS externalId,
             json_extract(j.value, '$.name') AS name
           FROM ${catalogAssertion} AS a, json_each(a.value, '$.artists') AS j
@@ -177,179 +173,176 @@ const mentionsOf = (externalIds: ReadonlyArray<string>) =>
             AND a.retracted = 0
             AND json_extract(j.value, '$.id') IN (${list})
         `);
-        const uploaders = yield* db.all(sql`
+      const uploaders = yield* db.all(sql`
           SELECT a.id AS id, json_extract(a.value, '$.id') AS externalId,
             json_extract(a.value, '$.name') AS name
           FROM ${catalogAssertion} AS a
           WHERE a.entity_type = 'recording' AND a.field = 'uploader' AND a.retracted = 0
             AND a.origin = 'provider' AND json_extract(a.value, '$.id') IN (${list})
         `);
-        const decode = Schema.decodeUnknownEffect(Schema.Array(NameMention));
-        return {
-          credits: yield* decode(credits).pipe(Effect.orDie),
-          uploaders: yield* decode(uploaders).pipe(Effect.orDie),
-        };
-      }),
-    );
-    const credits = chunks.flatMap((chunk) => chunk.credits);
-    const uploaders = chunks.flatMap((chunk) => chunk.uploaders);
+      const decode = Schema.decodeUnknownEffect(Schema.Array(NameMention));
+      return {
+        credits: yield* decode(credits).pipe(Effect.orDie),
+        uploaders: yield* decode(uploaders).pipe(Effect.orDie),
+      };
+    }),
+  );
+  const credits = chunks.flatMap((chunk) => chunk.credits);
+  const uploaders = chunks.flatMap((chunk) => chunk.uploaders);
 
-    const assertionIds = [...new Set([...credits, ...uploaders].map((mention) => mention.id))];
-    const assertions = new Map(
-      (yield* Effect.forEach(Arr.chunksOf(assertionIds, chunkSize), (chunk) =>
-        db
-          .select()
-          .from(catalogAssertion)
-          .where(inArray(catalogAssertion.id, [...chunk])),
-      ))
-        .flat()
-        .map((row) => [row.id, row]),
-    );
-    const withAssertion = (mentions: ReadonlyArray<typeof NameMention.Type>) =>
-      mentions.flatMap((mention) => {
-        const assertion = assertions.get(mention.id);
-        return assertion === undefined ? [] : [{ ...mention, assertion }];
-      });
-    return { credits: withAssertion(credits), uploaders: withAssertion(uploaders) };
-  });
+  const assertionIds = [...new Set([...credits, ...uploaders].map((mention) => mention.id))];
+  const assertions = new Map(
+    (yield* Effect.forEach(Arr.chunksOf(assertionIds, chunkSize), (chunk) =>
+      db
+        .select()
+        .from(catalogAssertion)
+        .where(inArray(catalogAssertion.id, [...chunk])),
+    ))
+      .flat()
+      .map((row) => [row.id, row]),
+  );
+  const withAssertion = (mentions: ReadonlyArray<typeof NameMention.Type>) =>
+    mentions.flatMap((mention) => {
+      const assertion = assertions.get(mention.id);
+      return assertion === undefined ? [] : [{ ...mention, assertion }];
+    });
+  return { credits: withAssertion(credits), uploaders: withAssertion(uploaders) };
+});
 
 /**
  * Upserts the artist rows and identifiers of artists with an MBID or a provider ID. The name comes
  * from the credits that name the artist, else from its uploads, in the order of the resolution
  * policy, so that every replica selects the same name.
  */
-export const projectArtistRows = (
+export const projectArtistRows = Effect.fn("projectArtistRows")(function* (
   keys: ReadonlyArray<{ readonly scheme: string; readonly externalId: string }>,
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* Providers;
-    const unique = [
-      ...new Map(keys.map((key) => [`${key.scheme}:${key.externalId}`, key])).values(),
-    ];
-    if (unique.length === 0) return;
+) {
+  const db = yield* Database;
+  const providers = yield* Providers;
+  const unique = [...new Map(keys.map((key) => [`${key.scheme}:${key.externalId}`, key])).values()];
+  if (unique.length === 0) return;
 
-    const rows = yield* Effect.forEach(unique, (key) =>
-      artistIdOf(key.scheme, key.externalId).pipe(Effect.map((id) => ({ ...key, id }))),
-    );
-    for (const chunk of Arr.chunksOf(rows, chunkSize)) {
-      yield* db
-        .insert(identifier)
-        .values(
-          chunk.map((row) => ({
-            entityType: "artist" as const,
-            entityId: row.id,
-            scheme: row.scheme,
-            value: row.externalId,
-          })),
+  const rows = yield* Effect.forEach(unique, (key) =>
+    artistIdOf(key.scheme, key.externalId).pipe(Effect.map((id) => ({ ...key, id }))),
+  );
+  for (const chunk of Arr.chunksOf(rows, chunkSize)) {
+    yield* db
+      .insert(identifier)
+      .values(
+        chunk.map((row) => ({
+          entityType: "artist" as const,
+          entityId: row.id,
+          scheme: row.scheme,
+          value: row.externalId,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+
+  const mentions = yield* mentionsOf([...new Set(rows.map((row) => row.externalId))]);
+  const compare = compareAssertions(providers);
+  const nameOf = (row: (typeof rows)[number]) => {
+    const matching = (list: typeof mentions.credits) =>
+      list
+        .filter(
+          (mention) =>
+            mention.externalId === row.externalId && schemeOf(mention.assertion) === row.scheme,
         )
-        .onConflictDoNothing();
-    }
+        .toSorted((a, b) => compare(a.assertion, b.assertion))[0]?.name;
+    return matching(mentions.credits) ?? matching(mentions.uploaders) ?? null;
+  };
 
-    const mentions = yield* mentionsOf([...new Set(rows.map((row) => row.externalId))]);
-    const compare = compareAssertions(providers);
-    const nameOf = (row: (typeof rows)[number]) => {
-      const matching = (list: typeof mentions.credits) =>
-        list
-          .filter(
-            (mention) =>
-              mention.externalId === row.externalId && schemeOf(mention.assertion) === row.scheme,
-          )
-          .toSorted((a, b) => compare(a.assertion, b.assertion))[0]?.name;
-      return matching(mentions.credits) ?? matching(mentions.uploaders) ?? null;
-    };
-
-    const changed = yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const name = nameOf(row);
-        const values = {
-          name,
-          nameKey: name === null ? null : artistNameKey(name) || null,
-        };
-        const written = yield* db
-          .insert(artist)
-          .values({
-            id: row.id,
-            origin: row.scheme === mbidScheme ? "musicbrainz" : "provider",
-            ...values,
-            policyVersion: 1,
-            revision: 0,
-          })
-          .onConflictDoUpdate({
-            target: artist.id,
-            set: values,
-            setWhere: sql`${artist.name} IS NOT excluded.name OR ${artist.nameKey} IS NOT excluded.name_key`,
-          })
-          .returning({ id: artist.id });
-        return written.map((found) => found.id);
-      }),
-    );
-    // A merge can arrive before the artist row
-    yield* resolveArtistRoots(changed.flat());
-    yield* touchArtistGroups(changed.flat());
-  });
+  const changed = yield* Effect.forEach(rows, (row) =>
+    Effect.gen(function* () {
+      const name = nameOf(row);
+      const values = {
+        name,
+        nameKey: name === null ? null : artistNameKey(name) || null,
+      };
+      const written = yield* db
+        .insert(artist)
+        .values({
+          id: row.id,
+          origin: row.scheme === mbidScheme ? "musicbrainz" : "provider",
+          ...values,
+          policyVersion: 1,
+          revision: 0,
+        })
+        .onConflictDoUpdate({
+          target: artist.id,
+          set: values,
+          setWhere: sql`${artist.name} IS NOT excluded.name OR ${artist.nameKey} IS NOT excluded.name_key`,
+        })
+        .returning({ id: artist.id });
+      return written.map((found) => found.id);
+    }),
+  );
+  // A merge can arrive before the artist row
+  yield* resolveArtistRoots(changed.flat());
+  yield* touchArtistGroups(changed.flat());
+});
 
 /** Sets a new revision on the groups of the recordings whose credits name the artists */
-export const touchArtistGroups = (artistIds: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const ids = [...new Set(artistIds)];
-    const recordings = yield* Effect.forEach(Arr.chunksOf(ids, chunkSize), (chunk) =>
-      db
-        .select({ id: recording.id })
-        .from(recording)
-        .innerJoin(songArtist, eq(songArtist.recordingId, recording.id))
-        .where(inArray(songArtist.artistId, [...chunk])),
-    );
-    yield* touchGroups(recordings.flat().map((row) => row.id));
-  });
+export const touchArtistGroups = Effect.fn("touchArtistGroups")(function* (
+  artistIds: ReadonlyArray<string>,
+) {
+  const db = yield* Database;
+  const ids = [...new Set(artistIds)];
+  const recordings = yield* Effect.forEach(Arr.chunksOf(ids, chunkSize), (chunk) =>
+    db
+      .select({ id: recording.id })
+      .from(recording)
+      .innerJoin(songArtist, eq(songArtist.recordingId, recording.id))
+      .where(inArray(songArtist.artistId, [...chunk])),
+  );
+  yield* touchGroups(recordings.flat().map((row) => row.id));
+});
 
 /**
  * Projects the artists of the credits and uploaders of each recording, and its `song_artist` rows
  * from the resolved credit. `own` are the assertions of the recording and of the recordings merged
  * into it. Returns the recordings whose credit changed.
  */
-export const projectArtists = (
+export const projectArtists = Effect.fn("projectArtists")(function* (
   recordings: ReadonlyArray<{ readonly id: string; readonly own: ReadonlyArray<Assertion> }>,
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* Providers;
-    yield* projectArtistRows(
-      recordings.flatMap((row) => [...creditedArtists(row.own), ...uploaderArtists(row.own)]),
-    );
+) {
+  const db = yield* Database;
+  const providers = yield* Providers;
+  yield* projectArtistRows(
+    recordings.flatMap((row) => [...creditedArtists(row.own), ...uploaderArtists(row.own)]),
+  );
 
-    const existing = Arr.groupBy(
-      (yield* Effect.forEach(Arr.chunksOf(recordings, chunkSize), (chunk) =>
-        db
-          .select()
-          .from(songArtist)
-          .where(
-            inArray(
-              songArtist.recordingId,
-              chunk.map((row) => row.id),
-            ),
-          )
-          .orderBy(songArtist.recordingId, songArtist.position),
-      )).flat(),
-      (row) => row.recordingId,
-    );
-    const changed = yield* Effect.forEach(recordings, (row) =>
-      Effect.gen(function* () {
-        const names = yield* creditNames(providers, row.own);
-        if (sameNames(existing[row.id] ?? [], names)) return [];
+  const existing = Arr.groupBy(
+    (yield* Effect.forEach(Arr.chunksOf(recordings, chunkSize), (chunk) =>
+      db
+        .select()
+        .from(songArtist)
+        .where(
+          inArray(
+            songArtist.recordingId,
+            chunk.map((row) => row.id),
+          ),
+        )
+        .orderBy(songArtist.recordingId, songArtist.position),
+    )).flat(),
+    (row) => row.recordingId,
+  );
+  const changed = yield* Effect.forEach(recordings, (row) =>
+    Effect.gen(function* () {
+      const names = yield* creditNames(providers, row.own);
+      if (sameNames(existing[row.id] ?? [], names)) return [];
 
-        yield* db.delete(songArtist).where(eq(songArtist.recordingId, row.id));
-        if (names.length > 0) {
-          yield* db
-            .insert(songArtist)
-            .values(names.map((name) => ({ recordingId: row.id, ...name })));
-        }
-        return [row.id];
-      }),
-    );
-    return changed.flat();
-  });
+      yield* db.delete(songArtist).where(eq(songArtist.recordingId, row.id));
+      if (names.length > 0) {
+        yield* db
+          .insert(songArtist)
+          .values(names.map((name) => ({ recordingId: row.id, ...name })));
+      }
+      return [row.id];
+    }),
+  );
+  return changed.flat();
+});
 
 /** Recordings with a credit assertion and no projected credit, for example from before artists */
 export const uncreditedRecordings = Effect.gen(function* () {

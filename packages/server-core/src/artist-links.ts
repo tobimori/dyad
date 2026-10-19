@@ -76,98 +76,95 @@ const sweep = Effect.gen(function* () {
  * decides the merges of these provider artists. Peers receive the assertions and merges, so they
  * need no request.
  */
-const readLinks = (mbid: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const jobs = yield* Jobs;
-    const providers = yield* Providers;
-    const lookup = (yield* MusicBrainzLookups).get(musicbrainzLookupKey);
-    // The plugin failed to start; the job waits for the next start
-    if (lookup === undefined) return yield* new RetryLater({ retryAfterSeconds: 60 * 60 });
+const readLinks = Effect.fn("readLinks")(function* (mbid: string) {
+  const db = yield* Database;
+  const jobs = yield* Jobs;
+  const providers = yield* Providers;
+  const lookup = (yield* MusicBrainzLookups).get(musicbrainzLookupKey);
+  // The plugin failed to start; the job waits for the next start
+  if (lookup === undefined) return yield* new RetryLater({ retryAfterSeconds: 60 * 60 });
 
-    const urls = yield* lookup.artistUrls(mbid).pipe(
-      Effect.catchIf(
-        (error) => error.retryAfterSeconds !== null,
-        (error) =>
-          Effect.gen(function* () {
-            const retryAfterSeconds = yield* waitForMusicBrainz(error.retryAfterSeconds ?? 0);
-            return yield* new RetryLater({ retryAfterSeconds });
-          }),
+  const urls = yield* lookup.artistUrls(mbid).pipe(
+    Effect.catchIf(
+      (error) => error.retryAfterSeconds !== null,
+      (error) =>
+        Effect.gen(function* () {
+          const retryAfterSeconds = yield* waitForMusicBrainz(error.retryAfterSeconds ?? 0);
+          return yield* new RetryLater({ retryAfterSeconds });
+        }),
+    ),
+  );
+
+  // Each plugin answers only for the URLs of its own site
+  const found = yield* Effect.forEach(urls, (url) =>
+    Effect.forEach(
+      [...providers].flatMap(([provider, plugin]) =>
+        plugin.artistFromUrl === undefined
+          ? []
+          : [{ provider, artistFromUrl: plugin.artistFromUrl }],
       ),
-    );
-
-    // Each plugin answers only for the URLs of its own site
-    const found = yield* Effect.forEach(urls, (url) =>
-      Effect.forEach(
-        [...providers].flatMap(([provider, plugin]) =>
-          plugin.artistFromUrl === undefined
-            ? []
-            : [{ provider, artistFromUrl: plugin.artistFromUrl }],
-        ),
-        ({ provider, artistFromUrl }) =>
-          artistFromUrl(url).pipe(
-            Effect.map((externalId) =>
-              externalId === null ? [] : [new ArtistLinkEvidence({ url, provider, externalId })],
-            ),
+      ({ provider, artistFromUrl }) =>
+        artistFromUrl(url).pipe(
+          Effect.map((externalId) =>
+            externalId === null ? [] : [new ArtistLinkEvidence({ url, provider, externalId })],
           ),
-      ),
-    );
-    const linked = [
-      ...new Map(
-        found.flat(2).map((link) => [`${link.provider}:${link.externalId}`, link]),
-      ).values(),
-    ];
+        ),
+    ),
+  );
+  const linked = [
+    ...new Map(found.flat(2).map((link) => [`${link.provider}:${link.externalId}`, link])).values(),
+  ];
 
-    yield* db.transaction(() =>
-      Effect.gen(function* () {
-        yield* assertArtist(
-          yield* artistIdOf(mbidScheme, mbid),
-          mbid,
-          { links: urls.toSorted() },
-          null,
-        );
-        yield* projectArtistRows(
-          linked.map((link) => ({ scheme: link.provider, externalId: link.externalId })),
-        );
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      yield* assertArtist(
+        yield* artistIdOf(mbidScheme, mbid),
+        mbid,
+        { links: urls.toSorted() },
+        null,
+      );
+      yield* projectArtistRows(
+        linked.map((link) => ({ scheme: link.provider, externalId: link.externalId })),
+      );
 
-        const current = yield* Effect.forEach(linked, (link) =>
-          Effect.gen(function* () {
-            const id = yield* artistIdOf(link.provider, link.externalId);
-            yield* assertArtist(id, mbid, { mbid }, link);
-            return id;
-          }),
+      const current = yield* Effect.forEach(linked, (link) =>
+        Effect.gen(function* () {
+          const id = yield* artistIdOf(link.provider, link.externalId);
+          yield* assertArtist(id, mbid, { mbid }, link);
+          return id;
+        }),
+      );
+      const earlier = yield* db
+        .select({ id: catalogAssertion.entityId })
+        .from(catalogAssertion)
+        .where(
+          and(
+            eq(catalogAssertion.entityType, "artist"),
+            eq(catalogAssertion.field, "mbid"),
+            eq(catalogAssertion.origin, "musicbrainz"),
+            eq(catalogAssertion.originRef, mbid),
+            eq(catalogAssertion.retracted, false),
+            isNotNull(catalogAssertion.value),
+          ),
         );
-        const earlier = yield* db
-          .select({ id: catalogAssertion.entityId })
-          .from(catalogAssertion)
-          .where(
-            and(
-              eq(catalogAssertion.entityType, "artist"),
-              eq(catalogAssertion.field, "mbid"),
-              eq(catalogAssertion.origin, "musicbrainz"),
-              eq(catalogAssertion.originRef, mbid),
-              eq(catalogAssertion.retracted, false),
-              isNotNull(catalogAssertion.value),
-            ),
-          );
-        const stale = earlier.map((row) => row.id).filter((id) => !current.includes(id));
-        yield* Effect.forEach(stale, (id) => assertArtist(id, mbid, { mbid: null }, null), {
-          discard: true,
-        });
-        yield* decideArtists([...current, ...stale]);
-      }),
-    );
+      const stale = earlier.map((row) => row.id).filter((id) => !current.includes(id));
+      yield* Effect.forEach(stale, (id) => assertArtist(id, mbid, { mbid: null }, null), {
+        discard: true,
+      });
+      yield* decideArtists([...current, ...stale]);
+    }),
+  );
 
-    yield* jobs.enqueue(
-      artistLinksKind,
-      mbid,
-      { mbid },
-      { priority, runAt: (yield* Clock.currentTimeMillis) + refreshMs },
-    );
-    yield* Effect.logDebug("Artist links read").pipe(
-      Effect.annotateLogs({ urls: urls.length, linked: linked.length }),
-    );
-  });
+  yield* jobs.enqueue(
+    artistLinksKind,
+    mbid,
+    { mbid },
+    { priority, runAt: (yield* Clock.currentTimeMillis) + refreshMs },
+  );
+  yield* Effect.logDebug("Artist links read").pipe(
+    Effect.annotateLogs({ urls: urls.length, linked: linked.length }),
+  );
+});
 
 /** Build it after the plugins, so that the job finds the MusicBrainz plugin */
 export const artistLinksLayer = Layer.effectDiscard(

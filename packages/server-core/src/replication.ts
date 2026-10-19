@@ -74,68 +74,67 @@ const afterCursor = (table: PeerTable, cursor: PeerCursor) => {
  * The rows of all replicated tables after `cursor`, at most `limit`. A page can end inside the rows
  * of one write; the receiver derives after each page.
  */
-export const readChanges = (cursor: PeerCursor, limit: number, skipped: ReadonlyArray<number>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const tables = yield* Effect.forEach(Object.values(peerTables), (table) =>
-      Effect.gen(function* () {
-        const rows = yield* db
-          .select()
-          .from(table.rows)
-          .where(and(afterCursor(table, cursor), notInArray(table.changeSeq, [...skipped])))
-          .orderBy(asc(table.changeSeq), asc(table.id))
-          .limit(limit + 1);
+export const readChanges = Effect.fn("readChanges")(function* (
+  cursor: PeerCursor,
+  limit: number,
+  skipped: ReadonlyArray<number>,
+) {
+  const db = yield* Database;
+  const tables = yield* Effect.forEach(Object.values(peerTables), (table) =>
+    Effect.gen(function* () {
+      const rows = yield* db
+        .select()
+        .from(table.rows)
+        .where(and(afterCursor(table, cursor), notInArray(table.changeSeq, [...skipped])))
+        .orderBy(asc(table.changeSeq), asc(table.id))
+        .limit(limit + 1);
 
-        return yield* Effect.forEach(rows, (row) =>
-          Schema.decodeUnknownEffect(PeerRow)({ ...row, table: table.table }).pipe(
-            Effect.orDie,
-            Effect.map((decoded) => ({
-              // SAFETY: each replicated table has the integer column `change_seq`
-              changeSeq: row["changeSeq"] as number,
-              key: `${table.table}:${decoded.id}`,
-              row: decoded,
-            })),
-          ),
-        );
-      }),
-    );
+      return yield* Effect.forEach(rows, (row) =>
+        Schema.decodeUnknownEffect(PeerRow)({ ...row, table: table.table }).pipe(
+          Effect.orDie,
+          Effect.map((decoded) => ({
+            // SAFETY: each replicated table has the integer column `change_seq`
+            changeSeq: row["changeSeq"] as number,
+            key: `${table.table}:${decoded.id}`,
+            row: decoded,
+          })),
+        ),
+      );
+    }),
+  );
 
-    const sorted = tables
-      .flat()
-      .toSorted((a, b) => a.changeSeq - b.changeSeq || (a.key < b.key ? -1 : 1));
-    const page = sorted.slice(0, limit);
-    const last = page.at(-1);
-    return {
-      rows: page.map((entry) => entry.row),
-      cursor:
-        last === undefined
-          ? cursor
-          : new PeerCursor({ changeSeq: last.changeSeq, rowKey: last.key }),
-      more: sorted.length > limit,
-    };
-  });
+  const sorted = tables
+    .flat()
+    .toSorted((a, b) => a.changeSeq - b.changeSeq || (a.key < b.key ? -1 : 1));
+  const page = sorted.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    rows: page.map((entry) => entry.row),
+    cursor:
+      last === undefined ? cursor : new PeerCursor({ changeSeq: last.changeSeq, rowKey: last.key }),
+    more: sorted.length > limit,
+  };
+});
 
 /** The row of a replicated table, as peers exchange it */
-export const readRow = (table: PeerRow["table"], id: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const peer = peerTables[table];
-    const [row] = yield* db.select().from(peer.rows).where(eq(peer.id, id));
-    if (row === undefined) return undefined;
-    return yield* Schema.decodeUnknownEffect(PeerRow)({ ...row, table }).pipe(Effect.orDie);
-  });
+export const readRow = Effect.fn("readRow")(function* (table: PeerRow["table"], id: string) {
+  const db = yield* Database;
+  const peer = peerTables[table];
+  const [row] = yield* db.select().from(peer.rows).where(eq(peer.id, id));
+  if (row === undefined) return undefined;
+  return yield* Schema.decodeUnknownEffect(PeerRow)({ ...row, table }).pipe(Effect.orDie);
+});
 
 /** Writes a replicated row with the `change_seq` of the transaction */
-export const writeRow = (row: PeerRow, changeSeq: number) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const peer = peerTables[row.table];
-    const { table: _, ...values } = row;
-    yield* db
-      .insert(peer.rows)
-      .values({ ...values, changeSeq })
-      .onConflictDoUpdate({ target: peer.id, set: { ...values, changeSeq } });
-  });
+export const writeRow = Effect.fn("writeRow")(function* (row: PeerRow, changeSeq: number) {
+  const db = yield* Database;
+  const peer = peerTables[row.table];
+  const { table: _, ...values } = row;
+  yield* db
+    .insert(peer.rows)
+    .values({ ...values, changeSeq })
+    .onConflictDoUpdate({ target: peer.id, set: { ...values, changeSeq } });
+});
 
 // RETURN TYPE: the predicate narrows the union for `mergeRow`
 const isSyncRow = (row: PeerRow): row is SyncRow =>
@@ -172,118 +171,113 @@ const IsrcEvidence = Schema.Struct({ isrc: Schema.String });
  * matching; a receiver only follows the merges that arrive, so it never writes a decision that it
  * made from a part of the input.
  */
-const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    if (rows.length === 0) return;
+const deriveCatalog = Effect.fn("deriveCatalog")(function* (rows: ReadonlyArray<CatalogInputRow>) {
+  const db = yield* Database;
+  if (rows.length === 0) return;
 
-    // A recording exists when a source binds to it or an edge points to it, as on the writer
-    const created: Array<string> = [];
-    const ensure = (id: string, origin: "local" | "provider" | "isrc" | "musicbrainz") =>
-      db
-        .insert(recording)
-        .values({ id, origin, policyVersion: 1, revision: 0 })
-        .onConflictDoNothing()
-        .returning({ id: recording.id })
-        .pipe(Effect.map((inserted) => created.push(...inserted.map((row) => row.id))));
+  // A recording exists when a source binds to it or an edge points to it, as on the writer
+  const created: Array<string> = [];
+  const ensure = (id: string, origin: "local" | "provider" | "isrc" | "musicbrainz") =>
+    db
+      .insert(recording)
+      .values({ id, origin, policyVersion: 1, revision: 0 })
+      .onConflictDoNothing()
+      .returning({ id: recording.id })
+      .pipe(Effect.map((inserted) => created.push(...inserted.map((row) => row.id))));
 
-    const variantSources = rows.flatMap((row) =>
-      row.table === "source_variant" ? [row.sourceId] : [],
-    );
-    const sources = [
-      ...rows.flatMap((row) => (row.table === "source" ? [row] : [])),
-      ...(variantSources.length === 0
-        ? []
-        : yield* db.select().from(source).where(inArray(source.id, variantSources))),
-    ];
-    for (const row of sources) {
-      if (row.recordingId !== null) {
-        yield* ensure(row.recordingId, row.provider === "local" ? "local" : "provider");
-      }
+  const variantSources = rows.flatMap((row) =>
+    row.table === "source_variant" ? [row.sourceId] : [],
+  );
+  const sources = [
+    ...rows.flatMap((row) => (row.table === "source" ? [row] : [])),
+    ...(variantSources.length === 0
+      ? []
+      : yield* db.select().from(source).where(inArray(source.id, variantSources))),
+  ];
+  for (const row of sources) {
+    if (row.recordingId !== null) {
+      yield* ensure(row.recordingId, row.provider === "local" ? "local" : "provider");
     }
+  }
 
-    const merges = rows.flatMap((row) =>
-      row.table === "entity_merge" && row.entityType === "recording" ? [row] : [],
+  const merges = rows.flatMap((row) =>
+    row.table === "entity_merge" && row.entityType === "recording" ? [row] : [],
+  );
+  for (const merge of merges) {
+    if (merge.origin !== "system" || merge.decision !== "merge") continue;
+    const evidence = Schema.decodeUnknownOption(IsrcEvidence)(merge.evidence);
+    const isrcTarget = Option.isSome(evidence)
+      ? yield* isrcRecordingId(evidence.value.isrc)
+      : undefined;
+    yield* ensure(merge.intoId, merge.intoId === isrcTarget ? "isrc" : "musicbrainz");
+  }
+
+  const entryMatches = rows.flatMap((row) =>
+    row.table === "catalog_assertion" && row.entityType === "tracklist_entry" ? [row] : [],
+  );
+  for (const match of entryMatches) {
+    const id = Schema.decodeUnknownOption(Schema.String)(match.value);
+    if (Option.isSome(id)) yield* ensure(id.value, "musicbrainz");
+  }
+
+  const boundIds = sources.flatMap((row) => row.recordingId ?? []);
+  const assertedIds = rows.flatMap((row) =>
+    row.table === "catalog_assertion" && row.entityType === "recording" ? [row.entityId] : [],
+  );
+  const movedFrom = [...merges.map((merge) => merge.fromId), ...created];
+  const resolved = movedFrom.length === 0 ? [] : [...(yield* resolveRoots(movedFrom))];
+
+  const changed = [...new Set([...boundIds, ...assertedIds, ...merges.map((row) => row.intoId)])];
+  const roots = yield* db
+    .select({ root: recording.mergedIntoId })
+    .from(recording)
+    .where(inArray(recording.id, changed));
+  yield* projectRecordings([...changed, ...resolved, ...roots.flatMap((row) => row.root ?? [])]);
+  const mergesOf = (entityType: "album" | "edition") =>
+    rows.flatMap((row) =>
+      row.table === "entity_merge" && row.entityType === entityType ? [row.fromId, row.intoId] : [],
     );
-    for (const merge of merges) {
-      if (merge.origin !== "system" || merge.decision !== "merge") continue;
-      const evidence = Schema.decodeUnknownOption(IsrcEvidence)(merge.evidence);
-      const isrcTarget = Option.isSome(evidence)
-        ? yield* isrcRecordingId(evidence.value.isrc)
-        : undefined;
-      yield* ensure(merge.intoId, merge.intoId === isrcTarget ? "isrc" : "musicbrainz");
-    }
-
-    const entryMatches = rows.flatMap((row) =>
-      row.table === "catalog_assertion" && row.entityType === "tracklist_entry" ? [row] : [],
-    );
-    for (const match of entryMatches) {
-      const id = Schema.decodeUnknownOption(Schema.String)(match.value);
-      if (Option.isSome(id)) yield* ensure(id.value, "musicbrainz");
-    }
-
-    const boundIds = sources.flatMap((row) => row.recordingId ?? []);
-    const assertedIds = rows.flatMap((row) =>
-      row.table === "catalog_assertion" && row.entityType === "recording" ? [row.entityId] : [],
-    );
-    const movedFrom = [...merges.map((merge) => merge.fromId), ...created];
-    const resolved = movedFrom.length === 0 ? [] : [...(yield* resolveRoots(movedFrom))];
-
-    const changed = [...new Set([...boundIds, ...assertedIds, ...merges.map((row) => row.intoId)])];
-    const roots = yield* db
-      .select({ root: recording.mergedIntoId })
-      .from(recording)
-      .where(inArray(recording.id, changed));
-    yield* projectRecordings([...changed, ...resolved, ...roots.flatMap((row) => row.root ?? [])]);
-    const mergesOf = (entityType: "album" | "edition") =>
-      rows.flatMap((row) =>
-        row.table === "entity_merge" && row.entityType === entityType
-          ? [row.fromId, row.intoId]
-          : [],
-      );
-    yield* deriveAlbums({
-      editions: rows.flatMap((row) =>
-        row.table === "catalog_assertion" && row.entityType === "edition" ? [row.entityId] : [],
-      ),
-      albumMerges: mergesOf("album"),
-      editionMerges: mergesOf("edition"),
-    });
-    // A changed source or variant changes the group of its recording
-    yield* touchGroups(boundIds);
-
-    // A page can bring the tracklist of a source before the source
-    const arrived = rows.flatMap((row) => (row.table === "source" ? [row.id] : []));
-    const waiting =
-      arrived.length === 0
-        ? []
-        : yield* db
-            .selectDistinct({ id: catalogAssertion.entityId })
-            .from(catalogAssertion)
-            .where(
-              and(
-                eq(catalogAssertion.entityType, "source"),
-                eq(catalogAssertion.field, "tracklist"),
-                inArray(catalogAssertion.entityId, arrived),
-              ),
-            );
-    const tracklists = [
-      ...rows.flatMap((row) =>
-        row.table === "catalog_assertion" &&
-        row.entityType === "source" &&
-        row.field === "tracklist"
-          ? [row.entityId]
-          : [],
-      ),
-      ...waiting.map((row) => row.id),
-    ];
-    if (tracklists.length > 0) yield* deriveTracklists(tracklists);
-    yield* deriveArtists(rows);
-    yield* deriveEntryMatches(
-      entryMatches.flatMap((row) =>
-        Option.toArray(Schema.decodeUnknownOption(EntryText)(row.evidence)),
-      ),
-    );
+  yield* deriveAlbums({
+    editions: rows.flatMap((row) =>
+      row.table === "catalog_assertion" && row.entityType === "edition" ? [row.entityId] : [],
+    ),
+    albumMerges: mergesOf("album"),
+    editionMerges: mergesOf("edition"),
   });
+  // A changed source or variant changes the group of its recording
+  yield* touchGroups(boundIds);
+
+  // A page can bring the tracklist of a source before the source
+  const arrived = rows.flatMap((row) => (row.table === "source" ? [row.id] : []));
+  const waiting =
+    arrived.length === 0
+      ? []
+      : yield* db
+          .selectDistinct({ id: catalogAssertion.entityId })
+          .from(catalogAssertion)
+          .where(
+            and(
+              eq(catalogAssertion.entityType, "source"),
+              eq(catalogAssertion.field, "tracklist"),
+              inArray(catalogAssertion.entityId, arrived),
+            ),
+          );
+  const tracklists = [
+    ...rows.flatMap((row) =>
+      row.table === "catalog_assertion" && row.entityType === "source" && row.field === "tracklist"
+        ? [row.entityId]
+        : [],
+    ),
+    ...waiting.map((row) => row.id),
+  ];
+  if (tracklists.length > 0) yield* deriveTracklists(tracklists);
+  yield* deriveArtists(rows);
+  yield* deriveEntryMatches(
+    entryMatches.flatMap((row) =>
+      Option.toArray(Schema.decodeUnknownOption(EntryText)(row.evidence)),
+    ),
+  );
+});
 
 /**
  * Merges rows from another server replica, then derives the canonical rows. A row that changes
@@ -291,54 +285,53 @@ const deriveCatalog = (rows: ReadonlyArray<CatalogInputRow>) =>
  * nothing, so rows do not circulate. Returns the `change_seq` of the rows that this replica took
  * as the peer sent them, if any. Run it in a transaction.
  */
-export const mergePeerRows = (rows: ReadonlyArray<PeerRow>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const clock = yield* HlcClock;
-    // The peer has the rows that it sent, but not the rows that merged with local changes
-    const adoptedSeq = yield* Effect.cached(nextChangeSeq);
-    const mergedSeq = yield* Effect.cached(nextChangeSeq);
-    const changed: Array<PeerRow> = [];
-    const adopted: Array<PeerRow> = [];
+export const mergePeerRows = Effect.fn("mergePeerRows")(function* (rows: ReadonlyArray<PeerRow>) {
+  const db = yield* Database;
+  const clock = yield* HlcClock;
+  // The peer has the rows that it sent, but not the rows that merged with local changes
+  const adoptedSeq = yield* Effect.cached(nextChangeSeq);
+  const mergedSeq = yield* Effect.cached(nextChangeSeq);
+  const changed: Array<PeerRow> = [];
+  const adopted: Array<PeerRow> = [];
 
-    for (const row of rows) {
-      if (row.table !== "play_event" && row.hlc !== "") yield* clock.receive(row.hlc);
+  for (const row of rows) {
+    if (row.table !== "play_event" && row.hlc !== "") yield* clock.receive(row.hlc);
 
-      const current = yield* readRow(row.table, row.id);
-      const merged = mergePeerRow(current, row);
-      if (Option.isNone(merged)) continue;
+    const current = yield* readRow(row.table, row.id);
+    const merged = mergePeerRow(current, row);
+    if (Option.isNone(merged)) continue;
 
-      const same = Equal.equals(merged.value, row);
-      yield* writeRow(merged.value, yield* same ? adoptedSeq : mergedSeq);
-      changed.push(merged.value);
-      if (same) adopted.push(row);
-    }
+    const same = Equal.equals(merged.value, row);
+    yield* writeRow(merged.value, yield* same ? adoptedSeq : mergedSeq);
+    changed.push(merged.value);
+    if (same) adopted.push(row);
+  }
 
-    yield* deriveCatalog(changed.filter(isCatalogRow));
-    // As on the account replica, a library song without a copy has a recording, also after unlink
-    const librarySongs = changed.flatMap((row) =>
-      row.table === "library_remote_track" ? [row.recordingId] : [],
-    );
-    if (librarySongs.length > 0) {
-      yield* db
-        .insert(recording)
-        .values(
-          librarySongs.map((id) => ({
-            id,
-            origin: "provider" as const,
-            policyVersion: 1,
-            revision: 0,
-          })),
-        )
-        .onConflictDoNothing();
-      yield* projectRecordings(librarySongs);
-    }
-    const playlistIds = new Set(
-      changed.flatMap((row) => {
-        if (row.table === "playlist") return [row.id];
-        return row.table === "playlist_entry" ? [row.playlistId] : [];
-      }),
-    );
-    yield* Effect.forEach(playlistIds, pushIfHeld, { discard: true });
-    return adopted.length > 0 ? yield* adoptedSeq : undefined;
-  });
+  yield* deriveCatalog(changed.filter(isCatalogRow));
+  // As on the account replica, a library song without a copy has a recording, also after unlink
+  const librarySongs = changed.flatMap((row) =>
+    row.table === "library_remote_track" ? [row.recordingId] : [],
+  );
+  if (librarySongs.length > 0) {
+    yield* db
+      .insert(recording)
+      .values(
+        librarySongs.map((id) => ({
+          id,
+          origin: "provider" as const,
+          policyVersion: 1,
+          revision: 0,
+        })),
+      )
+      .onConflictDoNothing();
+    yield* projectRecordings(librarySongs);
+  }
+  const playlistIds = new Set(
+    changed.flatMap((row) => {
+      if (row.table === "playlist") return [row.id];
+      return row.table === "playlist_entry" ? [row.playlistId] : [];
+    }),
+  );
+  yield* Effect.forEach(playlistIds, pushIfHeld, { discard: true });
+  return adopted.length > 0 ? yield* adoptedSeq : undefined;
+});

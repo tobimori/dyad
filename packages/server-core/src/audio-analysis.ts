@@ -22,42 +22,40 @@ export const requestAnalysis = Effect.gen(function* () {
 });
 
 /** The analysis of the source's audio, or `null` before the first analysis */
-export const sourceAnalysis = (sourceId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({
-        loudness: audioAnalysis.loudness,
-        truePeak: audioAnalysis.truePeak,
-        leadingSilenceMs: audioAnalysis.leadingSilenceMs,
-        trailingSilenceMs: audioAnalysis.trailingSilenceMs,
-      })
-      .from(audioAnalysis)
-      .innerJoin(sourceVariant, eq(sourceVariant.id, audioAnalysis.variantId))
-      .where(eq(sourceVariant.sourceId, sourceId))
-      .limit(1);
-    return row === undefined ? null : new AudioAnalysis(row);
-  });
+export const sourceAnalysis = Effect.fn("sourceAnalysis")(function* (sourceId: string) {
+  const db = yield* Database;
+  const [row] = yield* db
+    .select({
+      loudness: audioAnalysis.loudness,
+      truePeak: audioAnalysis.truePeak,
+      leadingSilenceMs: audioAnalysis.leadingSilenceMs,
+      trailingSilenceMs: audioAnalysis.trailingSilenceMs,
+    })
+    .from(audioAnalysis)
+    .innerJoin(sourceVariant, eq(sourceVariant.id, audioAnalysis.variantId))
+    .where(eq(sourceVariant.sourceId, sourceId))
+    .limit(1);
+  return row === undefined ? null : new AudioAnalysis(row);
+});
 
 /** The beat analysis of the source's audio, or `undefined` before the first analysis */
-export const sourceDjAnalysis = (sourceId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({ beats: audioAnalysis.beats })
-      .from(audioAnalysis)
-      .innerJoin(sourceVariant, eq(sourceVariant.id, audioAnalysis.variantId))
-      .where(eq(sourceVariant.sourceId, sourceId))
-      .limit(1);
-    if (row === undefined || row.beats === null) return undefined;
-    const beats = yield* Schema.decodeUnknownEffect(BeatAnalysis)(row.beats).pipe(Effect.orDie);
-    return new DjAnalysis({
-      ...beats,
-      intro: new BeatGrid(beats.intro),
-      outro: new BeatGrid(beats.outro),
-      key: beats.key === null ? undefined : new Camelot(beats.key),
-    });
+export const sourceDjAnalysis = Effect.fn("sourceDjAnalysis")(function* (sourceId: string) {
+  const db = yield* Database;
+  const [row] = yield* db
+    .select({ beats: audioAnalysis.beats })
+    .from(audioAnalysis)
+    .innerJoin(sourceVariant, eq(sourceVariant.id, audioAnalysis.variantId))
+    .where(eq(sourceVariant.sourceId, sourceId))
+    .limit(1);
+  if (row === undefined || row.beats === null) return undefined;
+  const beats = yield* Schema.decodeUnknownEffect(BeatAnalysis)(row.beats).pipe(Effect.orDie);
+  return new DjAnalysis({
+    ...beats,
+    intro: new BeatGrid(beats.intro),
+    outro: new BeatGrid(beats.outro),
+    key: beats.key === null ? undefined : new Camelot(beats.key),
   });
+});
 
 class Target extends Data.Class<{
   readonly variantId: string;

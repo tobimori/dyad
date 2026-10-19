@@ -99,11 +99,10 @@ export const ytdlpResolver = Effect.gen(function* () {
   const pausedUntil = yield* Ref.make(0);
   const missingLogged = yield* Ref.make(false);
 
-  const pause = (reason: string) =>
-    Effect.gen(function* () {
-      yield* Ref.set(pausedUntil, (yield* Clock.currentTimeMillis) + hourMs);
-      yield* Effect.logWarning(`yt-dlp: ${reason}. No YouTube account requests for 1 hour.`);
-    });
+  const pause = Effect.fn("pause")(function* (reason: string) {
+    yield* Ref.set(pausedUntil, (yield* Clock.currentTimeMillis) + hourMs);
+    yield* Effect.logWarning(`yt-dlp: ${reason}. No YouTube account requests for 1 hour.`);
+  });
 
   const run = (videoId: string) =>
     Effect.scoped(
@@ -203,60 +202,59 @@ export const ytdlpResolver = Effect.gen(function* () {
 
   // yt-dlp nightly 2026.10.10: URLs of the embedded client sometimes answer 403 before the first
   // byte, and the URLs of a new run play
-  const playable = (
+  const playable = Effect.fn("playable")(function* (
     videoId: string,
     credentials: Credentials,
     kind: "audio" | "video",
     formatOf: (
       answer: Effect.Success<ReturnType<typeof answerOf>>,
     ) => { readonly url: string; readonly filesize: number } | undefined,
-  ) =>
-    Effect.gen(function* () {
-      const context = yield* Effect.context<HttpClient.HttpClient>();
-      const open = (answer: Effect.Success<ReturnType<typeof answerOf>>) => {
-        const format = formatOf(answer);
-        // yt-dlp 2026.10.10 does not give the `indexRange` of `/player`
-        return format === undefined
-          ? Effect.fail(new ProviderError({ reason: `The video has no ${kind} stream` }))
-          : webmStream(format.url, format.filesize, kind, null);
-      };
-      const first = yield* answerOf(videoId, credentials).pipe(Effect.flatMap(open));
-      const fresh = Cache.invalidate(answers, videoId).pipe(
-        Effect.andThen(answerOf(videoId, credentials)),
-        Effect.flatMap(open),
-        Effect.provideContext(context),
+  ) {
+    const context = yield* Effect.context<HttpClient.HttpClient>();
+    const open = (answer: Effect.Success<ReturnType<typeof answerOf>>) => {
+      const format = formatOf(answer);
+      // yt-dlp 2026.10.10 does not give the `indexRange` of `/player`
+      return format === undefined
+        ? Effect.fail(new ProviderError({ reason: `The video has no ${kind} stream` }))
+        : webmStream(format.url, format.filesize, kind, null);
+    };
+    const first = yield* answerOf(videoId, credentials).pipe(Effect.flatMap(open));
+    const fresh = Cache.invalidate(answers, videoId).pipe(
+      Effect.andThen(answerOf(videoId, credentials)),
+      Effect.flatMap(open),
+      Effect.provideContext(context),
+    );
+
+    const retried = (
+      bytes: Stream.Stream<Uint8Array, ProviderError>,
+      again: (stream: typeof first) => Stream.Stream<Uint8Array, ProviderError>,
+    ) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const started = yield* Ref.make(false);
+          return bytes.pipe(
+            Stream.tap(() => Ref.set(started, true)),
+            Stream.catchIf(
+              (error) => error.reason === forbidden,
+              (error) =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    if (yield* Ref.get(started)) return Stream.fail(error);
+                    yield* Effect.logWarning("YouTube refused the URLs of yt-dlp. Asking again.");
+                    return again(yield* fresh);
+                  }),
+                ),
+            ),
+          );
+        }),
       );
 
-      const retried = (
-        bytes: Stream.Stream<Uint8Array, ProviderError>,
-        again: (stream: typeof first) => Stream.Stream<Uint8Array, ProviderError>,
-      ) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const started = yield* Ref.make(false);
-            return bytes.pipe(
-              Stream.tap(() => Ref.set(started, true)),
-              Stream.catchIf(
-                (error) => error.reason === forbidden,
-                (error) =>
-                  Stream.unwrap(
-                    Effect.gen(function* () {
-                      if (yield* Ref.get(started)) return Stream.fail(error);
-                      yield* Effect.logWarning("YouTube refused the URLs of yt-dlp. Asking again.");
-                      return again(yield* fresh);
-                    }),
-                  ),
-              ),
-            );
-          }),
-        );
-
-      return {
-        bytes: retried(first.bytes, (stream) => stream.bytes),
-        bytesFrom: (startMs: number) =>
-          retried(first.bytesFrom(startMs), (stream) => stream.bytesFrom(startMs)),
-      };
-    });
+    return {
+      bytes: retried(first.bytes, (stream) => stream.bytes),
+      bytesFrom: (startMs: number) =>
+        retried(first.bytesFrom(startMs), (stream) => stream.bytesFrom(startMs)),
+    };
+  });
 
   return {
     /** The Opus audio, chosen like `resolveAudio` */

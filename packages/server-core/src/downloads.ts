@@ -68,98 +68,96 @@ class DownloadChoice extends Data.Class<{
 }> {}
 
 // Provider sources often have no bit depth or bitrate
-const chooseDownload = (
+const chooseDownload = Effect.fn("chooseDownload")(function* (
   format: SourceFormat,
   audio: AudioQuality,
   quality: typeof DownloadQuality.Type,
   capabilities: PlaybackCapabilities,
-) =>
-  Effect.gen(function* () {
-    const playback = yield* choosePlayback(format, capabilities).pipe(Effect.option);
-    const kept = Option.filter(playback, (choice) => choice.operation !== "transcode").pipe(
+) {
+  const playback = yield* choosePlayback(format, capabilities).pipe(Effect.option);
+  const kept = Option.filter(playback, (choice) => choice.operation !== "transcode").pipe(
+    Option.map(
+      (choice) =>
+        new DownloadChoice({
+          format: choice.format,
+          encode: null,
+          direct: choice.operation === "direct",
+        }),
+    ),
+  );
+  const encodeAs = (codec: Encoding["codec"], bitrate: number | null, bitDepth: 16 | null) =>
+    Option.fromUndefinedOr(
+      capabilities.formats.find(
+        (candidate) =>
+          candidate.codec === codec &&
+          streamingCodecs[candidate.container].some((written) => written === codec),
+      ),
+    ).pipe(
       Option.map(
-        (choice) =>
+        (target) =>
           new DownloadChoice({
-            format: choice.format,
-            encode: null,
-            direct: choice.operation === "direct",
+            format: target,
+            encode: { codec, bitrate, bitDepth },
+            direct: false,
           }),
       ),
     );
-    const encodeAs = (codec: Encoding["codec"], bitrate: number | null, bitDepth: 16 | null) =>
-      Option.fromUndefinedOr(
-        capabilities.formats.find(
-          (candidate) =>
-            candidate.codec === codec &&
-            streamingCodecs[candidate.container].some((written) => written === codec),
-        ),
-      ).pipe(
-        Option.map(
-          (target) =>
-            new DownloadChoice({
-              format: target,
-              encode: { codec, bitrate, bitDepth },
-              direct: false,
-            }),
-        ),
-      );
 
-    const original = quality === "original" || quality === "lossless";
-    if (audio.lossless && original) {
-      const sixteenBit = quality === "lossless";
-      const keeps = Option.filter(
-        kept,
-        (choice) => !sixteenBit || (choice.format.codec === "flac" && (audio.bitDepth ?? 16) <= 16),
-      );
-      return Option.orElse(keeps, () => encodeAs("flac", null, sixteenBit ? 16 : null));
-    }
-
-    // A lossy source never becomes lossless. When the device cannot decode it, it gets `high`.
-    const targets = lossyTargets[original ? "high" : quality];
-    const limit = targets[0]?.[1] ?? 0;
-    const sourceBitrate = audio.lossless ? null : audio.bitrate;
-    if (!audio.lossless && (original || sourceBitrate === null || sourceBitrate <= limit)) {
-      if (Option.isSome(kept)) return kept;
-    }
-    return Arr.findFirst(targets, ([codec, bitrate]) =>
-      encodeAs(codec, Math.min(bitrate, sourceBitrate ?? bitrate), null),
+  const original = quality === "original" || quality === "lossless";
+  if (audio.lossless && original) {
+    const sixteenBit = quality === "lossless";
+    const keeps = Option.filter(
+      kept,
+      (choice) => !sixteenBit || (choice.format.codec === "flac" && (audio.bitDepth ?? 16) <= 16),
     );
-  });
+    return Option.orElse(keeps, () => encodeAs("flac", null, sixteenBit ? 16 : null));
+  }
+
+  // A lossy source never becomes lossless. When the device cannot decode it, it gets `high`.
+  const targets = lossyTargets[original ? "high" : quality];
+  const limit = targets[0]?.[1] ?? 0;
+  const sourceBitrate = audio.lossless ? null : audio.bitrate;
+  if (!audio.lossless && (original || sourceBitrate === null || sourceBitrate <= limit)) {
+    if (Option.isSome(kept)) return kept;
+  }
+  return Arr.findFirst(targets, ([codec, bitrate]) =>
+    encodeAs(codec, Math.min(bitrate, sourceBitrate ?? bitrate), null),
+  );
+});
 
 // How the user can download the source, by the same rules as playback and the provider's policy.
 // A search result enters the shared catalog here.
-const downloadSource = (
+const downloadSource = Effect.fn("downloadSource")(function* (
   sourceId: string,
   quality: typeof DownloadQuality.Type,
   capabilities: PlaybackCapabilities,
-) =>
-  Effect.gen(function* () {
-    const { playable, audio, searchResult } = yield* findPlayableSource(sourceId).pipe(
-      Effect.catchTag("PlaybackUnavailable", (error) =>
-        // Only a plan fails with `failed`, after it tried the copies
-        Effect.fail(
-          new DownloadUnavailable({
-            reason: error.reason === "failed" ? "not_found" : error.reason,
-          }),
-        ),
+) {
+  const { playable, audio, searchResult } = yield* findPlayableSource(sourceId).pipe(
+    Effect.catchTag("PlaybackUnavailable", (error) =>
+      // Only a plan fails with `failed`, after it tried the copies
+      Effect.fail(
+        new DownloadUnavailable({
+          reason: error.reason === "failed" ? "not_found" : error.reason,
+        }),
       ),
-    );
-    const leaseDays =
-      playable instanceof FilePlayback
-        ? Option.some(null)
-        : Option.fromUndefinedOr((yield* Providers).get(playable.provider)?.download).pipe(
-            Option.map((policy) => policy.leaseDays),
-          );
-    if (Option.isNone(leaseDays)) return yield* new DownloadUnavailable({ reason: "not_allowed" });
+    ),
+  );
+  const leaseDays =
+    playable instanceof FilePlayback
+      ? Option.some(null)
+      : Option.fromUndefinedOr((yield* Providers).get(playable.provider)?.download).pipe(
+          Option.map((policy) => policy.leaseDays),
+        );
+  if (Option.isNone(leaseDays)) return yield* new DownloadUnavailable({ reason: "not_allowed" });
 
-    const choice = yield* chooseDownload(playable.format, audio, quality, capabilities);
-    if (Option.isNone(choice)) {
-      return yield* new DownloadUnavailable({ reason: "unsupported_format" });
-    }
+  const choice = yield* chooseDownload(playable.format, audio, quality, capabilities);
+  if (Option.isNone(choice)) {
+    return yield* new DownloadUnavailable({ reason: "unsupported_format" });
+  }
 
-    if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
-    return { playable, audio, choice: choice.value, leaseDays: leaseDays.value };
-  });
+  if (Option.isSome(searchResult)) yield* addProviderSource(searchResult.value);
+  return { playable, audio, choice: choice.value, leaseDays: leaseDays.value };
+});
 
 class DownloadGrant extends Data.Class<{
   readonly sourceId: string;
@@ -179,117 +177,116 @@ const grantLines = (grant: DownloadGrant) => [
   grant.expiresAt,
 ];
 
-export const prepareDownload = (
+export const prepareDownload = Effect.fn("prepareDownload")(function* (
   sourceId: string,
   quality: typeof DownloadQuality.Type,
   capabilities: PlaybackCapabilities,
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
-    const { audio, choice, leaseDays } = yield* downloadSource(sourceId, quality, capabilities);
+) {
+  const db = yield* Database;
+  const principal = yield* CurrentPrincipal;
+  const { audio, choice, leaseDays } = yield* downloadSource(sourceId, quality, capabilities);
 
-    const now = yield* Clock.currentTimeMillis;
-    const leaseExpiresAt = leaseDays === null ? null : now + leaseDays * dayMs;
-    yield* db
-      .insert(deviceDownload)
-      .values({ deviceId: principal.deviceId, sourceId, quality, leaseExpiresAt, createdAt: now })
-      .onConflictDoUpdate({
-        target: [deviceDownload.deviceId, deviceDownload.sourceId],
-        set: { quality, leaseExpiresAt },
-      });
+  const now = yield* Clock.currentTimeMillis;
+  const leaseExpiresAt = leaseDays === null ? null : now + leaseDays * dayMs;
+  yield* db
+    .insert(deviceDownload)
+    .values({ deviceId: principal.deviceId, sourceId, quality, leaseExpiresAt, createdAt: now })
+    .onConflictDoUpdate({
+      target: [deviceDownload.deviceId, deviceDownload.sourceId],
+      set: { quality, leaseExpiresAt },
+    });
 
-    const grant = new DownloadGrant({
-      sourceId,
-      quality,
-      format: choice.format,
-      deviceId: principal.deviceId,
-      expiresAt: now + urlLifetimeMs,
-    });
-    const search = new URLSearchParams({
-      quality,
-      container: grant.format.container,
-      codec: grant.format.codec,
-      device: grant.deviceId,
-      expires: String(grant.expiresAt),
-      signature: yield* signGrant(grantLines(grant)),
-    });
-    const encode = choice.encode;
-    const flac = encode?.codec === "flac";
-    return new DownloadPlan({
-      format: choice.format,
-      bitrate: encode?.bitrate ?? null,
-      path: `/download/${sourceId}?${search}`,
-      leaseExpiresAt,
-      audio:
-        encode === null
-          ? audio
-          : new AudioQuality({
-              codec: encode.codec,
-              lossless: flac,
-              // Lossy encoders can resample
-              sampleRate: flac ? audio.sampleRate : null,
-              bitDepth: flac ? (encode.bitDepth ?? audio.bitDepth) : null,
-              bitrate: encode.bitrate,
-            }),
-    });
+  const grant = new DownloadGrant({
+    sourceId,
+    quality,
+    format: choice.format,
+    deviceId: principal.deviceId,
+    expiresAt: now + urlLifetimeMs,
   });
+  const search = new URLSearchParams({
+    quality,
+    container: grant.format.container,
+    codec: grant.format.codec,
+    device: grant.deviceId,
+    expires: String(grant.expiresAt),
+    signature: yield* signGrant(grantLines(grant)),
+  });
+  const encode = choice.encode;
+  const flac = encode?.codec === "flac";
+  return new DownloadPlan({
+    format: choice.format,
+    bitrate: encode?.bitrate ?? null,
+    path: `/download/${sourceId}?${search}`,
+    leaseExpiresAt,
+    audio:
+      encode === null
+        ? audio
+        : new AudioQuality({
+            codec: encode.codec,
+            lossless: flac,
+            // Lossy encoders can resample
+            sampleRate: flac ? audio.sampleRate : null,
+            bitDepth: flac ? (encode.bitDepth ?? audio.bitDepth) : null,
+            bitrate: encode.bitrate,
+          }),
+  });
+});
 
 /**
  * Keeps the records of `sourceIds` that the device may still keep and renews their leases. It
  * forgets the other records of the device.
  */
-export const checkInDownloads = (sourceIds: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const principal = yield* CurrentPrincipal;
-    const usable = yield* usableProviders;
-    const now = yield* Clock.currentTimeMillis;
+export const checkInDownloads = Effect.fn("checkInDownloads")(function* (
+  sourceIds: ReadonlyArray<string>,
+) {
+  const db = yield* Database;
+  const principal = yield* CurrentPrincipal;
+  const usable = yield* usableProviders;
+  const now = yield* Clock.currentTimeMillis;
 
-    const records = yield* db
-      .select({ record: deviceDownload, provider: source.provider })
-      .from(deviceDownload)
-      .innerJoin(source, eq(source.id, deviceDownload.sourceId))
-      .where(eq(deviceDownload.deviceId, principal.deviceId));
-    const listed = new Set(sourceIds);
-    const kept = records.flatMap(({ record, provider }) => {
-      if (!listed.has(record.sourceId)) return [];
-      if (provider === "local") return [{ ...record, leaseExpiresAt: null }];
+  const records = yield* db
+    .select({ record: deviceDownload, provider: source.provider })
+    .from(deviceDownload)
+    .innerJoin(source, eq(source.id, deviceDownload.sourceId))
+    .where(eq(deviceDownload.deviceId, principal.deviceId));
+  const listed = new Set(sourceIds);
+  const kept = records.flatMap(({ record, provider }) => {
+    if (!listed.has(record.sourceId)) return [];
+    if (provider === "local") return [{ ...record, leaseExpiresAt: null }];
 
-      const policy = usable.get(provider)?.provider.download;
-      if (policy === undefined) return [];
-      const leaseExpiresAt = policy.leaseDays === null ? null : now + policy.leaseDays * dayMs;
-      return [{ ...record, leaseExpiresAt }];
-    });
-
-    yield* db.transaction((tx) =>
-      Effect.gen(function* () {
-        yield* tx.delete(deviceDownload).where(eq(deviceDownload.deviceId, principal.deviceId));
-        for (const rows of Arr.chunksOf(kept, 500)) yield* tx.insert(deviceDownload).values(rows);
-      }),
-    );
-    return kept.map(
-      (record) =>
-        new DownloadLease({ sourceId: record.sourceId, leaseExpiresAt: record.leaseExpiresAt }),
-    );
+    const policy = usable.get(provider)?.provider.download;
+    if (policy === undefined) return [];
+    const leaseExpiresAt = policy.leaseDays === null ? null : now + policy.leaseDays * dayMs;
+    return [{ ...record, leaseExpiresAt }];
   });
+
+  yield* db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* tx.delete(deviceDownload).where(eq(deviceDownload.deviceId, principal.deviceId));
+      for (const rows of Arr.chunksOf(kept, 500)) yield* tx.insert(deviceDownload).values(rows);
+    }),
+  );
+  return kept.map(
+    (record) =>
+      new DownloadLease({ sourceId: record.sourceId, leaseExpiresAt: record.leaseExpiresAt }),
+  );
+});
 
 /** The devices drop the files of `provider` at their next check-in */
-export const forgetDownloads = (provider: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    yield* db
-      .delete(deviceDownload)
-      .where(
-        and(
-          inArray(deviceDownload.deviceId, db.select({ id: device.id }).from(device)),
-          inArray(
-            deviceDownload.sourceId,
-            db.select({ id: source.id }).from(source).where(eq(source.provider, provider)),
-          ),
+export const forgetDownloads = Effect.fn("forgetDownloads")(function* (provider: string) {
+  const db = yield* Database;
+  yield* db
+    .delete(deviceDownload)
+    .where(
+      and(
+        inArray(deviceDownload.deviceId, db.select({ id: device.id }).from(device)),
+        inArray(
+          deviceDownload.sourceId,
+          db.select({ id: source.id }).from(source).where(eq(source.provider, provider)),
         ),
-      );
-  });
+      ),
+    );
+});
 
 const unavailableStatus = {
   not_found: 404,

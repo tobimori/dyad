@@ -69,19 +69,19 @@ export const parseCookieFile = (text: string) =>
 export const cookieFileHint = (login: BrowserLogin) =>
   `Sign in at ${login.url} in a private window, export cookies.txt, then close the window.`;
 
-export const readCookieFile = (login: BrowserLogin, file: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const filename = file.startsWith("~/") ? path.join(homedir(), file.slice(2)) : file;
-    const text = yield* fs
-      .readFileString(filename)
-      .pipe(
-        Effect.mapError(() => new CookieImportError({ reason: "Cannot read the cookie file" })),
-      );
-    return selectCookies(
-      login,
-      yield* parseCookieFile(text),
-      (yield* Clock.currentTimeMillis) / 1000,
-    );
-  });
+export const readCookieFile = Effect.fn("readCookieFile")(function* (
+  login: BrowserLogin,
+  file: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const filename = file.startsWith("~/") ? path.join(homedir(), file.slice(2)) : file;
+  const text = yield* fs
+    .readFileString(filename)
+    .pipe(Effect.mapError(() => new CookieImportError({ reason: "Cannot read the cookie file" })));
+  return selectCookies(
+    login,
+    yield* parseCookieFile(text),
+    (yield* Clock.currentTimeMillis) / 1000,
+  );
+});

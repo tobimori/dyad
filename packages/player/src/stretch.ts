@@ -68,45 +68,46 @@ const loadProcessorClass = () => {
 };
 
 /** A stretcher with the default preset, or the `cheaper` one for weak hosts */
-export const openStretcher = (preset: "default" | "cheaper" = "default") =>
-  Effect.gen(function* () {
-    const Processor = yield* Effect.promise(loadProcessorClass);
-    const wasm = yield* Effect.callback<SignalsmithWasm>((resume) => {
-      const processor = new Processor({});
-      processor.ready = () => resume(Effect.succeed(processor.wasmModule));
-    });
-    if (preset === "cheaper") wasm._presetCheaper(2, timelineRate);
-    else wasm._presetDefault(2, timelineRate);
-    const pointer = wasm._setBuffers(2, stretcherCapacity);
-    // The WASM memory can grow, so the views are new for each call
-    const buffer = (index: number, frames: number) =>
-      new Float32Array(wasm.HEAP8.buffer, pointer + index * stretcherCapacity * 4, frames);
-
-    const load = (input: Float32Array, frames: number) => {
-      const left = buffer(0, frames);
-      const right = buffer(1, frames);
-      for (let frame = 0; frame < frames; frame++) {
-        left[frame] = input[2 * frame] ?? 0;
-        right[frame] = input[2 * frame + 1] ?? 0;
-      }
-    };
-
-    return new Stretcher({
-      inputLatency: wasm._inputLatency(),
-      outputLatency: wasm._outputLatency(),
-      seek: (input, frames, rate) => {
-        load(input, frames);
-        wasm._seek(frames, rate);
-      },
-      process: (input, inputs, output, at, outputs) => {
-        load(input, inputs);
-        wasm._process(inputs, outputs);
-        const left = buffer(2, outputs);
-        const right = buffer(3, outputs);
-        for (let frame = 0; frame < outputs; frame++) {
-          output[2 * (at + frame)] = left[frame] ?? 0;
-          output[2 * (at + frame) + 1] = right[frame] ?? 0;
-        }
-      },
-    });
+export const openStretcher = Effect.fn("openStretcher")(function* (
+  preset: "default" | "cheaper" = "default",
+) {
+  const Processor = yield* Effect.promise(loadProcessorClass);
+  const wasm = yield* Effect.callback<SignalsmithWasm>((resume) => {
+    const processor = new Processor({});
+    processor.ready = () => resume(Effect.succeed(processor.wasmModule));
   });
+  if (preset === "cheaper") wasm._presetCheaper(2, timelineRate);
+  else wasm._presetDefault(2, timelineRate);
+  const pointer = wasm._setBuffers(2, stretcherCapacity);
+  // The WASM memory can grow, so the views are new for each call
+  const buffer = (index: number, frames: number) =>
+    new Float32Array(wasm.HEAP8.buffer, pointer + index * stretcherCapacity * 4, frames);
+
+  const load = (input: Float32Array, frames: number) => {
+    const left = buffer(0, frames);
+    const right = buffer(1, frames);
+    for (let frame = 0; frame < frames; frame++) {
+      left[frame] = input[2 * frame] ?? 0;
+      right[frame] = input[2 * frame + 1] ?? 0;
+    }
+  };
+
+  return new Stretcher({
+    inputLatency: wasm._inputLatency(),
+    outputLatency: wasm._outputLatency(),
+    seek: (input, frames, rate) => {
+      load(input, frames);
+      wasm._seek(frames, rate);
+    },
+    process: (input, inputs, output, at, outputs) => {
+      load(input, inputs);
+      wasm._process(inputs, outputs);
+      const left = buffer(2, outputs);
+      const right = buffer(3, outputs);
+      for (let frame = 0; frame < outputs; frame++) {
+        output[2 * (at + frame)] = left[frame] ?? 0;
+        output[2 * (at + frame) + 1] = right[frame] ?? 0;
+      }
+    },
+  });
+});

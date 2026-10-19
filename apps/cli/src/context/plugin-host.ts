@@ -36,69 +36,67 @@ export class PluginHost extends Data.Class<{
  * Starts each enabled plugin in its own scope below the current scope. If setup fails, only that
  * plugin stops. The plugins log with the logger of the effect that starts them.
  */
-export const startPluginHost = (context: ClientPluginContext) =>
-  Effect.gen(function* () {
-    const parent = yield* Effect.scope;
-    const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
-    const running = new Map<string, Scope.Closeable>();
+export const startPluginHost = Effect.fn("startPluginHost")(function* (
+  context: ClientPluginContext,
+) {
+  const parent = yield* Effect.scope;
+  const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const running = new Map<string, Scope.Closeable>();
 
-    // A broken file must not stop the player. The next change writes a new file.
-    let settings = yield* loadSettings.pipe(
-      Effect.tapCause((cause) => Effect.logWarning("Cannot read the settings", cause)),
-      Effect.orElseSucceed(() => defaultSettings),
+  // A broken file must not stop the player. The next change writes a new file.
+  let settings = yield* loadSettings.pipe(
+    Effect.tapCause((cause) => Effect.logWarning("Cannot read the settings", cause)),
+    Effect.orElseSucceed(() => defaultSettings),
+  );
+
+  const start = Effect.fn("start")(function* (plugin: ClientPlugin) {
+    if (running.has(plugin.id)) return;
+
+    const scope = yield* Scope.fork(parent);
+    const exit = yield* plugin.setup(context).pipe(Scope.provide(scope), Effect.exit);
+    if (Exit.isSuccess(exit)) {
+      running.set(plugin.id, scope);
+      return;
+    }
+
+    yield* Scope.close(scope, exit);
+    yield* Effect.logError("Plugin setup failed", exit.cause).pipe(
+      Effect.annotateLogs("pluginId", plugin.id),
+    );
+  });
+
+  const stop = Effect.fn("stop")(function* (id: string) {
+    const scope = running.get(id);
+    if (scope === undefined) return;
+
+    running.delete(id);
+    yield* Scope.close(scope, Exit.void);
+  });
+
+  const enabled = clientPlugins.filter((plugin) => isPluginEnabled(settings, plugin));
+  yield* Effect.forEach(enabled, start, { discard: true });
+
+  const setEnabled = Effect.fn("setEnabled")(function* (id: string, enable: boolean) {
+    const plugin = clientPlugins.find((candidate) => candidate.id === id);
+    if (plugin === undefined) return;
+
+    settings = withEnabled(settings, id, enable);
+    yield* updateSettings((current) => withEnabled(current, id, enable)).pipe(
+      Effect.provideContext(services),
+      Effect.tapCause((cause) => Effect.logWarning("Cannot save the settings", cause)),
+      Effect.ignore,
     );
 
-    const start = (plugin: ClientPlugin) =>
-      Effect.gen(function* () {
-        if (running.has(plugin.id)) return;
-
-        const scope = yield* Scope.fork(parent);
-        const exit = yield* plugin.setup(context).pipe(Scope.provide(scope), Effect.exit);
-        if (Exit.isSuccess(exit)) {
-          running.set(plugin.id, scope);
-          return;
-        }
-
-        yield* Scope.close(scope, exit);
-        yield* Effect.logError("Plugin setup failed", exit.cause).pipe(
-          Effect.annotateLogs("pluginId", plugin.id),
-        );
-      });
-
-    const stop = (id: string) =>
-      Effect.gen(function* () {
-        const scope = running.get(id);
-        if (scope === undefined) return;
-
-        running.delete(id);
-        yield* Scope.close(scope, Exit.void);
-      });
-
-    const enabled = clientPlugins.filter((plugin) => isPluginEnabled(settings, plugin));
-    yield* Effect.forEach(enabled, start, { discard: true });
-
-    const setEnabled = (id: string, enable: boolean) =>
-      Effect.gen(function* () {
-        const plugin = clientPlugins.find((candidate) => candidate.id === id);
-        if (plugin === undefined) return;
-
-        settings = withEnabled(settings, id, enable);
-        yield* updateSettings((current) => withEnabled(current, id, enable)).pipe(
-          Effect.provideContext(services),
-          Effect.tapCause((cause) => Effect.logWarning("Cannot save the settings", cause)),
-          Effect.ignore,
-        );
-
-        if (enable) {
-          yield* start(plugin);
-          return;
-        }
-        yield* stop(id);
-      });
-
-    return new PluginHost({
-      plugins: clientPlugins,
-      isEnabled: (plugin) => isPluginEnabled(settings, plugin),
-      setEnabled,
-    });
+    if (enable) {
+      yield* start(plugin);
+      return;
+    }
+    yield* stop(id);
   });
+
+  return new PluginHost({
+    plugins: clientPlugins,
+    isEnabled: (plugin) => isPluginEnabled(settings, plugin),
+    setEnabled,
+  });
+});

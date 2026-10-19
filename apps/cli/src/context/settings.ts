@@ -55,17 +55,18 @@ export const loadSettings = Effect.gen(function* () {
 });
 
 /** Reads the file first, so that two writers of different settings do not undo each other */
-export const updateSettings = (change: (settings: Settings) => Settings) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const file = yield* settingsFile;
-    // A broken file must not stop the player. This write replaces it.
-    const settings = yield* loadSettings.pipe(Effect.orElseSucceed(() => defaultSettings));
+export const updateSettings = Effect.fn("updateSettings")(function* (
+  change: (settings: Settings) => Settings,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = yield* settingsFile;
+  // A broken file must not stop the player. This write replaces it.
+  const settings = yield* loadSettings.pipe(Effect.orElseSucceed(() => defaultSettings));
 
-    yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-    yield* fs.writeFileString(file, yield* Schema.encodeEffect(SettingsJson)(change(settings)));
-  });
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+  yield* fs.writeFileString(file, yield* Schema.encodeEffect(SettingsJson)(change(settings)));
+});
 
 /** `null` until the file loads. It loads on each mount, so that a change elsewhere applies. */
 export const useSettings = () => {

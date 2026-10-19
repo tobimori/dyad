@@ -60,36 +60,35 @@ export const upnpDevices = Stream.unwrap(
     const described = new Set<string>();
     const emitted = new Map<string, string>();
 
-    const deviceIn = (payload: Uint8Array) =>
-      Effect.gen(function* () {
-        const answer = yield* Schema.decodeUnknownEffect(SearchAnswer)(headersOf(payload)).pipe(
-          Effect.option,
-        );
-        if (Option.isNone(answer)) return [];
+    const deviceIn = Effect.fn("deviceIn")(function* (payload: Uint8Array) {
+      const answer = yield* Schema.decodeUnknownEffect(SearchAnswer)(headersOf(payload)).pipe(
+        Effect.option,
+      );
+      if (Option.isNone(answer)) return [];
 
-        const { location } = answer.value;
-        if (described.has(location) || !URL.canParse(location)) return [];
-        described.add(location);
+      const { location } = answer.value;
+      if (described.has(location) || !URL.canParse(location)) return [];
+      described.add(location);
 
-        const device = yield* describe(location).pipe(
-          Effect.catch((error) =>
-            Effect.logDebug("Cannot read a UPnP device", location, error.reason).pipe(
-              // A later search tries again
-              Effect.andThen(Effect.sync(() => described.delete(location))),
-              Effect.as(null),
-            ),
+      const device = yield* describe(location).pipe(
+        Effect.catch((error) =>
+          Effect.logDebug("Cannot read a UPnP device", location, error.reason).pipe(
+            // A later search tries again
+            Effect.andThen(Effect.sync(() => described.delete(location))),
+            Effect.as(null),
           ),
-        );
-        if (device === null || emitted.get(device.id) === location) return [];
+        ),
+      );
+      if (device === null || emitted.get(device.id) === location) return [];
 
-        const bonded =
-          device.kind === "sonos" &&
-          (yield* sonosBonded(device).pipe(Effect.orElseSucceed(() => false)));
-        if (bonded) return [];
+      const bonded =
+        device.kind === "sonos" &&
+        (yield* sonosBonded(device).pipe(Effect.orElseSucceed(() => false)));
+      if (bonded) return [];
 
-        emitted.set(device.id, location);
-        return [device];
-      });
+      emitted.set(device.id, location);
+      return [device];
+    });
 
     return Stream.fromEffectRepeat(reader.pull).pipe(
       Stream.flattenIterable,

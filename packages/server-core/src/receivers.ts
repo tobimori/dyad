@@ -46,25 +46,24 @@ const makeReceivers = Effect.gen(function* () {
     );
 
   /** Plays the audio of a group on the device of `outputId` */
-  const open = (outputId: OutputId) =>
-    Effect.gen(function* () {
-      const client = receiverOf(outputId);
-      if (client === undefined) {
-        return yield* new OutputError({ reason: "The device does not play groups" });
-      }
-      return new TimedOutput({
-        leadMs: receiverLeadMs,
-        write: (playAtUs, pcm) =>
-          client.send(encodeTimedFrame(new TimedFrame({ listen: false, playAtUs, samples: pcm }))),
-        flush: client.send(flush(false)),
-        // The device keeps its own volume, like when it plays alone
-        setVolume: () => Effect.void,
-        setMedia: () => Effect.void,
-        closed: Deferred.await(client.closed).pipe(
-          Effect.andThen(new OutputError({ reason: "The device disconnected" })),
-        ),
-      });
+  const open = Effect.fn("open")(function* (outputId: OutputId) {
+    const client = receiverOf(outputId);
+    if (client === undefined) {
+      return yield* new OutputError({ reason: "The device does not play groups" });
+    }
+    return new TimedOutput({
+      leadMs: receiverLeadMs,
+      write: (playAtUs, pcm) =>
+        client.send(encodeTimedFrame(new TimedFrame({ listen: false, playAtUs, samples: pcm }))),
+      flush: client.send(flush(false)),
+      // The device keeps its own volume, like when it plays alone
+      setVolume: () => Effect.void,
+      setMedia: () => Effect.void,
+      closed: Deferred.await(client.closed).pipe(
+        Effect.andThen(new OutputError({ reason: "The device disconnected" })),
+      ),
     });
+  });
 
   /** The listeners get the block as mono */
   const feed = (playAtUs: number, pcm: Float32Array) =>

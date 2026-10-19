@@ -14,37 +14,36 @@ const ChartsResponse = Schema.Struct({
 });
 
 /** The most played songs and albums of the user's storefront */
-export const readCharts = (session: AppleSession) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(`${amp}/v1/catalog/${session.storefront}/charts`).pipe(
-      HttpClientRequest.setUrlParams({ ...includes, types: "songs,albums", limit: 25 }),
-      authorize(session),
-    );
-    const { results } = yield* requestJson(request, ChartsResponse, "charts");
+export const readCharts = Effect.fn("readCharts")(function* (session: AppleSession) {
+  const request = HttpClientRequest.get(`${amp}/v1/catalog/${session.storefront}/charts`).pipe(
+    HttpClientRequest.setUrlParams({ ...includes, types: "songs,albums", limit: 25 }),
+    authorize(session),
+  );
+  const { results } = yield* requestJson(request, ChartsResponse, "charts");
 
-    // Apple names the charts in the language of the storefront, for example `Top-Titel` (October 2026)
-    return [
-      ...results.songs.map(
-        (chart) =>
-          new ProviderShelf({
-            title: "Top songs",
-            // The position on the album means nothing in a chart
-            tracks: chart.data.map(
-              (song) => new ProviderTrack({ ...toTrack(song), disc: null, number: null }),
-            ),
-            releases: [],
-          }),
-      ),
-      ...results.albums.map(
-        (chart) =>
-          new ProviderShelf({
-            title: "Top albums",
-            tracks: [],
-            releases: chart.data.map((album) => toRelease(album, null, false)),
-          }),
-      ),
-    ];
-  });
+  // Apple names the charts in the language of the storefront, for example `Top-Titel` (October 2026)
+  return [
+    ...results.songs.map(
+      (chart) =>
+        new ProviderShelf({
+          title: "Top songs",
+          // The position on the album means nothing in a chart
+          tracks: chart.data.map(
+            (song) => new ProviderTrack({ ...toTrack(song), disc: null, number: null }),
+          ),
+          releases: [],
+        }),
+    ),
+    ...results.albums.map(
+      (chart) =>
+        new ProviderShelf({
+          title: "Top albums",
+          tracks: [],
+          releases: chart.data.map((album) => toRelease(album, null, false)),
+        }),
+    ),
+  ];
+});
 
 // Heavy rotation and recommendations also hold playlists and stations, which are not releases
 const CatalogAlbum = Schema.Struct({ type: Schema.Literal("albums"), ...AppleAlbum.fields });
@@ -73,38 +72,37 @@ const Recommendations = Schema.Struct({
 });
 
 /** The albums that the subscriber plays most, and Apple's recommendations for the subscriber */
-export const readPersonal = (session: AppleSession) =>
-  Effect.gen(function* () {
-    const rotation = yield* requestJson(
-      HttpClientRequest.get(`${amp}/v1/me/history/heavy-rotation`).pipe(
-        HttpClientRequest.setUrlParams({ limit: 10 }),
-        authorize(session),
-      ),
-      HeavyRotation,
-      "heavy rotation",
-    );
-    const recommendations = yield* requestJson(
-      HttpClientRequest.get(`${amp}/v1/me/recommendations`).pipe(
-        HttpClientRequest.setUrlParams({ limit: 10 }),
-        authorize(session),
-      ),
-      Recommendations,
-      "recommendations",
-    );
+export const readPersonal = Effect.fn("readPersonal")(function* (session: AppleSession) {
+  const rotation = yield* requestJson(
+    HttpClientRequest.get(`${amp}/v1/me/history/heavy-rotation`).pipe(
+      HttpClientRequest.setUrlParams({ limit: 10 }),
+      authorize(session),
+    ),
+    HeavyRotation,
+    "heavy rotation",
+  );
+  const recommendations = yield* requestJson(
+    HttpClientRequest.get(`${amp}/v1/me/recommendations`).pipe(
+      HttpClientRequest.setUrlParams({ limit: 10 }),
+      authorize(session),
+    ),
+    Recommendations,
+    "recommendations",
+  );
 
-    return [
-      new SuggestionShelf({
-        title: "Heavy rotation",
-        songs: [],
-        releases: albumsOf(rotation.data),
-      }),
-      ...recommendations.data.map(
-        (group) =>
-          new SuggestionShelf({
-            title: group.attributes.title?.stringForDisplay ?? "Recommended",
-            songs: [],
-            releases: albumsOf(group.relationships?.contents.data ?? []),
-          }),
-      ),
-    ].filter((shelf) => shelf.releases.length > 0);
-  });
+  return [
+    new SuggestionShelf({
+      title: "Heavy rotation",
+      songs: [],
+      releases: albumsOf(rotation.data),
+    }),
+    ...recommendations.data.map(
+      (group) =>
+        new SuggestionShelf({
+          title: group.attributes.title?.stringForDisplay ?? "Recommended",
+          songs: [],
+          releases: albumsOf(group.relationships?.contents.data ?? []),
+        }),
+    ),
+  ].filter((shelf) => shelf.releases.length > 0);
+});

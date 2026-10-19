@@ -25,18 +25,17 @@ const searchSchedule = Schedule.min([
   Schedule.spaced("30 seconds"),
 ]);
 
-const open = (port: number) =>
-  Effect.gen(function* () {
-    // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
-    const socket = yield* NodeDatagramSocket.make({
-      bind: { address: "0.0.0.0", port },
-      reuseAddress: true,
-      multicast: { ttl: 255 },
-    });
-    const reader = yield* socket.reader;
-    const writer = yield* socket.writer;
-    return { reader, writer };
+const open = Effect.fn("open")(function* (port: number) {
+  // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
+  const socket = yield* NodeDatagramSocket.make({
+    bind: { address: "0.0.0.0", port },
+    reuseAddress: true,
+    multicast: { ttl: 255 },
   });
+  const reader = yield* socket.reader;
+  const writer = yield* socket.writer;
+  return { reader, writer };
+});
 
 // Keys are lowercase; an entry without `=` is a flag
 const txtRecord = (data: string | Uint8Array | ReadonlyArray<string | Uint8Array>) => {

@@ -56,7 +56,7 @@ export class ArtistLinkEvidence extends Schema.Class<ArtistLinkEvidence>("Artist
 const parseVersion = (revision: string | null) => Number(revision?.replace("parse:v", "") ?? 0);
 
 // One assertion for each field of `values`. Unchanged assertions write nothing.
-export const assertFields = (
+export const assertFields = Effect.fn("assertFields")(function* (
   entityType: "recording" | "artist" | "edition",
   entityId: string,
   origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
@@ -70,96 +70,95 @@ export const assertFields = (
     readonly originRevision?: string;
     readonly evidence?: unknown;
   },
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const clock = yield* HlcClock;
-    const identity = yield* ReplicaDatabase;
-    const confidence = details.confidence ?? 1;
-    const originRevision = details.originRevision ?? null;
-    const evidence = details.evidence ?? null;
+) {
+  const db = yield* Database;
+  const clock = yield* HlcClock;
+  const identity = yield* ReplicaDatabase;
+  const confidence = details.confidence ?? 1;
+  const originRevision = details.originRevision ?? null;
+  const evidence = details.evidence ?? null;
 
-    const assertions = yield* Effect.forEach(Object.entries(values), ([field, value]) =>
-      assertionId({
-        entityType,
-        entityId,
-        field,
-        origin,
-        originRef,
-      }).pipe(Effect.map((id) => ({ id, field, value }))),
+  const assertions = yield* Effect.forEach(Object.entries(values), ([field, value]) =>
+    assertionId({
+      entityType,
+      entityId,
+      field,
+      origin,
+      originRef,
+    }).pipe(Effect.map((id) => ({ id, field, value }))),
+  );
+  const known = new Map(
+    (yield* db
+      .select({
+        id: catalogAssertion.id,
+        value: catalogAssertion.value,
+        confidence: catalogAssertion.confidence,
+        originRevision: catalogAssertion.originRevision,
+        evidence: catalogAssertion.evidence,
+        retracted: catalogAssertion.retracted,
+      })
+      .from(catalogAssertion)
+      .where(
+        inArray(
+          catalogAssertion.id,
+          assertions.map((assertion) => assertion.id),
+        ),
+      )).map((row) => [row.id, row]),
+  );
+
+  const changed = assertions.filter((assertion) => {
+    const row = known.get(assertion.id);
+    if (row === undefined) return true;
+    // A replica with an older parser must not overwrite the parse of a newer one
+    if (origin === "parse" && parseVersion(row.originRevision) > parseVersion(originRevision)) {
+      return false;
+    }
+    return (
+      row.retracted ||
+      JSON.stringify([row.value, row.confidence, row.originRevision, row.evidence]) !==
+        JSON.stringify([assertion.value, confidence, originRevision, evidence])
     );
-    const known = new Map(
-      (yield* db
-        .select({
-          id: catalogAssertion.id,
-          value: catalogAssertion.value,
-          confidence: catalogAssertion.confidence,
-          originRevision: catalogAssertion.originRevision,
-          evidence: catalogAssertion.evidence,
-          retracted: catalogAssertion.retracted,
-        })
-        .from(catalogAssertion)
-        .where(
-          inArray(
-            catalogAssertion.id,
-            assertions.map((assertion) => assertion.id),
-          ),
-        )).map((row) => [row.id, row]),
-    );
-
-    const changed = assertions.filter((assertion) => {
-      const row = known.get(assertion.id);
-      if (row === undefined) return true;
-      // A replica with an older parser must not overwrite the parse of a newer one
-      if (origin === "parse" && parseVersion(row.originRevision) > parseVersion(originRevision)) {
-        return false;
-      }
-      return (
-        row.retracted ||
-        JSON.stringify([row.value, row.confidence, row.originRevision, row.evidence]) !==
-          JSON.stringify([assertion.value, confidence, originRevision, evidence])
-      );
-    });
-
-    if (changed.length === 0) return false;
-
-    // Peers pull the rows after a `change_seq`, so the value and the rows commit together
-    yield* db.transaction(() =>
-      Effect.gen(function* () {
-        const changeSeq = yield* nextChangeSeq;
-        yield* Effect.forEach(
-          changed,
-          (assertion) =>
-            Effect.gen(function* () {
-              const row = {
-                id: assertion.id,
-                workspaceId: identity.workspaceId,
-                entityType,
-                entityId,
-                field: assertion.field,
-                value: assertion.value,
-                origin,
-                originRef,
-                originRevision,
-                evidence,
-                confidence,
-                authorReplicaId: identity.replicaId,
-                hlc: yield* clock.next,
-                retracted: false,
-                schemaVersion,
-                changeSeq,
-              };
-              yield* db
-                .insert(catalogAssertion)
-                .values(row)
-                .onConflictDoUpdate({ target: catalogAssertion.id, set: row });
-            }),
-          { discard: true },
-        );
-      }),
-    );
-    return true;
   });
+
+  if (changed.length === 0) return false;
+
+  // Peers pull the rows after a `change_seq`, so the value and the rows commit together
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      const changeSeq = yield* nextChangeSeq;
+      yield* Effect.forEach(
+        changed,
+        (assertion) =>
+          Effect.gen(function* () {
+            const row = {
+              id: assertion.id,
+              workspaceId: identity.workspaceId,
+              entityType,
+              entityId,
+              field: assertion.field,
+              value: assertion.value,
+              origin,
+              originRef,
+              originRevision,
+              evidence,
+              confidence,
+              authorReplicaId: identity.replicaId,
+              hlc: yield* clock.next,
+              retracted: false,
+              schemaVersion,
+              changeSeq,
+            };
+            yield* db
+              .insert(catalogAssertion)
+              .values(row)
+              .onConflictDoUpdate({ target: catalogAssertion.id, set: row });
+          }),
+        { discard: true },
+      );
+    }),
+  );
+  return true;
+});
 
 /**
  * One assertion for each field of `values` from one origin. `null` states that the origin has no
@@ -244,38 +243,37 @@ export const resolveField = <A>(
 ) => resolveAssertion(providers, assertions, field, schema)?.value ?? null;
 
 /** The value of `field` of each recording from its own assertions, without its merged recordings */
-export const resolvedValues = <F extends keyof typeof fields>(
+export const resolvedValues = Effect.fn("resolvedValues")(function* <F extends keyof typeof fields>(
   recordingIds: ReadonlyArray<string>,
   field: F,
   schema: Schema.Decoder<(typeof fields)[F]["Type"]>,
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* Providers;
-    const assertions = yield* db
-      .select()
-      .from(catalogAssertion)
-      .where(
-        and(
-          eq(catalogAssertion.entityType, "recording"),
-          inArray(catalogAssertion.entityId, recordingIds),
-          eq(catalogAssertion.field, field),
-          eq(catalogAssertion.retracted, false),
-        ),
-      );
+) {
+  const db = yield* Database;
+  const providers = yield* Providers;
+  const assertions = yield* db
+    .select()
+    .from(catalogAssertion)
+    .where(
+      and(
+        eq(catalogAssertion.entityType, "recording"),
+        inArray(catalogAssertion.entityId, recordingIds),
+        eq(catalogAssertion.field, field),
+        eq(catalogAssertion.retracted, false),
+      ),
+    );
 
-    const values = new Map<string, (typeof fields)[F]["Type"]>();
-    for (const id of recordingIds) {
-      const value = resolveField(
-        providers,
-        assertions.filter((assertion) => assertion.entityId === id),
-        field,
-        schema,
-      );
-      if (value !== null) values.set(id, value);
-    }
-    return values;
-  });
+  const values = new Map<string, (typeof fields)[F]["Type"]>();
+  for (const id of recordingIds) {
+    const value = resolveField(
+      providers,
+      assertions.filter((assertion) => assertion.entityId === id),
+      field,
+      schema,
+    );
+    if (value !== null) values.set(id, value);
+  }
+  return values;
+});
 
 // The album line of a song: an album before an EP and a single, then other types
 const albumRank = (type: typeof album.$inferSelect.type) => {
@@ -291,98 +289,98 @@ const albumRank = (type: typeof album.$inferSelect.type) => {
  * from the album of the song when an edition has it as a track. A root resolves over the
  * assertions of all recordings merged into it; a merged recording keeps its own fields.
  */
-export const projectRecordings = (recordingIds: Iterable<string>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* Providers;
-    const ids = [...new Set(recordingIds)];
-    if (ids.length === 0) return;
+export const projectRecordings = Effect.fn("projectRecordings")(function* (
+  recordingIds: Iterable<string>,
+) {
+  const db = yield* Database;
+  const providers = yield* Providers;
+  const ids = [...new Set(recordingIds)];
+  if (ids.length === 0) return;
 
-    const rows = yield* db.select().from(recording).where(inArray(recording.id, ids));
-    const roots = rows.filter((row) => row.mergedIntoId === null).map((row) => row.id);
-    const merged = yield* db
-      .select({ id: recording.id, root: recording.mergedIntoId })
-      .from(recording)
-      .where(inArray(recording.mergedIntoId, roots));
+  const rows = yield* db.select().from(recording).where(inArray(recording.id, ids));
+  const roots = rows.filter((row) => row.mergedIntoId === null).map((row) => row.id);
+  const merged = yield* db
+    .select({ id: recording.id, root: recording.mergedIntoId })
+    .from(recording)
+    .where(inArray(recording.mergedIntoId, roots));
 
-    const membersOf = new Map(rows.map((row) => [row.id, [row.id]]));
-    for (const member of merged) membersOf.get(member.root ?? "")?.push(member.id);
+  const membersOf = new Map(rows.map((row) => [row.id, [row.id]]));
+  for (const member of merged) membersOf.get(member.root ?? "")?.push(member.id);
 
-    const assertions = yield* db
-      .select()
-      .from(catalogAssertion)
-      .where(
-        and(
-          eq(catalogAssertion.entityType, "recording"),
-          inArray(catalogAssertion.entityId, [...ids, ...merged.map((member) => member.id)]),
-          eq(catalogAssertion.retracted, false),
-        ),
-      );
-
-    // The albums that have a member as an edition track
-    const rootAlbum = alias(album, "root_album");
-    const appearances = yield* db
-      .select({
-        recordingId: editionTrack.recordingId,
-        albumId: rootAlbum.id,
-        title: rootAlbum.title,
-        type: rootAlbum.type,
-        year: rootAlbum.year,
-        artworkUrl: rootAlbum.artworkUrl,
-      })
-      .from(editionTrack)
-      .innerJoin(edition, eq(edition.id, editionTrack.editionId))
-      .innerJoin(album, eq(album.id, edition.albumId))
-      .innerJoin(rootAlbum, eq(rootAlbum.id, sql`coalesce(${album.mergedIntoId}, ${album.id})`))
-      .where(inArray(editionTrack.recordingId, [...ids, ...merged.map((member) => member.id)]));
-
-    const changed = yield* Effect.forEach(rows, (row) => {
-      const members = new Set(membersOf.get(row.id));
-      const own = assertions.filter((assertion) => members.has(assertion.entityId));
-      const [shown] = appearances
-        .filter((appearance) => members.has(appearance.recordingId) && appearance.title !== null)
-        .toSorted(
-          (a, b) =>
-            albumRank(a.type) - albumRank(b.type) ||
-            (a.year ?? Infinity) - (b.year ?? Infinity) ||
-            a.albumId.localeCompare(b.albumId),
-        );
-      const resolved = {
-        title: resolveField(providers, own, "title", fields.title),
-        artistName:
-          resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
-        album: shown?.title ?? resolveField(providers, own, "album", fields.album),
-        albumId: shown?.albumId ?? null,
-        durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
-        artworkUrl:
-          shown?.artworkUrl ?? resolveField(providers, own, "artwork_url", fields.artwork_url),
-        explicit: resolveField(providers, own, "explicit", fields.explicit),
-      };
-
-      const unchanged =
-        row.title === resolved.title &&
-        row.artistName === resolved.artistName &&
-        row.album === resolved.album &&
-        row.albumId === resolved.albumId &&
-        row.durationMs === resolved.durationMs &&
-        row.artworkUrl === resolved.artworkUrl &&
-        row.explicit === resolved.explicit;
-      if (unchanged) return Effect.succeed([]);
-
-      return db
-        .update(recording)
-        .set(resolved)
-        .where(eq(recording.id, row.id))
-        .pipe(Effect.as([row.id]));
-    });
-    const credited = yield* projectArtists(
-      rows.map((row) => {
-        const members = new Set(membersOf.get(row.id));
-        return {
-          id: row.id,
-          own: assertions.filter((assertion) => members.has(assertion.entityId)),
-        };
-      }),
+  const assertions = yield* db
+    .select()
+    .from(catalogAssertion)
+    .where(
+      and(
+        eq(catalogAssertion.entityType, "recording"),
+        inArray(catalogAssertion.entityId, [...ids, ...merged.map((member) => member.id)]),
+        eq(catalogAssertion.retracted, false),
+      ),
     );
-    yield* touchGroups([...changed.flat(), ...credited]);
+
+  // The albums that have a member as an edition track
+  const rootAlbum = alias(album, "root_album");
+  const appearances = yield* db
+    .select({
+      recordingId: editionTrack.recordingId,
+      albumId: rootAlbum.id,
+      title: rootAlbum.title,
+      type: rootAlbum.type,
+      year: rootAlbum.year,
+      artworkUrl: rootAlbum.artworkUrl,
+    })
+    .from(editionTrack)
+    .innerJoin(edition, eq(edition.id, editionTrack.editionId))
+    .innerJoin(album, eq(album.id, edition.albumId))
+    .innerJoin(rootAlbum, eq(rootAlbum.id, sql`coalesce(${album.mergedIntoId}, ${album.id})`))
+    .where(inArray(editionTrack.recordingId, [...ids, ...merged.map((member) => member.id)]));
+
+  const changed = yield* Effect.forEach(rows, (row) => {
+    const members = new Set(membersOf.get(row.id));
+    const own = assertions.filter((assertion) => members.has(assertion.entityId));
+    const [shown] = appearances
+      .filter((appearance) => members.has(appearance.recordingId) && appearance.title !== null)
+      .toSorted(
+        (a, b) =>
+          albumRank(a.type) - albumRank(b.type) ||
+          (a.year ?? Infinity) - (b.year ?? Infinity) ||
+          a.albumId.localeCompare(b.albumId),
+      );
+    const resolved = {
+      title: resolveField(providers, own, "title", fields.title),
+      artistName: resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
+      album: shown?.title ?? resolveField(providers, own, "album", fields.album),
+      albumId: shown?.albumId ?? null,
+      durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
+      artworkUrl:
+        shown?.artworkUrl ?? resolveField(providers, own, "artwork_url", fields.artwork_url),
+      explicit: resolveField(providers, own, "explicit", fields.explicit),
+    };
+
+    const unchanged =
+      row.title === resolved.title &&
+      row.artistName === resolved.artistName &&
+      row.album === resolved.album &&
+      row.albumId === resolved.albumId &&
+      row.durationMs === resolved.durationMs &&
+      row.artworkUrl === resolved.artworkUrl &&
+      row.explicit === resolved.explicit;
+    if (unchanged) return Effect.succeed([]);
+
+    return db
+      .update(recording)
+      .set(resolved)
+      .where(eq(recording.id, row.id))
+      .pipe(Effect.as([row.id]));
   });
+  const credited = yield* projectArtists(
+    rows.map((row) => {
+      const members = new Set(membersOf.get(row.id));
+      return {
+        id: row.id,
+        own: assertions.filter((assertion) => members.has(assertion.entityId)),
+      };
+    }),
+  );
+  yield* touchGroups([...changed.flat(), ...credited]);
+});

@@ -62,11 +62,14 @@ const generateTones = Effect.fn(function* (library: string) {
 });
 
 // The source stays read-only, so that the sandbox never changes a real database
-const copyDatabase = (source: string, target: string) =>
-  Effect.gen(function* () {
+const copyDatabase = Effect.fn("copyDatabase")(
+  function* (source: string, target: string) {
     const sql = yield* SqliteClient.SqliteClient;
     yield* sql`VACUUM INTO ${target}`;
-  }).pipe(Effect.provide(SqliteClient.layer({ filename: source, readonly: true })));
+  },
+  (effect, source) =>
+    effect.pipe(Effect.provide(SqliteClient.layer({ filename: source, readonly: true }))),
+);
 
 const freePort = Effect.gen(function* () {
   const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 0 });

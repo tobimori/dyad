@@ -63,51 +63,48 @@ export class MediaStream extends Data.Class<{
   readonly partial?: boolean;
 }> {}
 
-const openAudio = (media: string | MediaStream) =>
-  Effect.gen(function* () {
-    // FFmpeg writes its log to stderr directly. Its warnings, such as the FLAC header that cannot
-    // be rewritten in a stream, are expected. Not at import: the CLI executable has no FFmpeg.
-    Log.setLevel(AV_LOG_ERROR);
-    const name = media instanceof MediaStream ? media.name : media;
-    const { bytes, open } =
-      media instanceof MediaStream
-        ? yield* Effect.map(
-            // `node-av` 6.1.1 does not close a `Readable` input. Destroying it stops `media.bytes`.
-            Effect.acquireRelease(
-              Effect.sync(() => Readable.fromWeb(Stream.toReadableStream(media.bytes))),
-              (bytes) => Effect.sync(() => bytes.destroy()),
-            ),
-            (bytes) => ({
-              bytes,
-              open: () => {
-                // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
-                const keys =
-                  media.decryptionKeys === undefined
-                    ? []
-                    : [...Redacted.value(media.decryptionKeys)];
-                const options =
-                  keys.length === 0
-                    ? {}
-                    : { decryption_keys: keys.map(([kid, key]) => `${kid}=${key}`).join(":") };
-                return Demuxer.open(bytes, { format: media.format, options });
-              },
-            }),
-          )
-        : { bytes: undefined, open: () => Demuxer.open(media) };
-    const input = yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: open,
-        catch: (cause) => new MediaError({ input: name, reason: String(cause) }),
-      }),
-      (input) => Effect.promise(() => input.close()),
-    );
-    const stream = input.audio();
-    if (stream === undefined) {
-      return yield* new MediaError({ input: name, reason: "No audio stream" });
-    }
-    const partial = media instanceof MediaStream && media.partial === true;
-    return { input, stream, name, bytes, partial };
-  });
+const openAudio = Effect.fn("openAudio")(function* (media: string | MediaStream) {
+  // FFmpeg writes its log to stderr directly. Its warnings, such as the FLAC header that cannot
+  // be rewritten in a stream, are expected. Not at import: the CLI executable has no FFmpeg.
+  Log.setLevel(AV_LOG_ERROR);
+  const name = media instanceof MediaStream ? media.name : media;
+  const { bytes, open } =
+    media instanceof MediaStream
+      ? yield* Effect.map(
+          // `node-av` 6.1.1 does not close a `Readable` input. Destroying it stops `media.bytes`.
+          Effect.acquireRelease(
+            Effect.sync(() => Readable.fromWeb(Stream.toReadableStream(media.bytes))),
+            (bytes) => Effect.sync(() => bytes.destroy()),
+          ),
+          (bytes) => ({
+            bytes,
+            open: () => {
+              // FFmpeg's `decryption_keys` dictionary is `<kid>=<key>` pairs, separated by `:`
+              const keys =
+                media.decryptionKeys === undefined ? [] : [...Redacted.value(media.decryptionKeys)];
+              const options =
+                keys.length === 0
+                  ? {}
+                  : { decryption_keys: keys.map(([kid, key]) => `${kid}=${key}`).join(":") };
+              return Demuxer.open(bytes, { format: media.format, options });
+            },
+          }),
+        )
+      : { bytes: undefined, open: () => Demuxer.open(media) };
+  const input = yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      try: open,
+      catch: (cause) => new MediaError({ input: name, reason: String(cause) }),
+    }),
+    (input) => Effect.promise(() => input.close()),
+  );
+  const stream = input.audio();
+  if (stream === undefined) {
+    return yield* new MediaError({ input: name, reason: "No audio stream" });
+  }
+  const partial = media instanceof MediaStream && media.partial === true;
+  return { input, stream, name, bytes, partial };
+});
 
 export const readAudioFile = (path: string) =>
   Effect.scoped(
@@ -181,61 +178,60 @@ const writePackets = (
 
 // Finalizers run in reverse order: the producer stops, then the muxer closes, then the caller's
 // decoder and input close. `writePackets` does not close the muxer when a write fails.
-const muxStream = (
+const muxStream = Effect.fn("muxStream")(function* (
   { name, bytes }: { readonly name: string; readonly bytes: Readable | undefined },
   muxer: { readonly format: string; readonly options?: Record<string, string> },
   run: (
     output: Muxer,
     drained: () => Promise<void>,
   ) => Pick<PipelineControl, "stop" | "completion">,
-) =>
-  Effect.gen(function* () {
-    const body = new PassThrough();
-    // A native write holds a libuv worker until this callback returns, so it never waits for
-    // `drain`. `writePackets` waits before each packet instead.
-    const write = (buffer: Buffer) => {
-      // `Muxer.close` writes the trailer after a failure or disconnect too
-      if (body.destroyed) return AVERROR_EPIPE;
-      // FFmpeg reuses the buffer after the callback returns
-      body.write(Buffer.from(buffer));
-      return buffer.length;
-    };
-    // Only an `error` event releases a wait for `drain`, see the finalizer below
-    const drained = () =>
-      body.writableNeedDrain ? once(body, "drain").then(() => {}) : Promise.resolve();
-    const output = yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        // One stream needs no interleaving. The sync queue that `node-av` 6.1.1 uses for stream
-        // copy leaks the native `AVPacket` that `SyncQueue.send` clones for each packet.
-        try: () => Muxer.open({ write }, { ...muxer, useSyncQueue: false }),
-        catch: (cause) => new MediaError({ input: name, reason: String(cause) }),
-      }),
-      (output) => Effect.promise(() => output.close()),
-    );
-    const control = run(output, drained);
-    control.completion.then(
-      () => body.end(),
-      (cause: unknown) => body.destroy(cause instanceof Error ? cause : new Error(String(cause))),
-    );
-    yield* Effect.addFinalizer(() =>
-      Effect.promise(() => {
-        control.stop();
-        if (!body.destroyed) body.destroy(new Error("Playback closed"));
-        // A native read that waits for bytes holds a libuv worker, and the pipeline completes only
-        // after it returns. The end of the bytes returns it.
-        bytes?.destroy();
-        return control.completion.catch(() => undefined);
-      }),
-    );
-    return Stream.fromReadableStream({
-      // SAFETY: a `PassThrough` without an encoding gives `Buffer` chunks, which are `Uint8Array`
-      evaluate: () => Readable.toWeb(body) as ReadableStream<Uint8Array>,
-      onError: (cause) => new MediaError({ input: name, reason: String(cause) }),
-      // The finalizer above stops the pipeline before it closes `body`. A cancel of the reader would
-      // close `body` first, while the pipeline still writes to it.
-      releaseLockOnEnd: true,
-    });
+) {
+  const body = new PassThrough();
+  // A native write holds a libuv worker until this callback returns, so it never waits for
+  // `drain`. `writePackets` waits before each packet instead.
+  const write = (buffer: Buffer) => {
+    // `Muxer.close` writes the trailer after a failure or disconnect too
+    if (body.destroyed) return AVERROR_EPIPE;
+    // FFmpeg reuses the buffer after the callback returns
+    body.write(Buffer.from(buffer));
+    return buffer.length;
+  };
+  // Only an `error` event releases a wait for `drain`, see the finalizer below
+  const drained = () =>
+    body.writableNeedDrain ? once(body, "drain").then(() => {}) : Promise.resolve();
+  const output = yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      // One stream needs no interleaving. The sync queue that `node-av` 6.1.1 uses for stream
+      // copy leaks the native `AVPacket` that `SyncQueue.send` clones for each packet.
+      try: () => Muxer.open({ write }, { ...muxer, useSyncQueue: false }),
+      catch: (cause) => new MediaError({ input: name, reason: String(cause) }),
+    }),
+    (output) => Effect.promise(() => output.close()),
+  );
+  const control = run(output, drained);
+  control.completion.then(
+    () => body.end(),
+    (cause: unknown) => body.destroy(cause instanceof Error ? cause : new Error(String(cause))),
+  );
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => {
+      control.stop();
+      if (!body.destroyed) body.destroy(new Error("Playback closed"));
+      // A native read that waits for bytes holds a libuv worker, and the pipeline completes only
+      // after it returns. The end of the bytes returns it.
+      bytes?.destroy();
+      return control.completion.catch(() => undefined);
+    }),
+  );
+  return Stream.fromReadableStream({
+    // SAFETY: a `PassThrough` without an encoding gives `Buffer` chunks, which are `Uint8Array`
+    evaluate: () => Readable.toWeb(body) as ReadableStream<Uint8Array>,
+    onError: (cause) => new MediaError({ input: name, reason: String(cause) }),
+    // The finalizer above stops the pipeline before it closes `body`. A cancel of the reader would
+    // close `body` first, while the pipeline still writes to it.
+    releaseLockOnEnd: true,
   });
+});
 
 // Positions count from the first sample that a full decode gives. FFmpeg puts the start time of
 // the stream after the encoder priming, for example the MP3 LAME delay or the MP4 edit list.

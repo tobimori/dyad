@@ -9,25 +9,24 @@ import { nextChangeSeq } from "./sync-counter.ts";
 
 const recentPlayLimit = 100;
 
-export const insertPlay = (play: {
+export const insertPlay = Effect.fn("insertPlay")(function* (play: {
   readonly deviceId: DeviceId;
   readonly sourceId: string;
   readonly startedAt: number;
   readonly playedMs: number;
   readonly completed: boolean;
   readonly context: typeof PlayContext.Type;
-}) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const crypto = yield* Crypto.Crypto;
-    const id = yield* crypto.randomUUIDv7().pipe(Effect.orDie);
-    yield* db.transaction(() =>
-      Effect.gen(function* () {
-        const changeSeq = yield* nextChangeSeq;
-        yield* db.insert(playEvent).values({ ...play, id, changeSeq });
-      }),
-    );
-  });
+}) {
+  const db = yield* Database;
+  const crypto = yield* Crypto.Crypto;
+  const id = yield* crypto.randomUUIDv7().pipe(Effect.orDie);
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      const changeSeq = yield* nextChangeSeq;
+      yield* db.insert(playEvent).values({ ...play, id, changeSeq });
+    }),
+  );
+});
 
 /** The playable sources of the user's last plays, newest play first, one entry per source */
 export const listRecentPlays = Effect.gen(function* () {

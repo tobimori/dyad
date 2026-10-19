@@ -114,41 +114,40 @@ export const streamError =
  * A WebM file of YouTube: the head has the `Cues` index, so a start skips to the cluster before
  * it. Without `cues`, the head shows where `Cues` is. `cues.end` is exclusive.
  */
-export const webmStream = (
+export const webmStream = Effect.fn("webmStream")(function* (
   url: string,
   contentLength: number,
   kind: "audio" | "video",
   cues: { readonly start: number; readonly end: number } | null,
-) =>
-  Effect.gen(function* () {
-    const services = yield* Effect.context<HttpClient.HttpClient>();
-    const safe = <E>(stream: Stream.Stream<Uint8Array, E, HttpClient.HttpClient>) =>
-      stream.pipe(Stream.mapError(streamError(kind)), Stream.provideContext(services));
+) {
+  const services = yield* Effect.context<HttpClient.HttpClient>();
+  const safe = <E>(stream: Stream.Stream<Uint8Array, E, HttpClient.HttpClient>) =>
+    stream.pipe(Stream.mapError(streamError(kind)), Stream.provideContext(services));
 
-    const readHead = (end: number) =>
-      send(HttpClientRequest.get(`${url}&range=0-${end - 1}`)).pipe(
-        Effect.flatMap((response) => response.arrayBuffer),
-        Effect.map((buffer) => new Uint8Array(buffer)),
-      );
+  const readHead = (end: number) =>
+    send(HttpClientRequest.get(`${url}&range=0-${end - 1}`)).pipe(
+      Effect.flatMap((response) => response.arrayBuffer),
+      Effect.map((buffer) => new Uint8Array(buffer)),
+    );
 
-    const readIndex = Effect.gen(function* () {
-      if (cues !== null) return { cues, head: yield* readHead(cues.end) };
-      const first = yield* readHead(Math.min(headBytes, contentLength));
-      const found = yield* Effect.try(() => findCues(first));
-      return { cues: found, head: found.end <= first.length ? first : yield* readHead(found.end) };
-    });
-
-    const bytesFrom = (startMs: number) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const { cues, head } = yield* readIndex;
-          const offset = yield* Effect.try(() => clusterOffset(head, cues.start, startMs));
-          return Stream.concat(
-            Stream.succeed(head.subarray(0, cues.start)),
-            readChunks(url, offset, contentLength),
-          );
-        }),
-      ).pipe(safe);
-
-    return { bytes: readChunks(url, 0, contentLength).pipe(safe), bytesFrom };
+  const readIndex = Effect.gen(function* () {
+    if (cues !== null) return { cues, head: yield* readHead(cues.end) };
+    const first = yield* readHead(Math.min(headBytes, contentLength));
+    const found = yield* Effect.try(() => findCues(first));
+    return { cues: found, head: found.end <= first.length ? first : yield* readHead(found.end) };
   });
+
+  const bytesFrom = (startMs: number) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const { cues, head } = yield* readIndex;
+        const offset = yield* Effect.try(() => clusterOffset(head, cues.start, startMs));
+        return Stream.concat(
+          Stream.succeed(head.subarray(0, cues.start)),
+          readChunks(url, offset, contentLength),
+        );
+      }),
+    ).pipe(safe);
+
+  return { bytes: readChunks(url, 0, contentLength).pipe(safe), bytesFrom };
+});

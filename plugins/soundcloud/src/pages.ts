@@ -89,57 +89,61 @@ const get = <S extends Schema.Constraint>(
   );
 
 /** The uploads of a user. For label accounts, this is the label. */
-export const readUser = (withClientId: Effect.Success<typeof clientIdCache>, userId: string) =>
-  Effect.gen(function* () {
-    const path = `/users/${encodeURIComponent(userId)}`;
-    const [user, topTracks, tracks, sets, related] = yield* Effect.all(
-      [
-        get(withClientId, path, User),
-        get(withClientId, `${path}/toptracks`, Collection(Track), { limit: 10 }),
-        get(withClientId, `${path}/tracks`, Collection(Track), { limit: 20 }),
-        get(withClientId, `${path}/albums`, Collection(Playlist), { limit: 50 }),
-        get(withClientId, `${path}/relatedartists`, Collection(User), { limit: 10 }),
-      ],
-      { concurrency: "unbounded" },
-    );
+export const readUser = Effect.fn("readUser")(function* (
+  withClientId: Effect.Success<typeof clientIdCache>,
+  userId: string,
+) {
+  const path = `/users/${encodeURIComponent(userId)}`;
+  const [user, topTracks, tracks, sets, related] = yield* Effect.all(
+    [
+      get(withClientId, path, User),
+      get(withClientId, `${path}/toptracks`, Collection(Track), { limit: 10 }),
+      get(withClientId, `${path}/tracks`, Collection(Track), { limit: 20 }),
+      get(withClientId, `${path}/albums`, Collection(Playlist), { limit: 50 }),
+      get(withClientId, `${path}/relatedartists`, Collection(User), { limit: 10 }),
+    ],
+    { concurrency: "unbounded" },
+  );
 
-    return new ProviderArtist({
-      artist: toCard(user),
-      topTracks: topTracks.collection.map((track) => toTrack(track, null)),
-      tracks: tracks.collection.map((track) => toTrack(track, null)),
-      releases: sets.collection.map(toRelease),
-      appearsOn: [],
-      similar: related.collection.map(toCard),
-    });
+  return new ProviderArtist({
+    artist: toCard(user),
+    topTracks: topTracks.collection.map((track) => toTrack(track, null)),
+    tracks: tracks.collection.map((track) => toTrack(track, null)),
+    releases: sets.collection.map(toRelease),
+    appearsOn: [],
+    similar: related.collection.map(toCard),
   });
+});
 
 // `/tracks` takes up to 50 IDs (October 2026)
 const idsPerRequest = 50;
 
 /** A set and its tracks in order. Tracks that SoundCloud does not return are left out. */
-export const readSet = (withClientId: Effect.Success<typeof clientIdCache>, setId: string) =>
-  Effect.gen(function* () {
-    const set = yield* get(withClientId, `/playlists/${encodeURIComponent(setId)}`, Playlist);
+export const readSet = Effect.fn("readSet")(function* (
+  withClientId: Effect.Success<typeof clientIdCache>,
+  setId: string,
+) {
+  const set = yield* get(withClientId, `/playlists/${encodeURIComponent(setId)}`, Playlist);
 
-    const chunks = Arr.chunksOf(
-      set.tracks.map((track) => track.id),
-      idsPerRequest,
-    );
-    const found = yield* Effect.forEach(
-      chunks,
-      (ids) => get(withClientId, "/tracks", Schema.Array(Track), { ids: ids.join(",") }),
-      { concurrency: "unbounded" },
-    );
-    const byId = new Map(found.flat().map((track) => [track.id, track]));
+  const chunks = Arr.chunksOf(
+    set.tracks.map((track) => track.id),
+    idsPerRequest,
+  );
+  const found = yield* Effect.forEach(
+    chunks,
+    (ids) => get(withClientId, "/tracks", Schema.Array(Track), { ids: ids.join(",") }),
+    { concurrency: "unbounded" },
+  );
+  const byId = new Map(found.flat().map((track) => [track.id, track]));
 
-    return new ProviderAlbum({
-      release: toRelease(set),
-      tracks: set.tracks.flatMap((item, index) => {
-        const track = byId.get(item.id);
-        return track === undefined ? [] : [toTrack(track, index + 1)];
-      }),
-    });
+  return new ProviderAlbum({
+    release: toRelease(set),
+    tracks: set.tracks.flatMap((item, index) => {
+      const track = byId.get(item.id);
+      return track === undefined ? [] : [toTrack(track, index + 1)];
+    }),
   });
+});
 
 // `/resolve` answers the user of a profile URL, and a track or a set for other URLs
 const Resolved = Schema.Struct({ kind: Schema.String, id: Schema.Int });

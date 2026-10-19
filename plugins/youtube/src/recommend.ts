@@ -138,105 +138,101 @@ const suggest = (source: ProviderSource) =>
  * The radio of YouTube Music after a video: the `RDAMVM` watch playlist, without an account. The
  * playlist starts with the seed itself.
  */
-const watchPlaylist = (videoId: string) =>
-  Effect.gen(function* () {
-    const response = yield* getJson(
-      HttpClientRequest.post(`${music}/youtubei/v1/next`).pipe(
-        HttpClientRequest.setUrlParam("prettyPrint", "false"),
-        HttpClientRequest.bodyJsonUnsafe({
-          context: { client: remix },
-          videoId,
-          playlistId: `RDAMVM${videoId}`,
-          isAudioOnly: true,
-          enablePersistentPlaylistPanel: true,
-        }),
-      ),
-      WatchPlaylist,
-    ).pipe(Effect.mapError(providerError("YouTube Music")));
+const watchPlaylist = Effect.fn("watchPlaylist")(function* (videoId: string) {
+  const response = yield* getJson(
+    HttpClientRequest.post(`${music}/youtubei/v1/next`).pipe(
+      HttpClientRequest.setUrlParam("prettyPrint", "false"),
+      HttpClientRequest.bodyJsonUnsafe({
+        context: { client: remix },
+        videoId,
+        playlistId: `RDAMVM${videoId}`,
+        isAudioOnly: true,
+        enablePersistentPlaylistPanel: true,
+      }),
+    ),
+    WatchPlaylist,
+  ).pipe(Effect.mapError(providerError("YouTube Music")));
 
-    return response.contents.singleColumnMusicWatchNextResultsRenderer.tabbedRenderer.watchNextTabbedResultsRenderer.tabs
-      .flatMap(
-        (tab) =>
-          tab.tabRenderer.content?.musicQueueRenderer?.content?.playlistPanelRenderer.contents ??
-          [],
-      )
-      .flatMap((item) => {
-        const video =
-          item.playlistPanelVideoRenderer ??
-          item.playlistPanelVideoWrapperRenderer?.primaryRenderer.playlistPanelVideoRenderer;
-        const length = video?.lengthText?.runs[0]?.text;
-        if (video === undefined || length === undefined || video.videoId === videoId) return [];
+  return response.contents.singleColumnMusicWatchNextResultsRenderer.tabbedRenderer.watchNextTabbedResultsRenderer.tabs
+    .flatMap(
+      (tab) =>
+        tab.tabRenderer.content?.musicQueueRenderer?.content?.playlistPanelRenderer.contents ?? [],
+    )
+    .flatMap((item) => {
+      const video =
+        item.playlistPanelVideoRenderer ??
+        item.playlistPanelVideoWrapperRenderer?.primaryRenderer.playlistPanelVideoRenderer;
+      const length = video?.lengthText?.runs[0]?.text;
+      if (video === undefined || length === undefined || video.videoId === videoId) return [];
 
-        const byline = video.longBylineText.runs;
-        const type =
-          video.navigationEndpoint.watchEndpoint?.watchEndpointMusicSupportedConfigs
-            ?.watchEndpointMusicConfig.musicVideoType;
-        return [
-          suggest(
-            musicSource({
-              videoId: video.videoId,
-              title: video.title.runs,
-              byline,
-              album: byline.find((run) => pageType(run) === "MUSIC_PAGE_TYPE_ALBUM")?.text ?? null,
-              durationMs: clockMs(length),
-              thumbnails: video.thumbnail.thumbnails,
-              explicit: false,
-              song: type === "MUSIC_VIDEO_TYPE_ATV",
-              videoType: type,
-            }),
-          ),
-        ];
-      });
-  });
+      const byline = video.longBylineText.runs;
+      const type =
+        video.navigationEndpoint.watchEndpoint?.watchEndpointMusicSupportedConfigs
+          ?.watchEndpointMusicConfig.musicVideoType;
+      return [
+        suggest(
+          musicSource({
+            videoId: video.videoId,
+            title: video.title.runs,
+            byline,
+            album: byline.find((run) => pageType(run) === "MUSIC_PAGE_TYPE_ALBUM")?.text ?? null,
+            durationMs: clockMs(length),
+            thumbnails: video.thumbnail.thumbnails,
+            explicit: false,
+            song: type === "MUSIC_VIDEO_TYPE_ATV",
+            videoType: type,
+          }),
+        ),
+      ];
+    });
+});
 
 /** One request for a seed on YouTube, else one songs search and one request */
-export const youtubeRadio = (seed: RadioSeed) =>
-  Effect.gen(function* () {
-    if (seed.externalId !== null) return yield* watchPlaylist(seed.externalId);
+export const youtubeRadio = Effect.fn("youtubeRadio")(function* (seed: RadioSeed) {
+  if (seed.externalId !== null) return yield* watchPlaylist(seed.externalId);
 
-    const [first] = yield* musicSources(
-      seed.title === null ? seed.artist : `${seed.artist} ${seed.title}`,
-      true,
-    );
-    return first === undefined ? [] : yield* watchPlaylist(first.externalId);
-  });
+  const [first] = yield* musicSources(
+    seed.title === null ? seed.artist : `${seed.artist} ${seed.title}`,
+    true,
+  );
+  return first === undefined ? [] : yield* watchPlaylist(first.externalId);
+});
 
 /**
  * The song shelves of the YouTube Music home of the account, for example `Quick picks`. Mixes and
  * playlists need one more request each, so they are left out.
  */
-export const youtubeShelves = (credentials: Credentials) =>
-  Effect.gen(function* () {
-    const response = yield* getJson(
-      HttpClientRequest.post(`${music}/youtubei/v1/browse`).pipe(
-        HttpClientRequest.setUrlParam("prettyPrint", "false"),
-        HttpClientRequest.setHeaders(yield* accountHeaders(credentials, music)),
-        HttpClientRequest.bodyJsonUnsafe({ context: { client: remix }, browseId: "FEmusic_home" }),
-      ),
-      Home,
-    ).pipe(Effect.mapError(providerError("YouTube Music")));
+export const youtubeShelves = Effect.fn("youtubeShelves")(function* (credentials: Credentials) {
+  const response = yield* getJson(
+    HttpClientRequest.post(`${music}/youtubei/v1/browse`).pipe(
+      HttpClientRequest.setUrlParam("prettyPrint", "false"),
+      HttpClientRequest.setHeaders(yield* accountHeaders(credentials, music)),
+      HttpClientRequest.bodyJsonUnsafe({ context: { client: remix }, browseId: "FEmusic_home" }),
+    ),
+    Home,
+  ).pipe(Effect.mapError(providerError("YouTube Music")));
 
-    const sections = response.contents.singleColumnBrowseResultsRenderer.tabs.flatMap(
-      (tab) => tab.tabRenderer.content?.sectionListRenderer.contents ?? [],
-    );
-    const decoded = sections.flatMap(({ musicCarouselShelfRenderer: shelf }) =>
-      shelf === undefined ? [] : [Schema.decodeUnknownOption(Shelf)(shelf)],
-    );
-    const shelves = decoded.flatMap(Option.toArray);
-    if (shelves.length < decoded.length) {
-      yield* Effect.logWarning(`Skipped ${decoded.length - shelves.length} home shelves`);
-    }
+  const sections = response.contents.singleColumnBrowseResultsRenderer.tabs.flatMap(
+    (tab) => tab.tabRenderer.content?.sectionListRenderer.contents ?? [],
+  );
+  const decoded = sections.flatMap(({ musicCarouselShelfRenderer: shelf }) =>
+    shelf === undefined ? [] : [Schema.decodeUnknownOption(Shelf)(shelf)],
+  );
+  const shelves = decoded.flatMap(Option.toArray);
+  if (shelves.length < decoded.length) {
+    yield* Effect.logWarning(`Skipped ${decoded.length - shelves.length} home shelves`);
+  }
 
-    return shelves.flatMap((shelf) => {
-      const title = shelf.header?.musicCarouselShelfBasicHeaderRenderer.title.runs
-        .map((run) => run.text)
-        .join("");
-      const songs = shelf.contents.flatMap(({ musicResponsiveListItemRenderer: item }) => {
-        const source = item === undefined ? undefined : listItemSource(item, true);
-        return source === undefined ? [] : [suggest(source)];
-      });
-      return title === undefined || songs.length === 0
-        ? []
-        : [new SuggestionShelf({ title, songs, releases: [] })];
+  return shelves.flatMap((shelf) => {
+    const title = shelf.header?.musicCarouselShelfBasicHeaderRenderer.title.runs
+      .map((run) => run.text)
+      .join("");
+    const songs = shelf.contents.flatMap(({ musicResponsiveListItemRenderer: item }) => {
+      const source = item === undefined ? undefined : listItemSource(item, true);
+      return source === undefined ? [] : [suggest(source)];
     });
+    return title === undefined || songs.length === 0
+      ? []
+      : [new SuggestionShelf({ title, songs, releases: [] })];
   });
+});

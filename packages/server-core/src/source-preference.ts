@@ -45,15 +45,16 @@ export const listProviderChoices = Effect.gen(function* () {
   });
 });
 
-export const setProviderOrder = (providerRanking: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const clock = yield* HlcClock;
-    const row = new SourcePreferenceRow({
-      table: "source_preference",
-      id: yield* sourcePreferenceId,
-      scope: "global",
-      providerRanking,
-      hlc: yield* clock.next,
-    });
-    yield* writeRow(row, yield* nextChangeSeq);
+export const setProviderOrder = Effect.fn("setProviderOrder")(function* (
+  providerRanking: ReadonlyArray<string>,
+) {
+  const clock = yield* HlcClock;
+  const row = new SourcePreferenceRow({
+    table: "source_preference",
+    id: yield* sourcePreferenceId,
+    scope: "global",
+    providerRanking,
+    hlc: yield* clock.next,
   });
+  yield* writeRow(row, yield* nextChangeSeq);
+});

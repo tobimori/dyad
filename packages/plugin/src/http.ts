@@ -30,95 +30,92 @@ export const providerError = (name: string) => (error: HttpStatusError | HttpReq
 const RetryAfter = Schema.FiniteFromString.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** Sends `request` and returns a response with a status from 200 to 299 */
-export const send = (request: HttpClientRequest.HttpClientRequest) =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    const response = yield* client
-      .execute(request)
-      .pipe(Effect.mapError(() => new HttpRequestError({ reason: "Request failed" })));
+export const send = Effect.fn("send")(function* (request: HttpClientRequest.HttpClientRequest) {
+  const client = yield* HttpClient.HttpClient;
+  const response = yield* client
+    .execute(request)
+    .pipe(Effect.mapError(() => new HttpRequestError({ reason: "Request failed" })));
 
-    if (response.status >= 200 && response.status < 300) return response;
+  if (response.status >= 200 && response.status < 300) return response;
 
-    const retryAfter = Schema.decodeUnknownOption(RetryAfter)(response.headers["retry-after"]);
-    return yield* new HttpStatusError({
-      status: response.status,
-      retryAfterSeconds: Option.getOrNull(retryAfter),
-    });
+  const retryAfter = Schema.decodeUnknownOption(RetryAfter)(response.headers["retry-after"]);
+  return yield* new HttpStatusError({
+    status: response.status,
+    retryAfterSeconds: Option.getOrNull(retryAfter),
   });
+});
 
 /** Sends `request` with any method and decodes the JSON body with `schema` */
-export const getJson = <S extends Schema.Constraint>(
+export const getJson = Effect.fn("getJson")(function* <S extends Schema.Constraint>(
   request: HttpClientRequest.HttpClientRequest,
   schema: S,
-) =>
-  Effect.gen(function* () {
-    const response = yield* send(request);
+) {
+  const response = yield* send(request);
 
-    return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-      Effect.mapError(() => new HttpRequestError({ reason: "Unexpected response" })),
-    );
-  });
+  return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
+    Effect.mapError(() => new HttpRequestError({ reason: "Unexpected response" })),
+  );
+});
 
 /** Sends `request` and reads the body as text, for example a web page or an HLS playlist */
-export const getText = (request: HttpClientRequest.HttpClientRequest) =>
-  Effect.gen(function* () {
-    const response = yield* send(request);
+export const getText = Effect.fn("getText")(function* (
+  request: HttpClientRequest.HttpClientRequest,
+) {
+  const response = yield* send(request);
 
-    return yield* response.text.pipe(
-      Effect.mapError(() => new HttpRequestError({ reason: "Request failed" })),
-    );
-  });
+  return yield* response.text.pipe(
+    Effect.mapError(() => new HttpRequestError({ reason: "Request failed" })),
+  );
+});
 
 /**
  * One queue of requests. Each request starts at least `intervalMs` after the previous one ended.
  * Use one pacer for all requests that share a rate limit.
  */
-export const makePacer = (intervalMs: number) =>
-  Effect.gen(function* () {
-    const semaphore = yield* Semaphore.make(1);
-    const nextStart = yield* Ref.make(0);
+export const makePacer = Effect.fn("makePacer")(function* (intervalMs: number) {
+  const semaphore = yield* Semaphore.make(1);
+  const nextStart = yield* Ref.make(0);
 
-    const markEnd = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-      Ref.set(nextStart, now + intervalMs),
+  const markEnd = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    Ref.set(nextStart, now + intervalMs),
+  );
+
+  return <A, E, R>(request: Effect.Effect<A, E, R>) =>
+    semaphore.withPermit(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const start = yield* Ref.get(nextStart);
+        yield* Effect.sleep(Math.max(0, start - now));
+
+        return yield* Effect.ensuring(request, markEnd);
+      }),
     );
-
-    return <A, E, R>(request: Effect.Effect<A, E, R>) =>
-      semaphore.withPermit(
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
-          const start = yield* Ref.get(nextStart);
-          yield* Effect.sleep(Math.max(0, start - now));
-
-          return yield* Effect.ensuring(request, markEnd);
-        }),
-      );
-  });
+});
 
 /**
  * A token from a provider's web client, kept in memory for `timeToLive`. When the provider
  * answers one of `rejectedStatuses`, the plugin reads a new token and runs `use` once more.
  */
-export const makeScrapedToken = <E, R>(
+export const makeScrapedToken = Effect.fn("makeScrapedToken")(function* <E, R>(
   fetchToken: Effect.Effect<Redacted.Redacted<string>, E, R>,
   options: {
     readonly timeToLive: Duration.Input;
     readonly rejectedStatuses: ReadonlyArray<number>;
   },
-) =>
-  Effect.gen(function* () {
-    // A failure is not cached, so the next request tries again
-    const [current, invalidate] = yield* Effect.cachedInvalidateWithTTL(fetchToken, (exit) =>
-      Exit.isSuccess(exit) ? options.timeToLive : Duration.zero,
-    );
+) {
+  // A failure is not cached, so the next request tries again
+  const [current, invalidate] = yield* Effect.cachedInvalidateWithTTL(fetchToken, (exit) =>
+    Exit.isSuccess(exit) ? options.timeToLive : Duration.zero,
+  );
 
-    return <A, E2, R2>(
-      use: (token: Redacted.Redacted<string>) => Effect.Effect<A, E2 | HttpStatusError, R2>,
-    ) =>
-      Effect.flatMap(current, use).pipe(
-        Effect.catchIf(
-          (error) =>
-            error instanceof HttpStatusError && options.rejectedStatuses.includes(error.status),
-          () => invalidate.pipe(Effect.andThen(current), Effect.flatMap(use)),
-        ),
-      );
-  });
+  return <A, E2, R2>(
+    use: (token: Redacted.Redacted<string>) => Effect.Effect<A, E2 | HttpStatusError, R2>,
+  ) =>
+    Effect.flatMap(current, use).pipe(
+      Effect.catchIf(
+        (error) =>
+          error instanceof HttpStatusError && options.rejectedStatuses.includes(error.status),
+        () => invalidate.pipe(Effect.andThen(current), Effect.flatMap(use)),
+      ),
+    );
+});

@@ -18,21 +18,20 @@ export class HomeServer extends Context.Service<HomeServer, Option.Option<HomeCl
 ) {}
 
 /** The answer of the home server on a device; the local answer on the home server */
-export const forwardEffect = <A, E, R>(
+export const forwardEffect = Effect.fn("forwardEffect")(function* <A, E, R>(
   remote: (home: HomeClient) => Effect.Effect<A, NoInfer<E> | RpcClientError | Unauthorized>,
   local: Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const home = yield* HomeServer;
-    if (Option.isNone(home)) return yield* local;
-    return yield* remote(home.value).pipe(
-      Effect.catch((error) =>
-        Schema.is(RpcClientError)(error) || Schema.is(Unauthorized)(error)
-          ? Effect.die(lost)
-          : Effect.fail(error),
-      ),
-    );
-  });
+) {
+  const home = yield* HomeServer;
+  if (Option.isNone(home)) return yield* local;
+  return yield* remote(home.value).pipe(
+    Effect.catch((error) =>
+      Schema.is(RpcClientError)(error) || Schema.is(Unauthorized)(error)
+        ? Effect.die(lost)
+        : Effect.fail(error),
+    ),
+  );
+});
 
 /** Like `forwardEffect`; `offline` answers on a device that cannot reach its home server */
 export const forwardStream = <A, E, R>(

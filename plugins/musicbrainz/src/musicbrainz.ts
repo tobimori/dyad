@@ -57,44 +57,42 @@ const searchPage = (query: string, offset: number) =>
     SearchResults,
   );
 
-const searchBatch = (isrcs: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const query = isrcs.map((isrc) => `isrc:${isrc}`).join(" OR ");
+const searchBatch = Effect.fn("searchBatch")(function* (isrcs: ReadonlyArray<string>) {
+  const query = isrcs.map((isrc) => `isrc:${isrc}`).join(" OR ");
 
-    const first = yield* searchPage(query, 0);
-    const recordings = [...first.recordings];
+  const first = yield* searchPage(query, 0);
+  const recordings = [...first.recordings];
 
-    for (let offset = pageSize; offset < first.count; offset += pageSize) {
-      const page = yield* searchPage(query, offset);
-      recordings.push(...page.recordings);
-    }
+  for (let offset = pageSize; offset < first.count; offset += pageSize) {
+    const page = yield* searchPage(query, offset);
+    recordings.push(...page.recordings);
+  }
 
-    return recordings;
-  });
+  return recordings;
+});
 
 /**
  * Finds the MusicBrainz recordings of each ISRC, with one search request for up to 25 ISRCs. The
  * result has an entry for each ISRC, with an empty array when no recording has it.
  */
-export const lookupIsrcs = (isrcs: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const valid = Arr.dedupe(isrcs).filter(Schema.is(Isrc));
-    const batches = yield* Effect.forEach(Arr.chunksOf(valid, batchSize), searchBatch);
+export const lookupIsrcs = Effect.fn("lookupIsrcs")(function* (isrcs: ReadonlyArray<string>) {
+  const valid = Arr.dedupe(isrcs).filter(Schema.is(Isrc));
+  const batches = yield* Effect.forEach(Arr.chunksOf(valid, batchSize), searchBatch);
 
-    // A recording with ISRCs in two batches comes back twice
-    const recordings = new Map(batches.flat().map((recording) => [recording.id, recording]));
+  // A recording with ISRCs in two batches comes back twice
+  const recordings = new Map(batches.flat().map((recording) => [recording.id, recording]));
 
-    // The search answers the recordings of all ISRCs of a query, and its index can lag behind the
-    // database. Only the `isrcs` of a recording show which ISRCs it has now.
-    const recordingsOf = (isrc: string) =>
-      [...recordings.values()].flatMap((recording) => {
-        if (recording.isrcs?.includes(isrc) !== true) return [];
+  // The search answers the recordings of all ISRCs of a query, and its index can lag behind the
+  // database. Only the `isrcs` of a recording show which ISRCs it has now.
+  const recordingsOf = (isrc: string) =>
+    [...recordings.values()].flatMap((recording) => {
+      if (recording.isrcs?.includes(isrc) !== true) return [];
 
-        return [toRecording(recording)];
-      });
+      return [toRecording(recording)];
+    });
 
-    return new Map(isrcs.map((isrc) => [isrc, recordingsOf(isrc)]));
-  });
+  return new Map(isrcs.map((isrc) => [isrc, recordingsOf(isrc)]));
+});
 
 // Inside a Lucene phrase, only `"` and `\` need an escape
 const phrase = (text: string) => `"${text.replaceAll(/["\\]/g, "\\$&")}"`;

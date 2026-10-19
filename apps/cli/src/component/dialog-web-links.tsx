@@ -24,12 +24,14 @@ const opener = (url: string) => {
 class OpenFailed extends Data.TaggedError("OpenFailed")<{}> {}
 
 /** Fails when the system has no opener, for example over SSH */
-const openUrl = (url: string) =>
-  Effect.gen(function* () {
+const openUrl = Effect.fn("openUrl")(
+  function* (url: string) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const code = yield* spawner.exitCode(opener(url));
     if (code !== 0) return yield* new OpenFailed();
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  },
+  (effect) => effect.pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 function WebLinksDialog(props: {
   readonly connection: typeof ServerConnection.Service;

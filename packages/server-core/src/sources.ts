@@ -49,7 +49,7 @@ const uploaderCredit = (parsed: ParsedTitle, uploader: CreditedArtist | null) =>
   };
 };
 
-const assertParsedTitle = (
+const assertParsedTitle = Effect.fn("assertParsedTitle")(function* (
   recordingId: string,
   item: {
     readonly provider: string;
@@ -59,48 +59,47 @@ const assertParsedTitle = (
     readonly durationMs: number | null;
     readonly uploader: CreditedArtist | null;
   },
-) =>
-  Effect.gen(function* () {
-    const parsed = yield* parseUploadTitle({
-      title: item.title,
-      uploader: item.uploader?.name ?? null,
-      // An uploader without an artist field gives its own name as the artist
-      artists: item.artist === null || item.artist === item.uploader?.name ? [] : [item.artist],
-      durationMs: item.durationMs,
-    });
-
-    return yield* assertRecording(
-      recordingId,
-      "parse",
-      `${item.provider}:${item.externalId}`,
-      {
-        title: versionedTitle(parsed),
-        artist_credit: parsed.artists.length === 0 ? null : uploaderCredit(parsed, item.uploader),
-        versions: parsed.versions,
-        mashup_parts: parsed.parts,
-        uploader_role: item.uploader === null ? null : parsed.uploaderRole,
-        set: parsed.set,
-        series: parsed.series,
-      },
-      {
-        confidence: parsed.confidence,
-        originRevision: parserRevision,
-        evidence: new ParseEvidence({
-          title: item.title,
-          artist: item.artist,
-          uploader: item.uploader,
-          artistSource: parsed.artistSource,
-          removed: parsed.removed,
-        }),
-      },
-    );
+) {
+  const parsed = yield* parseUploadTitle({
+    title: item.title,
+    uploader: item.uploader?.name ?? null,
+    // An uploader without an artist field gives its own name as the artist
+    artists: item.artist === null || item.artist === item.uploader?.name ? [] : [item.artist],
+    durationMs: item.durationMs,
   });
+
+  return yield* assertRecording(
+    recordingId,
+    "parse",
+    `${item.provider}:${item.externalId}`,
+    {
+      title: versionedTitle(parsed),
+      artist_credit: parsed.artists.length === 0 ? null : uploaderCredit(parsed, item.uploader),
+      versions: parsed.versions,
+      mashup_parts: parsed.parts,
+      uploader_role: item.uploader === null ? null : parsed.uploaderRole,
+      set: parsed.set,
+      series: parsed.series,
+    },
+    {
+      confidence: parsed.confidence,
+      originRevision: parserRevision,
+      evidence: new ParseEvidence({
+        title: item.title,
+        artist: item.artist,
+        uploader: item.uploader,
+        artistSource: parsed.artistSource,
+        removed: parsed.removed,
+      }),
+    },
+  );
+});
 
 /**
  * Writes a source, its variant and recording, then asserts and matches the metadata. All writes
  * of `source` and `source_variant` go through here.
  */
-export const writeSource = (
+export const writeSource = Effect.fn("writeSource")(function* (
   item: {
     readonly provider: string;
     readonly externalId: string;
@@ -124,103 +123,101 @@ export const writeSource = (
     readonly releaseDate: string | null;
   },
   variant: Omit<typeof sourceVariant.$inferInsert, "id" | "sourceId" | "hlc" | "changeSeq">,
-) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const id = yield* sourceId(item.provider, item.externalId);
-    const recordingId = yield* boundRecordingId(item.provider, item.externalId);
-    const sourceRow = {
-      id,
-      provider: item.provider,
-      externalId: item.externalId,
-      kind: item.kind,
-      recordingId,
-      rawTitle: item.title,
-      rawArtist: item.artist,
-      rawAlbum: item.album,
-      rawDurationMs: item.durationMs,
-      ...projection,
-    };
-    const variantRow = { id: yield* variantId(id), sourceId: id, ...variant };
+) {
+  const db = yield* Database;
+  const id = yield* sourceId(item.provider, item.externalId);
+  const recordingId = yield* boundRecordingId(item.provider, item.externalId);
+  const sourceRow = {
+    id,
+    provider: item.provider,
+    externalId: item.externalId,
+    kind: item.kind,
+    recordingId,
+    rawTitle: item.title,
+    rawArtist: item.artist,
+    rawAlbum: item.album,
+    rawDurationMs: item.durationMs,
+    ...projection,
+  };
+  const variantRow = { id: yield* variantId(id), sourceId: id, ...variant };
 
-    yield* db.transaction((tx) =>
-      Effect.gen(function* () {
-        const written = yield* Effect.all([
-          tx
-            .insert(recording)
-            .values({
-              id: recordingId,
-              origin: item.provider === "local" ? "local" : "provider",
-              ...projection,
-            })
-            .onConflictDoNothing()
-            .returning({ id: recording.id }),
-          tx
-            .insert(source)
-            .values(sourceRow)
-            .onConflictDoUpdate({
-              target: source.id,
-              set: sourceRow,
-              setWhere: differs(source, Object.keys(sourceRow)),
-            })
-            .returning({ id: source.id }),
-          tx
-            .insert(sourceVariant)
-            .values(variantRow)
-            .onConflictDoUpdate({
-              target: sourceVariant.id,
-              set: variantRow,
-              setWhere: differs(sourceVariant, Object.keys(variantRow)),
-            })
-            .returning({ id: sourceVariant.id }),
-        ]);
+  yield* db.transaction((tx) =>
+    Effect.gen(function* () {
+      const written = yield* Effect.all([
+        tx
+          .insert(recording)
+          .values({
+            id: recordingId,
+            origin: item.provider === "local" ? "local" : "provider",
+            ...projection,
+          })
+          .onConflictDoNothing()
+          .returning({ id: recording.id }),
+        tx
+          .insert(source)
+          .values(sourceRow)
+          .onConflictDoUpdate({
+            target: source.id,
+            set: sourceRow,
+            setWhere: differs(source, Object.keys(sourceRow)),
+          })
+          .returning({ id: source.id }),
+        tx
+          .insert(sourceVariant)
+          .values(variantRow)
+          .onConflictDoUpdate({
+            target: sourceVariant.id,
+            set: variantRow,
+            setWhere: differs(sourceVariant, Object.keys(variantRow)),
+          })
+          .returning({ id: sourceVariant.id }),
+      ]);
 
-        // Other server replicas take the newer write of a source or variant
-        const [, sourceWritten = [], variantWritten = []] = written;
-        if (sourceWritten.length > 0 || variantWritten.length > 0) {
-          const stamp = { hlc: yield* (yield* HlcClock).next, changeSeq: yield* nextChangeSeq };
-          if (sourceWritten.length > 0)
-            yield* tx.update(source).set(stamp).where(eq(source.id, id));
-          if (variantWritten.length > 0) {
-            yield* tx.update(sourceVariant).set(stamp).where(eq(sourceVariant.id, variantRow.id));
-          }
+      // Other server replicas take the newer write of a source or variant
+      const [, sourceWritten = [], variantWritten = []] = written;
+      if (sourceWritten.length > 0 || variantWritten.length > 0) {
+        const stamp = { hlc: yield* (yield* HlcClock).next, changeSeq: yield* nextChangeSeq };
+        if (sourceWritten.length > 0) yield* tx.update(source).set(stamp).where(eq(source.id, id));
+        if (variantWritten.length > 0) {
+          yield* tx.update(sourceVariant).set(stamp).where(eq(sourceVariant.id, variantRow.id));
         }
+      }
 
-        // A file asserts as its source, so that copies of the same audio on two replicas agree
-        const local = item.provider === "local";
-        // Uploaders type titles and artists as free text, so only the parse asserts them
-        const uploads = (yield* Providers).get(item.provider)?.uploads === true;
-        const metadata = {
-          title: uploads ? null : item.title,
-          artist_credit:
-            uploads || item.artist === null
-              ? null
-              : {
-                  name: item.artist,
-                  artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
-                },
-          album: item.album,
-          duration_ms: item.durationMs,
-          isrc: item.isrc === null ? null : normalizeIsrc(item.isrc),
-          artwork_url: item.artworkUrl,
-          explicit: item.explicit,
-          album_type: item.album === null ? null : item.albumType,
-          release_date: item.album === null ? null : item.releaseDate,
-        };
-        yield* assertRecording(
-          recordingId,
-          local ? "local" : "provider",
-          local ? id : `${item.provider}:${item.externalId}`,
-          uploads ? { ...metadata, uploader: item.uploader } : metadata,
-        );
-        yield* assertParsedTitle(recordingId, item);
-        yield* updateRecording(recordingId, item.mbid);
-        if (written.some((rows) => rows.length > 0)) yield* touchGroups([recordingId]);
-      }),
-    );
+      // A file asserts as its source, so that copies of the same audio on two replicas agree
+      const local = item.provider === "local";
+      // Uploaders type titles and artists as free text, so only the parse asserts them
+      const uploads = (yield* Providers).get(item.provider)?.uploads === true;
+      const metadata = {
+        title: uploads ? null : item.title,
+        artist_credit:
+          uploads || item.artist === null
+            ? null
+            : {
+                name: item.artist,
+                artists: item.artists.map((artist) => ({ id: artist.id, name: artist.name })),
+              },
+        album: item.album,
+        duration_ms: item.durationMs,
+        isrc: item.isrc === null ? null : normalizeIsrc(item.isrc),
+        artwork_url: item.artworkUrl,
+        explicit: item.explicit,
+        album_type: item.album === null ? null : item.albumType,
+        release_date: item.album === null ? null : item.releaseDate,
+      };
+      yield* assertRecording(
+        recordingId,
+        local ? "local" : "provider",
+        local ? id : `${item.provider}:${item.externalId}`,
+        uploads ? { ...metadata, uploader: item.uploader } : metadata,
+      );
+      yield* assertParsedTitle(recordingId, item);
+      yield* updateRecording(recordingId, item.mbid);
+      if (written.some((rows) => rows.length > 0)) yield* touchGroups([recordingId]);
+    }),
+  );
 
-    return id;
-  });
+  return id;
+});
 
 export const writeProviderSource = (provider: string, item: ProviderSource) =>
   writeSource(
@@ -308,37 +305,39 @@ const canonical = alias(recording, "canonical");
  * The sources that the owner can play, one row per source: a file on this replica, or a source of
  * a linked provider
  */
-export const playableSources = (match?: SQL, limit?: number) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const providers = yield* linkedProviders;
+export const playableSources = Effect.fn("playableSources")(function* (
+  match?: SQL,
+  limit?: number,
+) {
+  const db = yield* Database;
+  const providers = yield* linkedProviders;
 
-    const query = db
-      .select({
-        source,
-        variant: sourceVariant,
-        // From one of the files when a source has several
-        tags: localFile.tags,
-        albumArtistKey: localFile.albumArtistKey,
-        artistKey: localFile.artistKey,
-        albumKey: localFile.albumKey,
-        canonical: {
-          title: canonical.title,
-          artist: canonical.artistName,
-          album: canonical.album,
-          explicit: canonical.explicit,
-        },
-        // The cached search result has artwork for sources from before assertions
-        artworkUrl: sql<
-          string | null
-        >`coalesce(${canonical.artworkUrl}, json_extract(${providerItem.data}, '$.artworkUrl'))`,
-        // The same rule as `cachedSummary`
-        providerArtistId: sql<
-          string | null
-        >`coalesce(json_extract(${providerItem.data}, '$.artists[0].id'), json_extract(${providerItem.data}, '$.uploader.id'))`,
-        providerAlbumId: sql<string | null>`json_extract(${providerItem.data}, '$.albumId')`,
-        // The provider cache is local to each replica; the catalog artist is on every replica
-        artistRoot: sql<string | null>`(
+  const query = db
+    .select({
+      source,
+      variant: sourceVariant,
+      // From one of the files when a source has several
+      tags: localFile.tags,
+      albumArtistKey: localFile.albumArtistKey,
+      artistKey: localFile.artistKey,
+      albumKey: localFile.albumKey,
+      canonical: {
+        title: canonical.title,
+        artist: canonical.artistName,
+        album: canonical.album,
+        explicit: canonical.explicit,
+      },
+      // The cached search result has artwork for sources from before assertions
+      artworkUrl: sql<
+        string | null
+      >`coalesce(${canonical.artworkUrl}, json_extract(${providerItem.data}, '$.artworkUrl'))`,
+      // The same rule as `cachedSummary`
+      providerArtistId: sql<
+        string | null
+      >`coalesce(json_extract(${providerItem.data}, '$.artists[0].id'), json_extract(${providerItem.data}, '$.uploader.id'))`,
+      providerAlbumId: sql<string | null>`json_extract(${providerItem.data}, '$.albumId')`,
+      // The provider cache is local to each replica; the catalog artist is on every replica
+      artistRoot: sql<string | null>`(
           SELECT coalesce(a.merged_into_id, a.id)
           FROM song_artist AS n JOIN artist AS a ON a.id = n.artist_id
           WHERE n.recording_id = ${canonical.id} AND n.position = 0
@@ -348,30 +347,28 @@ export const playableSources = (match?: SQL, limit?: number) =>
                 AND m.origin = 'provider'
             )
         )`,
-        video: sql<number | null>`json_extract(${providerItem.data}, '$.video')`,
-      })
-      .from(source)
-      .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
-      .leftJoin(localFile, eq(localFile.sourceId, source.id))
-      .leftJoin(providerItem, eq(providerItem.sourceId, source.id))
-      .leftJoin(bound, eq(bound.id, source.recordingId))
-      .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
-      .where(
-        and(or(isNotNull(localFile.id), inArray(source.provider, [...providers.keys()])), match),
-      )
-      .groupBy(source.id)
-      .$dynamic();
+      video: sql<number | null>`json_extract(${providerItem.data}, '$.video')`,
+    })
+    .from(source)
+    .innerJoin(sourceVariant, eq(sourceVariant.sourceId, source.id))
+    .leftJoin(localFile, eq(localFile.sourceId, source.id))
+    .leftJoin(providerItem, eq(providerItem.sourceId, source.id))
+    .leftJoin(bound, eq(bound.id, source.recordingId))
+    .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
+    .where(and(or(isNotNull(localFile.id), inArray(source.provider, [...providers.keys()])), match))
+    .groupBy(source.id)
+    .$dynamic();
 
-    const rows = yield* limit === undefined ? query : query.limit(limit);
-    return rows.map((row) => ({
-      ...row,
-      tags:
-        row.tags === null
-          ? null
-          : Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({})),
-      providerName: providers.get(row.source.provider)?.name ?? null,
-    }));
-  });
+  const rows = yield* limit === undefined ? query : query.limit(limit);
+  return rows.map((row) => ({
+    ...row,
+    tags:
+      row.tags === null
+        ? null
+        : Option.getOrElse(Schema.decodeUnknownOption(Tags)(row.tags), () => ({})),
+    providerName: providers.get(row.source.provider)?.name ?? null,
+  }));
+});
 
 /** Canonical fields of the source's recording first. The duration is the source's own. */
 export const sourceSummary = (row: {

@@ -90,96 +90,95 @@ const fetchText = (device: string, url: string) =>
  * Reads the device description at `location`. Returns `null` when the device is not a
  * MediaRenderer.
  */
-export const describe = (location: string) =>
-  Effect.gen(function* () {
-    const description = yield* fetchText(location, location).pipe(
-      Effect.flatMap((xml) => decodeXml(DeviceDescription, xml)),
-      Effect.catchTag("XmlError", (error) =>
-        Effect.fail(
-          new CommandFailed({ device: location, command: "describe", reason: error.reason }),
-        ),
+export const describe = Effect.fn("describe")(function* (location: string) {
+  const description = yield* fetchText(location, location).pipe(
+    Effect.flatMap((xml) => decodeXml(DeviceDescription, xml)),
+    Effect.catchTag("XmlError", (error) =>
+      Effect.fail(
+        new CommandFailed({ device: location, command: "describe", reason: error.reason }),
       ),
-    );
-    const root = description.root.device[0];
-    const base = description.root.URLBase ?? location;
-    const name = root.roomName ?? root.friendlyName;
+    ),
+  );
+  const root = description.root.device[0];
+  const base = description.root.URLBase ?? location;
+  const name = root.roomName ?? root.friendlyName;
 
-    // The renderer is the root or an embedded device. Its siblings, such as the Sonos
-    // MediaServer, have their own ConnectionManager.
-    const embedded = devicesOf(root.deviceList);
-    const nested = embedded.flatMap((device) => devicesOf(device.deviceList));
-    const renderer = [root, ...embedded, ...nested].find((device) =>
-      servicesOf(device.serviceList).some((entry) => entry.serviceType.includes(":AVTransport:")),
-    );
-    if (renderer === undefined) return null;
+  // The renderer is the root or an embedded device. Its siblings, such as the Sonos
+  // MediaServer, have their own ConnectionManager.
+  const embedded = devicesOf(root.deviceList);
+  const nested = embedded.flatMap((device) => devicesOf(device.deviceList));
+  const renderer = [root, ...embedded, ...nested].find((device) =>
+    servicesOf(device.serviceList).some((entry) => entry.serviceType.includes(":AVTransport:")),
+  );
+  if (renderer === undefined) return null;
 
-    const entries =
-      renderer === root
-        ? servicesOf(root.serviceList)
-        : [...servicesOf(root.serviceList), ...servicesOf(renderer.serviceList)];
+  const entries =
+    renderer === root
+      ? servicesOf(root.serviceList)
+      : [...servicesOf(root.serviceList), ...servicesOf(renderer.serviceList)];
 
-    const services = yield* Effect.forEach(
-      entries,
-      (entry) =>
-        Effect.gen(function* () {
-          const described = describedServices.has(entry.serviceType.split(":")[3] ?? "");
-          const scpd = described
-            ? yield* fetchText(name, new URL(entry.SCPDURL, base).href).pipe(
-                Effect.flatMap((xml) => decodeXml(ServiceDescription, xml)),
-                Effect.catchTag("XmlError", (error) =>
-                  Effect.fail(
-                    new CommandFailed({ device: name, command: "describe", reason: error.reason }),
-                  ),
+  const services = yield* Effect.forEach(
+    entries,
+    (entry) =>
+      Effect.gen(function* () {
+        const described = describedServices.has(entry.serviceType.split(":")[3] ?? "");
+        const scpd = described
+          ? yield* fetchText(name, new URL(entry.SCPDURL, base).href).pipe(
+              Effect.flatMap((xml) => decodeXml(ServiceDescription, xml)),
+              Effect.catchTag("XmlError", (error) =>
+                Effect.fail(
+                  new CommandFailed({ device: name, command: "describe", reason: error.reason }),
                 ),
-              )
-            : undefined;
-          const actionList = scpd?.scpd.actionList;
+              ),
+            )
+          : undefined;
+        const actionList = scpd?.scpd.actionList;
 
-          return new UpnpService({
-            serviceType: entry.serviceType,
-            controlUrl: new URL(entry.controlURL, base).href,
-            eventUrl: new URL(entry.eventSubURL, base).href,
-            actions:
-              actionList === undefined || actionList === ""
-                ? []
-                : actionList.action.map((action) => action.name),
-          });
-        }),
-      { concurrency: 4 },
-    );
-
-    const has = (service: string, action: string) =>
-      findService(services, service)?.actions.includes(action) === true;
-    const sonos = root.deviceType.includes(":ZonePlayer:");
-
-    const connectionManager = findService(services, "ConnectionManager");
-    const sink =
-      connectionManager === undefined
-        ? ""
-        : yield* soap(name, connectionManager, "GetProtocolInfo", [], ProtocolInfo).pipe(
-            Effect.map((info) => info.Sink),
-          );
-    // For example `http-get:*:audio/flac:*`
-    const mimeTypes = sink.split(",").flatMap((entry) => {
-      const [protocol, , mimeType] = entry.trim().split(":");
-      return protocol === "http-get" && mimeType?.startsWith("audio/") === true ? [mimeType] : [];
-    });
-
-    return new UpnpDevice({
-      id: root.UDN,
-      name,
-      manufacturer: root.manufacturer ?? "",
-      model: root.modelName ?? "",
-      kind: sonos ? "sonos" : "upnp",
-      host: new URL(location).hostname,
-      location,
-      services,
-      capabilities: new Capabilities({
-        mimeTypes: [...new Set(mimeTypes)],
-        queueNext: has("AVTransport", "SetNextAVTransportURI"),
-        volume:
-          has("RenderingControl", "SetVolume") ||
-          (sonos && has("GroupRenderingControl", "SetGroupVolume")),
+        return new UpnpService({
+          serviceType: entry.serviceType,
+          controlUrl: new URL(entry.controlURL, base).href,
+          eventUrl: new URL(entry.eventSubURL, base).href,
+          actions:
+            actionList === undefined || actionList === ""
+              ? []
+              : actionList.action.map((action) => action.name),
+        });
       }),
-    });
+    { concurrency: 4 },
+  );
+
+  const has = (service: string, action: string) =>
+    findService(services, service)?.actions.includes(action) === true;
+  const sonos = root.deviceType.includes(":ZonePlayer:");
+
+  const connectionManager = findService(services, "ConnectionManager");
+  const sink =
+    connectionManager === undefined
+      ? ""
+      : yield* soap(name, connectionManager, "GetProtocolInfo", [], ProtocolInfo).pipe(
+          Effect.map((info) => info.Sink),
+        );
+  // For example `http-get:*:audio/flac:*`
+  const mimeTypes = sink.split(",").flatMap((entry) => {
+    const [protocol, , mimeType] = entry.trim().split(":");
+    return protocol === "http-get" && mimeType?.startsWith("audio/") === true ? [mimeType] : [];
   });
+
+  return new UpnpDevice({
+    id: root.UDN,
+    name,
+    manufacturer: root.manufacturer ?? "",
+    model: root.modelName ?? "",
+    kind: sonos ? "sonos" : "upnp",
+    host: new URL(location).hostname,
+    location,
+    services,
+    capabilities: new Capabilities({
+      mimeTypes: [...new Set(mimeTypes)],
+      queueNext: has("AVTransport", "SetNextAVTransportURI"),
+      volume:
+        has("RenderingControl", "SetVolume") ||
+        (sonos && has("GroupRenderingControl", "SetGroupVolume")),
+    }),
+  });
+});

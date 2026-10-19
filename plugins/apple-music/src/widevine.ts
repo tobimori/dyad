@@ -8,51 +8,50 @@ import { wvd } from "./wvd.ts";
 
 const widevineSystem = "edef8ba979d64acea3c827dcd51d21ed";
 
-const keyUri = (playlist: string) =>
-  Effect.gen(function* () {
-    // Only the DRM URI is needed here. `@dyad/plugin/hls` reads the media segments.
-    const uris = playlist.split(/\r?\n/).flatMap((line) => {
-      if (!line.startsWith("#EXT-X-KEY:")) return [];
-      const attributes = new Map(
-        [...line.slice(11).matchAll(/(?:^|,)([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))/g)].map(
-          (match) => [match[1], match[2] ?? match[3]] as const,
-        ),
-      );
-      const format = attributes.get("KEYFORMAT");
-      const uri = attributes.get("URI");
-      const method = attributes.get("METHOD");
-      if (format !== undefined && format !== `urn:uuid:${"edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"}`) {
-        return [];
-      }
-      // Apple's AAC web route labels CENC `ISO-23001-7`, not `SAMPLE-AES-CTR`
-      if ((method !== "ISO-23001-7" && method !== "SAMPLE-AES-CTR") || uri === undefined) {
-        return [];
-      }
-      return [uri];
-    });
-    const unique = [...new Set(uris)];
-    if (unique.length !== 1 || unique[0] === undefined) {
-      return yield* new AppleMusicError({
-        stage: "playlist",
-        reason: "Expected one Widevine CENC key URI",
-      });
-    }
-    const uri = unique[0];
-    if (!uri.startsWith("data:")) {
-      return yield* new AppleMusicError({
-        stage: "playlist",
-        reason: "Unsupported DRM URI format",
-      });
-    }
-    const payload = yield* Schema.decodeEffect(Schema.Uint8ArrayFromBase64)(
-      uri.slice(uri.indexOf(",") + 1),
-    ).pipe(
-      Effect.mapError(
-        () => new AppleMusicError({ stage: "playlist", reason: "Invalid DRM initialization data" }),
+const keyUri = Effect.fn("keyUri")(function* (playlist: string) {
+  // Only the DRM URI is needed here. `@dyad/plugin/hls` reads the media segments.
+  const uris = playlist.split(/\r?\n/).flatMap((line) => {
+    if (!line.startsWith("#EXT-X-KEY:")) return [];
+    const attributes = new Map(
+      [...line.slice(11).matchAll(/(?:^|,)([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))/g)].map(
+        (match) => [match[1], match[2] ?? match[3]] as const,
       ),
     );
-    return { uri, payload };
+    const format = attributes.get("KEYFORMAT");
+    const uri = attributes.get("URI");
+    const method = attributes.get("METHOD");
+    if (format !== undefined && format !== `urn:uuid:${"edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"}`) {
+      return [];
+    }
+    // Apple's AAC web route labels CENC `ISO-23001-7`, not `SAMPLE-AES-CTR`
+    if ((method !== "ISO-23001-7" && method !== "SAMPLE-AES-CTR") || uri === undefined) {
+      return [];
+    }
+    return [uri];
   });
+  const unique = [...new Set(uris)];
+  if (unique.length !== 1 || unique[0] === undefined) {
+    return yield* new AppleMusicError({
+      stage: "playlist",
+      reason: "Expected one Widevine CENC key URI",
+    });
+  }
+  const uri = unique[0];
+  if (!uri.startsWith("data:")) {
+    return yield* new AppleMusicError({
+      stage: "playlist",
+      reason: "Unsupported DRM URI format",
+    });
+  }
+  const payload = yield* Schema.decodeEffect(Schema.Uint8ArrayFromBase64)(
+    uri.slice(uri.indexOf(",") + 1),
+  ).pipe(
+    Effect.mapError(
+      () => new AppleMusicError({ stage: "playlist", reason: "Invalid DRM initialization data" }),
+    ),
+  );
+  return { uri, payload };
+});
 
 /** Gets keys through the subscriber's license endpoint with the bundled device */
 export const acquireAppleKeys = (session: AppleSession, songId: string, assetUrl: string) =>

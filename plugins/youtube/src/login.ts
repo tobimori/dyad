@@ -64,65 +64,66 @@ const AccountMenu = Schema.Struct({
  * The cookies and the `Authorization` of a request of the signed-in web client at `site`. The web
  * client signs each request with a hash of the `*APISID` cookies and the origin.
  */
-export const accountHeaders = (credentials: Credentials, site: string) =>
-  Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const value = (name: string) => Redacted.value(credentials.get(name) ?? Redacted.make(""));
-    const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
-    const hash = (scheme: string, cookie: string) =>
-      crypto
-        .digest("SHA-1", new TextEncoder().encode(`${seconds} ${value(cookie)} ${site}`))
-        .pipe(Effect.map((digest) => `${scheme} ${seconds}_${Hex.encode(digest)}`));
-    const authorization = yield* Effect.all(
-      (
-        [
-          ["SAPISIDHASH", "SAPISID"],
-          ["SAPISID1PHASH", "__Secure-1PAPISID"],
-          ["SAPISID3PHASH", "__Secure-3PAPISID"],
-        ] as const
-      ).flatMap(([scheme, cookie]) => (value(cookie) === "" ? [] : [hash(scheme, cookie)])),
-    ).pipe(Effect.orDie);
+export const accountHeaders = Effect.fn("accountHeaders")(function* (
+  credentials: Credentials,
+  site: string,
+) {
+  const crypto = yield* Crypto.Crypto;
+  const value = (name: string) => Redacted.value(credentials.get(name) ?? Redacted.make(""));
+  const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+  const hash = (scheme: string, cookie: string) =>
+    crypto
+      .digest("SHA-1", new TextEncoder().encode(`${seconds} ${value(cookie)} ${site}`))
+      .pipe(Effect.map((digest) => `${scheme} ${seconds}_${Hex.encode(digest)}`));
+  const authorization = yield* Effect.all(
+    (
+      [
+        ["SAPISIDHASH", "SAPISID"],
+        ["SAPISID1PHASH", "__Secure-1PAPISID"],
+        ["SAPISID3PHASH", "__Secure-3PAPISID"],
+      ] as const
+    ).flatMap(([scheme, cookie]) => (value(cookie) === "" ? [] : [hash(scheme, cookie)])),
+  ).pipe(Effect.orDie);
 
-    return {
-      Cookie: sessionCookies
-        .flatMap((name) => (value(name) === "" ? [] : [`${name}=${value(name)}`]))
-        .join("; "),
-      Authorization: authorization.join(" "),
-      Origin: site,
-      "X-Origin": site,
-      "X-Goog-AuthUser": "0",
-    };
-  }).pipe(Effect.provide(NodeCrypto.layer));
+  return {
+    Cookie: sessionCookies
+      .flatMap((name) => (value(name) === "" ? [] : [`${name}=${value(name)}`]))
+      .join("; "),
+    Authorization: authorization.join(" "),
+    Origin: site,
+    "X-Origin": site,
+    "X-Goog-AuthUser": "0",
+  };
+}, Effect.provide(NodeCrypto.layer));
 
 /** The name of the signed-in account, with one request of the web client */
-export const readAccountName = (credentials: Credentials) =>
-  Effect.gen(function* () {
-    if (
-      !["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"].some((name) => {
-        const cookie = credentials.get(name);
-        return cookie !== undefined && Redacted.value(cookie) !== "";
-      })
-    ) {
-      return yield* new AccountLinkFailed({ reason: "The import needs a YouTube APISID cookie" });
-    }
+export const readAccountName = Effect.fn("readAccountName")(function* (credentials: Credentials) {
+  if (
+    !["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"].some((name) => {
+      const cookie = credentials.get(name);
+      return cookie !== undefined && Redacted.value(cookie) !== "";
+    })
+  ) {
+    return yield* new AccountLinkFailed({ reason: "The import needs a YouTube APISID cookie" });
+  }
 
-    const request = HttpClientRequest.post(`${origin}/youtubei/v1/account/account_menu`).pipe(
-      HttpClientRequest.setUrlParam("prettyPrint", "false"),
-      HttpClientRequest.setHeaders(yield* accountHeaders(credentials, origin)),
-      HttpClientRequest.bodyJsonUnsafe({
-        context: { client: web },
-      }),
-    );
-    const menu = yield* getJson(request, AccountMenu).pipe(
-      Effect.mapError(
-        (error) => new AccountLinkFailed({ reason: providerError("YouTube")(error).reason }),
-      ),
-    );
+  const request = HttpClientRequest.post(`${origin}/youtubei/v1/account/account_menu`).pipe(
+    HttpClientRequest.setUrlParam("prettyPrint", "false"),
+    HttpClientRequest.setHeaders(yield* accountHeaders(credentials, origin)),
+    HttpClientRequest.bodyJsonUnsafe({
+      context: { client: web },
+    }),
+  );
+  const menu = yield* getJson(request, AccountMenu).pipe(
+    Effect.mapError(
+      (error) => new AccountLinkFailed({ reason: providerError("YouTube")(error).reason }),
+    ),
+  );
 
-    const header = menu.actions?.[0]?.openPopupAction.popup.multiPageMenuRenderer.header;
-    if (header === undefined) {
-      return yield* new AccountLinkFailed({ reason: "YouTube does not see a signed-in account" });
-    }
-    const name = header.activeAccountHeaderRenderer.accountName;
-    return name.simpleText ?? name.runs?.map((run) => run.text).join("") ?? "Google account";
-  });
+  const header = menu.actions?.[0]?.openPopupAction.popup.multiPageMenuRenderer.header;
+  if (header === undefined) {
+    return yield* new AccountLinkFailed({ reason: "YouTube does not see a signed-in account" });
+  }
+  const name = header.activeAccountHeaderRenderer.accountName;
+  return name.simpleText ?? name.runs?.map((run) => run.text).join("") ?? "Google account";
+});

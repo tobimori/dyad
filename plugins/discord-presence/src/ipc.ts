@@ -156,8 +156,8 @@ const closedBy = (frame: Frame) =>
   );
 
 // Succeeds when an open connection drops, so that the next connection starts the backoff again
-const connect = (clientId: string, activity: SubscriptionRef.SubscriptionRef<Activity | null>) =>
-  Effect.gen(function* () {
+const connect = Effect.fn("connect")(
+  function* (clientId: string, activity: SubscriptionRef.SubscriptionRef<Activity | null>) {
     const { pull, writer } = yield* open(yield* socketPaths);
     const next = frameReader(pull);
     const send = (opcode: number, json: string) => writer.write(encode(opcode, json));
@@ -227,7 +227,9 @@ const connect = (clientId: string, activity: SubscriptionRef.SubscriptionRef<Act
     yield* Effect.raceFirst(receive, publish).pipe(
       Effect.catch((error) => Effect.logInfo("Lost the connection to Discord", String(error))),
     );
-  }).pipe(Effect.scoped);
+  },
+  (effect) => effect.pipe(Effect.scoped),
+);
 
 /**
  * Keeps the presence of the Discord desktop client equal to `activity`. Rich Presence on its local

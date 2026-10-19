@@ -24,49 +24,48 @@ export type Response = ReadonlyArray<string | Uint8Array>;
 const isSpace = (char: string | undefined) => char === " " || char === "\t";
 
 /** Splits a request line into the command name and its arguments, which can be in double quotes */
-export const parseLine = (line: string) =>
-  Effect.gen(function* () {
-    const args: Array<string> = [];
-    let index = 0;
+export const parseLine = Effect.fn("parseLine")(function* (line: string) {
+  const args: Array<string> = [];
+  let index = 0;
 
-    while (index < line.length) {
-      if (isSpace(line[index])) {
-        index += 1;
-        continue;
-      }
-      if (line[index] !== '"') {
-        const start = index;
-        while (index < line.length && !isSpace(line[index]) && line[index] !== '"') index += 1;
-        args.push(line.slice(start, index));
-        continue;
-      }
-
-      let value = "";
+  while (index < line.length) {
+    if (isSpace(line[index])) {
       index += 1;
-      while (index < line.length && line[index] !== '"') {
-        if (line[index] === "\\") index += 1;
-        value += line[index] ?? "";
-        index += 1;
-      }
-      if (index >= line.length) {
-        return yield* new Ack({ code: ackCode.unknown, message: "Missing closing '\"'" });
-      }
-      index += 1;
-      if (index < line.length && !isSpace(line[index])) {
-        return yield* new Ack({
-          code: ackCode.unknown,
-          message: "Space expected after closing '\"'",
-        });
-      }
-      args.push(value);
+      continue;
+    }
+    if (line[index] !== '"') {
+      const start = index;
+      while (index < line.length && !isSpace(line[index]) && line[index] !== '"') index += 1;
+      args.push(line.slice(start, index));
+      continue;
     }
 
-    const [name, ...rest] = args;
-    if (name === undefined || !/^[a-z_]+$/.test(name)) {
-      return yield* new Ack({ code: ackCode.unknown, message: "Invalid command" });
+    let value = "";
+    index += 1;
+    while (index < line.length && line[index] !== '"') {
+      if (line[index] === "\\") index += 1;
+      value += line[index] ?? "";
+      index += 1;
     }
-    return { name, args: rest };
-  });
+    if (index >= line.length) {
+      return yield* new Ack({ code: ackCode.unknown, message: "Missing closing '\"'" });
+    }
+    index += 1;
+    if (index < line.length && !isSpace(line[index])) {
+      return yield* new Ack({
+        code: ackCode.unknown,
+        message: "Space expected after closing '\"'",
+      });
+    }
+    args.push(value);
+  }
+
+  const [name, ...rest] = args;
+  if (name === undefined || !/^[a-z_]+$/.test(name)) {
+    return yield* new Ack({ code: ackCode.unknown, message: "Invalid command" });
+  }
+  return { name, args: rest };
+});
 
 const songUriPrefix = "dyad:source:";
 

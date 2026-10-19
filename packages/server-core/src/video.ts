@@ -26,52 +26,53 @@ const grantLines = (grant: VideoGrant) => [
 ];
 
 // A search result is not in the catalog yet, so it comes from the provider cache
-const findVideo = (sourceId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const [row] = yield* db
-      .select({ provider: source.provider, externalId: source.externalId })
-      .from(source)
-      .where(eq(source.id, sourceId))
-      .limit(1);
-    const item =
-      row ??
-      Option.getOrUndefined(
-        Option.map(yield* cachedProviderSource(sourceId), (cached) => ({
-          provider: cached.provider,
-          externalId: cached.source.externalId,
-        })),
-      );
-    if (item === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
+const findVideo = Effect.fn("findVideo")(function* (sourceId: string) {
+  const db = yield* Database;
+  const [row] = yield* db
+    .select({ provider: source.provider, externalId: source.externalId })
+    .from(source)
+    .where(eq(source.id, sourceId))
+    .limit(1);
+  const item =
+    row ??
+    Option.getOrUndefined(
+      Option.map(yield* cachedProviderSource(sourceId), (cached) => ({
+        provider: cached.provider,
+        externalId: cached.source.externalId,
+      })),
+    );
+  if (item === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
 
-    const usable = (yield* usableProviders).get(item.provider);
-    if (usable === undefined) {
-      return yield* new PlaybackUnavailable({ reason: "account_required" });
-    }
-    const video = usable.provider.video;
-    if (video === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
-    return (maxHeight: number) => video(item.externalId, usable.credentials, maxHeight);
-  });
+  const usable = (yield* usableProviders).get(item.provider);
+  if (usable === undefined) {
+    return yield* new PlaybackUnavailable({ reason: "account_required" });
+  }
+  const video = usable.provider.video;
+  if (video === undefined) return yield* new PlaybackUnavailable({ reason: "not_found" });
+  return (maxHeight: number) => video(item.externalId, usable.credentials, maxHeight);
+});
 
 /** A signed video URL for the device. It stops working when the device is removed. */
-export const prepareVideo = (sourceId: string, maxHeight: number) =>
-  Effect.gen(function* () {
-    const principal = yield* CurrentPrincipal;
-    yield* findVideo(sourceId);
+export const prepareVideo = Effect.fn("prepareVideo")(function* (
+  sourceId: string,
+  maxHeight: number,
+) {
+  const principal = yield* CurrentPrincipal;
+  yield* findVideo(sourceId);
 
-    const grant = new VideoGrant({
-      sourceId,
-      deviceId: principal.deviceId,
-      expiresAt: (yield* Clock.currentTimeMillis) + videoLifetimeMs,
-    });
-    const search = new URLSearchParams({
-      device: grant.deviceId,
-      expires: String(grant.expiresAt),
-      height: String(maxHeight),
-      signature: yield* signGrant(grantLines(grant)),
-    });
-    return new VideoPlan({ path: `/video/${sourceId}?${search}` });
+  const grant = new VideoGrant({
+    sourceId,
+    deviceId: principal.deviceId,
+    expiresAt: (yield* Clock.currentTimeMillis) + videoLifetimeMs,
   });
+  const search = new URLSearchParams({
+    device: grant.deviceId,
+    expires: String(grant.expiresAt),
+    height: String(maxHeight),
+    signature: yield* signGrant(grantLines(grant)),
+  });
+  return new VideoPlan({ path: `/video/${sourceId}?${search}` });
+});
 
 const VideoRequest = Schema.Struct({
   sourceId: Schema.String.check(Schema.isUUID()),

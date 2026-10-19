@@ -135,89 +135,94 @@ const makeOutputs = Effect.gen(function* () {
   };
 
   /** Keeps the outputs of `registration` up to date until the scope closes */
-  const follow = (registration: string, outputs: UrlOutputs | TimedOutputs) =>
-    Effect.gen(function* () {
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => discovered.delete(registration)).pipe(Effect.andThen(notify)),
-      );
-      yield* outputs.discover.pipe(
-        Stream.runForEach((infos) =>
-          Effect.sync(() => discovered.set(registration, infos)).pipe(Effect.andThen(notify)),
-        ),
-        Effect.forkScoped,
-      );
-    });
+  const follow = Effect.fn("follow")(function* (
+    registration: string,
+    outputs: UrlOutputs | TimedOutputs,
+  ) {
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => discovered.delete(registration)).pipe(Effect.andThen(notify)),
+    );
+    yield* outputs.discover.pipe(
+      Stream.runForEach((infos) =>
+        Effect.sync(() => discovered.set(registration, infos)).pipe(Effect.andThen(notify)),
+      ),
+      Effect.forkScoped,
+    );
+  });
 
   // The last holder wins. The earlier holder closes without a stop, so that its last commands come
   // before ours.
-  const hold = (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) =>
-    Effect.gen(function* () {
-      const { registration, nativeId } = locate(id);
-      const outputs = registrations.get(registration);
-      if (outputs === undefined || !has(id)) {
-        return yield* new OutputError({ reason: "The output is not available" });
-      }
+  const hold = Effect.fn("hold")(function* (
+    id: OutputId,
+    holder: { readonly taken: Effect.Effect<void> },
+  ) {
+    const { registration, nativeId } = locate(id);
+    const outputs = registrations.get(registration);
+    if (outputs === undefined || !has(id)) {
+      return yield* new OutputError({ reason: "The output is not available" });
+    }
 
-      const earlier = holders.get(id);
-      if (earlier !== undefined) {
-        yield* Effect.forkDetach(earlier.taken);
-        yield* Deferred.await(earlier.released);
-      }
+    const earlier = holders.get(id);
+    if (earlier !== undefined) {
+      yield* Effect.forkDetach(earlier.taken);
+      yield* Deferred.await(earlier.released);
+    }
 
-      const released = yield* Deferred.make<void>();
-      const entry = new Holder({ ...holder, released });
-      holders.set(id, entry);
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          if (holders.get(id) !== entry) return;
-          holders.delete(id);
-          opened.delete(id);
-        }).pipe(Effect.andThen(Deferred.succeed(released, undefined))),
-      );
-      return { outputs, nativeId };
-    });
+    const released = yield* Deferred.make<void>();
+    const entry = new Holder({ ...holder, released });
+    holders.set(id, entry);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (holders.get(id) !== entry) return;
+        holders.delete(id);
+        opened.delete(id);
+      }).pipe(Effect.andThen(Deferred.succeed(released, undefined))),
+    );
+    return { outputs, nativeId };
+  });
 
   const kindError = new OutputError({ reason: "The output is of another kind" });
 
   /** Opens the URL output for a session until the scope closes */
-  const open = (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) =>
-    Effect.gen(function* () {
-      const { outputs, nativeId } = yield* hold(id, holder);
-      if (!(outputs instanceof UrlOutputs)) return yield* kindError;
+  const open = Effect.fn("open")(function* (
+    id: OutputId,
+    holder: { readonly taken: Effect.Effect<void> },
+  ) {
+    const { outputs, nativeId } = yield* hold(id, holder);
+    if (!(outputs instanceof UrlOutputs)) return yield* kindError;
 
-      const output = yield* outputs.open(nativeId);
-      opened.set(id, output);
-      return new UrlOutput({
-        ...output,
-        status: output.status.pipe(
-          Stream.tap(({ volume, muted }) =>
-            (volume === null || volumes.get(id) === volume) && (mutes.get(id) ?? false) === muted
-              ? Effect.void
-              : Effect.sync(() => {
-                  if (volume !== null) volumes.set(id, volume);
-                  mutes.set(id, muted);
-                }).pipe(Effect.andThen(notify)),
-          ),
+    const output = yield* outputs.open(nativeId);
+    opened.set(id, output);
+    return new UrlOutput({
+      ...output,
+      status: output.status.pipe(
+        Stream.tap(({ volume, muted }) =>
+          (volume === null || volumes.get(id) === volume) && (mutes.get(id) ?? false) === muted
+            ? Effect.void
+            : Effect.sync(() => {
+                if (volume !== null) volumes.set(id, volume);
+                mutes.set(id, muted);
+              }).pipe(Effect.andThen(notify)),
         ),
-      });
+      ),
     });
+  });
 
   /**
    * Makes the URL output play what `coordinator` plays, until the scope closes. The output belongs
    * to the session like after `open`.
    */
-  const join = (
+  const join = Effect.fn("join")(function* (
     id: OutputId,
     coordinator: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
-  ) =>
-    Effect.gen(function* () {
-      const { outputs, nativeId } = yield* hold(id, holder);
-      if (!(outputs instanceof UrlOutputs) || outputs.join === undefined) return yield* kindError;
-      const member = yield* outputs.join(nativeId, locate(coordinator).nativeId);
-      opened.set(id, member);
-      return member;
-    });
+  ) {
+    const { outputs, nativeId } = yield* hold(id, holder);
+    if (!(outputs instanceof UrlOutputs) || outputs.join === undefined) return yield* kindError;
+    const member = yield* outputs.join(nativeId, locate(coordinator).nativeId);
+    opened.set(id, member);
+    return member;
+  });
 
   const rememberVolume = (id: OutputId, volume: number) =>
     Effect.sync(() => volumes.set(id, volume)).pipe(Effect.andThen(notify));
@@ -226,25 +231,27 @@ const makeOutputs = Effect.gen(function* () {
    * Opens the timed output, or the timed twin of a URL output, like `open`. A timed device reports
    * no volume, so the volume that the core set last applies again.
    */
-  const openTimed = (id: OutputId, holder: { readonly taken: Effect.Effect<void> }) =>
-    Effect.gen(function* () {
-      const target = isTimed(id) ? id : twinOf(id);
-      if (target === undefined) return yield* kindError;
-      yield* hold(id, holder);
-      const { registration, nativeId } = locate(target);
-      const outputs = registrations.get(registration);
-      if (!(outputs instanceof TimedOutputs)) return yield* kindError;
+  const openTimed = Effect.fn("openTimed")(function* (
+    id: OutputId,
+    holder: { readonly taken: Effect.Effect<void> },
+  ) {
+    const target = isTimed(id) ? id : twinOf(id);
+    if (target === undefined) return yield* kindError;
+    yield* hold(id, holder);
+    const { registration, nativeId } = locate(target);
+    const outputs = registrations.get(registration);
+    if (!(outputs instanceof TimedOutputs)) return yield* kindError;
 
-      const output = yield* outputs.open(nativeId);
-      const volume = volumes.get(id);
-      if (volume !== undefined) yield* output.setVolume(volume);
-      const remembering = new TimedOutput({
-        ...output,
-        setVolume: (next) => output.setVolume(next).pipe(Effect.andThen(rememberVolume(id, next))),
-      });
-      opened.set(id, remembering);
-      return remembering;
+    const output = yield* outputs.open(nativeId);
+    const volume = volumes.get(id);
+    if (volume !== undefined) yield* output.setVolume(volume);
+    const remembering = new TimedOutput({
+      ...output,
+      setVolume: (next) => output.setVolume(next).pipe(Effect.andThen(rememberVolume(id, next))),
     });
+    opened.set(id, remembering);
+    return remembering;
+  });
 
   /**
    * Sets the volume of an open output, or of a timed output for its next open. `undefined` when the
@@ -267,16 +274,15 @@ const makeOutputs = Effect.gen(function* () {
       () => Effect.sync(() => liveStreams.delete(id)),
     );
 
-  const setDelay = (id: OutputId, delayMs: number) =>
-    Effect.gen(function* () {
-      yield* db
-        .insert(outputSetting)
-        .values({ outputId: id, delayMs })
-        .onConflictDoUpdate({ target: outputSetting.outputId, set: { delayMs } })
-        .pipe(orDieOnDatabaseError("setOutputDelay"));
-      delays.set(id, delayMs);
-      yield* notify;
-    });
+  const setDelay = Effect.fn("setDelay")(function* (id: OutputId, delayMs: number) {
+    yield* db
+      .insert(outputSetting)
+      .values({ outputId: id, delayMs })
+      .onConflictDoUpdate({ target: outputSetting.outputId, set: { delayMs } })
+      .pipe(orDieOnDatabaseError("setOutputDelay"));
+    delays.set(id, delayMs);
+    yield* notify;
+  });
 
   return {
     registrations,

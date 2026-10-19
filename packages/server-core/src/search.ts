@@ -23,92 +23,89 @@ const discoveredResults = 5;
 // refreshes and retries of the plugin
 const answerTimeout = "8 seconds";
 
-const searchLocalSources = (query: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    // `%` and `_` in the query match only themselves
-    const pattern = `%${query.replaceAll(/[\\%_]/g, "\\$&")}%`;
-    const contains = (column: Column | SQL) => sql`${column} like ${pattern} escape '\\'`;
-    // A series name also finds the episodes whose titles leave it out
-    const episodes = db
-      .select({ id: catalogAssertion.entityId })
-      .from(catalogAssertion)
-      .where(
-        and(
-          eq(catalogAssertion.field, "series"),
-          eq(catalogAssertion.retracted, false),
-          contains(sql`json_extract(${catalogAssertion.value}, '$.name')`),
-        ),
-      );
-    const match = or(
-      contains(source.rawTitle),
-      contains(source.rawArtist),
-      contains(source.rawAlbum),
-      inArray(source.recordingId, episodes),
+const searchLocalSources = Effect.fn("searchLocalSources")(function* (query: string) {
+  const db = yield* Database;
+  // `%` and `_` in the query match only themselves
+  const pattern = `%${query.replaceAll(/[\\%_]/g, "\\$&")}%`;
+  const contains = (column: Column | SQL) => sql`${column} like ${pattern} escape '\\'`;
+  // A series name also finds the episodes whose titles leave it out
+  const episodes = db
+    .select({ id: catalogAssertion.entityId })
+    .from(catalogAssertion)
+    .where(
+      and(
+        eq(catalogAssertion.field, "series"),
+        eq(catalogAssertion.retracted, false),
+        contains(sql`json_extract(${catalogAssertion.value}, '$.name')`),
+      ),
     );
-    const rows = yield* playableSources(match, localResultLimit);
+  const match = or(
+    contains(source.rawTitle),
+    contains(source.rawArtist),
+    contains(source.rawAlbum),
+    inArray(source.recordingId, episodes),
+  );
+  const rows = yield* playableSources(match, localResultLimit);
 
-    const candidates = rows.map((row, position) => {
-      const isrc = row.tags === null ? null : tagIdentifiers(row.tags).isrc;
+  const candidates = rows.map((row, position) => {
+    const isrc = row.tags === null ? null : tagIdentifiers(row.tags).isrc;
 
-      return new Candidate({
-        summary: sourceSummary(row),
-        isrc: isrc === null ? null : normalizeIsrc(isrc),
-        position,
-        local: row.tags !== null,
-        lossless: row.variant.lossless,
-        upload: false,
-      });
+    return new Candidate({
+      summary: sourceSummary(row),
+      isrc: isrc === null ? null : normalizeIsrc(isrc),
+      position,
+      local: row.tags !== null,
+      lossless: row.variant.lossless,
+      upload: false,
     });
-    const summaries = yield* withSeries(candidates.map((candidate) => candidate.summary));
-    const catalog = Arr.zipWith(
-      candidates,
-      summaries,
-      (candidate, summary) => new Candidate({ ...candidate, summary }),
-    );
-
-    // Cached provider results, so that search finds the songs of opened pages, also offline
-    const field = (path: string) => sql`json_extract(${providerItem.data}, ${path})`;
-    const known = new Set(rows.map((row) => row.source.id));
-    const cachedRows = yield* db
-      .select({
-        sourceId: providerItem.sourceId,
-        provider: providerItem.provider,
-        data: providerItem.data,
-      })
-      .from(providerItem)
-      .where(
-        or(contains(field("$.title")), contains(field("$.artist")), contains(field("$.album"))),
-      )
-      .orderBy(desc(providerItem.fetchedAt))
-      .limit(localResultLimit);
-    const providers = yield* Providers;
-    const cached = yield* Effect.forEach(
-      cachedRows.filter((row) => !known.has(row.sourceId)),
-      (row) =>
-        Option.match(Schema.decodeUnknownOption(ProviderSource)(row.data), {
-          onNone: () => Effect.succeed([]),
-          onSome: (decoded) =>
-            toCachedSource(row.provider, decoded).pipe(Effect.map((item) => [item])),
-        }),
-    );
-    return [
-      ...catalog,
-      ...(yield* Effect.forEach(cached.flat(), (item, index) =>
-        Effect.gen(function* () {
-          const provider = providers.get(item.provider);
-          return new Candidate({
-            summary: yield* cachedSummary(item, provider?.name ?? item.provider),
-            isrc: item.isrc,
-            position: catalog.length + index,
-            local: false,
-            lossless: item.source.lossless,
-            upload: provider?.uploads === true,
-          });
-        }),
-      )),
-    ];
   });
+  const summaries = yield* withSeries(candidates.map((candidate) => candidate.summary));
+  const catalog = Arr.zipWith(
+    candidates,
+    summaries,
+    (candidate, summary) => new Candidate({ ...candidate, summary }),
+  );
+
+  // Cached provider results, so that search finds the songs of opened pages, also offline
+  const field = (path: string) => sql`json_extract(${providerItem.data}, ${path})`;
+  const known = new Set(rows.map((row) => row.source.id));
+  const cachedRows = yield* db
+    .select({
+      sourceId: providerItem.sourceId,
+      provider: providerItem.provider,
+      data: providerItem.data,
+    })
+    .from(providerItem)
+    .where(or(contains(field("$.title")), contains(field("$.artist")), contains(field("$.album"))))
+    .orderBy(desc(providerItem.fetchedAt))
+    .limit(localResultLimit);
+  const providers = yield* Providers;
+  const cached = yield* Effect.forEach(
+    cachedRows.filter((row) => !known.has(row.sourceId)),
+    (row) =>
+      Option.match(Schema.decodeUnknownOption(ProviderSource)(row.data), {
+        onNone: () => Effect.succeed([]),
+        onSome: (decoded) =>
+          toCachedSource(row.provider, decoded).pipe(Effect.map((item) => [item])),
+      }),
+  );
+  return [
+    ...catalog,
+    ...(yield* Effect.forEach(cached.flat(), (item, index) =>
+      Effect.gen(function* () {
+        const provider = providers.get(item.provider);
+        return new Candidate({
+          summary: yield* cachedSummary(item, provider?.name ?? item.provider),
+          isrc: item.isrc,
+          position: catalog.length + index,
+          local: false,
+          lossless: item.source.lossless,
+          upload: provider?.uploads === true,
+        });
+      }),
+    )),
+  ];
+});
 
 class Answer extends Data.Class<{
   readonly candidates: ReadonlyArray<Candidate>;
@@ -117,39 +114,38 @@ class Answer extends Data.Class<{
 }> {}
 
 // A failure, a defect or a timeout of one plugin skips only that provider
-const searchProvider = (
+const searchProvider = Effect.fn("searchProvider")(function* (
   id: string,
   name: string,
   search: NonNullable<Provider["search"]>,
   upload: boolean,
   credentials: Credentials,
   query: string,
-) =>
-  Effect.gen(function* () {
-    const sources = yield* callProvider(
-      "Provider search",
-      answerTimeout,
-      search(query, credentials),
-    ).pipe(Effect.annotateLogs("provider", id));
-    if (Option.isNone(sources)) {
-      return new Answer({ candidates: [], hits: [], unavailable: [name] });
-    }
+) {
+  const sources = yield* callProvider(
+    "Provider search",
+    answerTimeout,
+    search(query, credentials),
+  ).pipe(Effect.annotateLogs("provider", id));
+  if (Option.isNone(sources)) {
+    return new Answer({ candidates: [], hits: [], unavailable: [name] });
+  }
 
-    const cached = yield* cacheProviderSources(id, sources.value);
-    const candidates = yield* Effect.forEach(cached, (item, position) =>
-      Effect.gen(function* () {
-        return new Candidate({
-          summary: yield* cachedSummary(item, name),
-          isrc: item.isrc,
-          position,
-          local: false,
-          lossless: item.source.lossless,
-          upload,
-        });
-      }),
-    );
-    return new Answer({ candidates, hits: [], unavailable: [] });
-  });
+  const cached = yield* cacheProviderSources(id, sources.value);
+  const candidates = yield* Effect.forEach(cached, (item, position) =>
+    Effect.gen(function* () {
+      return new Candidate({
+        summary: yield* cachedSummary(item, name),
+        isrc: item.isrc,
+        position,
+        local: false,
+        lossless: item.source.lossless,
+        upload,
+      });
+    }),
+  );
+  return new Answer({ candidates, hits: [], unavailable: [] });
+});
 
 const fetchPopularity = (
   name: string,
@@ -171,66 +167,63 @@ const fetchPopularity = (
 
 // Plays of the candidates, of their ISRCs and of their artists. The ISRC of a played provider
 // source is known only while it is in the provider cache.
-const loadPlays = (candidates: ReadonlyArray<Candidate>, now: number) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const sourceIds = candidates.map((candidate) => candidate.summary.id);
-    const isrcs = candidates.flatMap((candidate) => candidate.isrc ?? []);
-    const artists = candidates.flatMap(
-      (candidate) => candidate.summary.artist?.toLowerCase() ?? [],
+const loadPlays = Effect.fn("loadPlays")(function* (
+  candidates: ReadonlyArray<Candidate>,
+  now: number,
+) {
+  const db = yield* Database;
+  const sourceIds = candidates.map((candidate) => candidate.summary.id);
+  const isrcs = candidates.flatMap((candidate) => candidate.isrc ?? []);
+  const artists = candidates.flatMap((candidate) => candidate.summary.artist?.toLowerCase() ?? []);
+
+  const rows = yield* db
+    .select({
+      sourceId: playEvent.sourceId,
+      isrc: providerItem.isrc,
+      artist: source.rawArtist,
+      startedAt: playEvent.startedAt,
+      playedMs: playEvent.playedMs,
+      completed: playEvent.completed,
+    })
+    .from(playEvent)
+    .innerJoin(source, eq(source.id, playEvent.sourceId))
+    .leftJoin(providerItem, eq(providerItem.sourceId, playEvent.sourceId))
+    .where(
+      and(
+        gte(playEvent.startedAt, now - playHistoryMs),
+        or(
+          inArray(playEvent.sourceId, sourceIds),
+          inArray(providerItem.isrc, isrcs),
+          inArray(sql`lower(${source.rawArtist})`, artists),
+        ),
+      ),
     );
 
-    const rows = yield* db
-      .select({
-        sourceId: playEvent.sourceId,
-        isrc: providerItem.isrc,
-        artist: source.rawArtist,
-        startedAt: playEvent.startedAt,
-        playedMs: playEvent.playedMs,
-        completed: playEvent.completed,
-      })
-      .from(playEvent)
-      .innerJoin(source, eq(source.id, playEvent.sourceId))
-      .leftJoin(providerItem, eq(providerItem.sourceId, playEvent.sourceId))
-      .where(
-        and(
-          gte(playEvent.startedAt, now - playHistoryMs),
-          or(
-            inArray(playEvent.sourceId, sourceIds),
-            inArray(providerItem.isrc, isrcs),
-            inArray(sql`lower(${source.rawArtist})`, artists),
-          ),
-        ),
-      );
+  return rows.map((row) => new Play(row));
+});
 
-    return rows.map((row) => new Play(row));
+const rankAnswers = Effect.fn("rankAnswers")(function* (query: string, answer: Answer) {
+  const now = yield* Clock.currentTimeMillis;
+
+  // A played provider source is also a local result. The local copy has the canonical fields,
+  // the provider copy the ISRC and position. A provider can return an item twice.
+  const byId = new Map<string, Candidate>();
+  for (const candidate of answer.candidates) {
+    const earlier = byId.get(candidate.summary.id);
+    byId.set(
+      candidate.summary.id,
+      earlier === undefined ? candidate : new Candidate({ ...candidate, summary: earlier.summary }),
+    );
+  }
+  const candidates = [...byId.values()];
+  const plays = yield* loadPlays(candidates, now);
+
+  const ranked = rank(query, candidates, answer.hits, plays, now, yield* providerOrder);
+  return new SearchResults({
+    sources: ranked.map((result) => result.summary),
+    unavailable: answer.unavailable,
   });
-
-const rankAnswers = (query: string, answer: Answer) =>
-  Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-
-    // A played provider source is also a local result. The local copy has the canonical fields,
-    // the provider copy the ISRC and position. A provider can return an item twice.
-    const byId = new Map<string, Candidate>();
-    for (const candidate of answer.candidates) {
-      const earlier = byId.get(candidate.summary.id);
-      byId.set(
-        candidate.summary.id,
-        earlier === undefined
-          ? candidate
-          : new Candidate({ ...candidate, summary: earlier.summary }),
-      );
-    }
-    const candidates = [...byId.values()];
-    const plays = yield* loadPlays(candidates, now);
-
-    const ranked = rank(query, candidates, answer.hits, plays, now, yield* providerOrder);
-    return new SearchResults({
-      sources: ranked.map((result) => result.summary),
-      unavailable: answer.unavailable,
-    });
-  });
+});
 
 /** The ranked sources on this replica, without providers */
 export const searchCatalog = (query: string) =>

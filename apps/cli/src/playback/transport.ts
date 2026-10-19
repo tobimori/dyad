@@ -12,21 +12,20 @@ export const pluginTransport = (
   engine: typeof Engine.Service | null,
   segmentsOf: (sourceId: string) => ReadonlyArray<SourceSegment>,
 ) => {
-  const send = (command: typeof SessionCommand.Type) =>
-    Effect.gen(function* () {
-      const view = yield* SubscriptionRef.get(session.view);
-      // Offline, only the device that plays can change its own audio
-      if (!view.connected && isTransportCommand(command) && engine?.controlOffline(command)) {
-        return;
-      }
-      yield* session
-        .send(command)
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logDebug("The session refused a plugin command", cause),
-          ),
-        );
-    });
+  const send = Effect.fn("send")(function* (command: typeof SessionCommand.Type) {
+    const view = yield* SubscriptionRef.get(session.view);
+    // Offline, only the device that plays can change its own audio
+    if (!view.connected && isTransportCommand(command) && engine?.controlOffline(command)) {
+      return;
+    }
+    yield* session
+      .send(command)
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logDebug("The session refused a plugin command", cause),
+        ),
+      );
+  });
 
   const current = Effect.gen(function* () {
     const view = yield* SubscriptionRef.get(session.view);
@@ -42,23 +41,21 @@ export const pluginTransport = (
     };
   });
 
-  const seekTo = (ms: number) =>
-    Effect.gen(function* () {
-      const entry = yield* current;
-      if (entry === undefined) return;
-      const end = entry.durationMs;
-      const positionMs = Math.max(0, end === null ? ms : Math.min(ms, end));
-      yield* send(SessionCommand.cases.Seek.make({ entryId: entry.id, positionMs }));
-    });
+  const seekTo = Effect.fn("seekTo")(function* (ms: number) {
+    const entry = yield* current;
+    if (entry === undefined) return;
+    const end = entry.durationMs;
+    const positionMs = Math.max(0, end === null ? ms : Math.min(ms, end));
+    yield* send(SessionCommand.cases.Seek.make({ entryId: entry.id, positionMs }));
+  });
 
-  const skip = (direction: 1 | -1) =>
-    Effect.gen(function* () {
-      const entry = yield* current;
-      if (entry === undefined) return;
-      const target = skipSeekTarget(segmentsOf(entry.sourceId), entry.positionMs, direction);
-      if (target !== undefined) return yield* seekTo(target);
-      yield* send(SessionCommand.cases.Skip.make({ fromEntryId: entry.id, direction }));
-    });
+  const skip = Effect.fn("skip")(function* (direction: 1 | -1) {
+    const entry = yield* current;
+    if (entry === undefined) return;
+    const target = skipSeekTarget(segmentsOf(entry.sourceId), entry.positionMs, direction);
+    if (target !== undefined) return yield* seekTo(target);
+    yield* send(SessionCommand.cases.Skip.make({ fromEntryId: entry.id, direction }));
+  });
 
   return {
     play: send(SessionCommand.cases.Resume.make({})),

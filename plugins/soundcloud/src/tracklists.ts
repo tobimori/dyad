@@ -45,46 +45,45 @@ const descriptionTracklist = (track: typeof TrackText.Type) => {
 };
 
 /** The tracklist in the description and the best timed tracklist in the comments */
-export const trackTracklists = (
+export const trackTracklists = Effect.fn("trackTracklists")(function* (
   withClientId: Effect.Success<typeof clientIdCache>,
   externalId: string,
-) =>
-  Effect.gen(function* () {
-    const trackId = yield* decodeTrackId(externalId);
-    const [track, comments] = yield* Effect.all(
-      [
-        requestApi(withClientId, HttpClientRequest.get(`${api}/tracks/${trackId}`), TrackText),
-        requestApi(
-          withClientId,
-          HttpClientRequest.get(`${api}/tracks/${trackId}/comments`).pipe(
-            HttpClientRequest.setUrlParams({ threaded: 0, limit: commentLimit }),
-          ),
-          Comments,
+) {
+  const trackId = yield* decodeTrackId(externalId);
+  const [track, comments] = yield* Effect.all(
+    [
+      requestApi(withClientId, HttpClientRequest.get(`${api}/tracks/${trackId}`), TrackText),
+      requestApi(
+        withClientId,
+        HttpClientRequest.get(`${api}/tracks/${trackId}/comments`).pipe(
+          HttpClientRequest.setUrlParams({ threaded: 0, limit: commentLimit }),
         ),
-      ],
-      { concurrency: 2 },
-    );
+        Comments,
+      ),
+    ],
+    { concurrency: 2 },
+  );
 
-    // Comments of the uploader first, then the longest list
-    const [best] = comments.collection
-      .flatMap((comment) => {
-        const entries = parseTracklist(comment.body);
-        const tracks = entries.filter((entry) => entry.artist !== null).length;
-        const own = comment.user_id === track.user.id ? 1 : 0;
-        return tracks < minimumCommentTracks ? [] : [{ id: comment.id, entries, own }];
-      })
-      .toSorted((a, b) => b.own - a.own || b.entries.length - a.entries.length);
+  // Comments of the uploader first, then the longest list
+  const [best] = comments.collection
+    .flatMap((comment) => {
+      const entries = parseTracklist(comment.body);
+      const tracks = entries.filter((entry) => entry.artist !== null).length;
+      const own = comment.user_id === track.user.id ? 1 : 0;
+      return tracks < minimumCommentTracks ? [] : [{ id: comment.id, entries, own }];
+    })
+    .toSorted((a, b) => b.own - a.own || b.entries.length - a.entries.length);
 
-    return [
-      ...descriptionTracklist(track),
-      ...(best === undefined
-        ? []
-        : [
-            new ProviderTracklist({
-              part: `comment:${best.id}`,
-              entries: best.entries,
-              confidence: 0.6,
-            }),
-          ]),
-    ];
-  });
+  return [
+    ...descriptionTracklist(track),
+    ...(best === undefined
+      ? []
+      : [
+          new ProviderTracklist({
+            part: `comment:${best.id}`,
+            entries: best.entries,
+            confidence: 0.6,
+          }),
+        ]),
+  ];
+});

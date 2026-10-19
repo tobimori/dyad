@@ -49,34 +49,33 @@ export const pacingLayer = Layer.effect(Pacing, makePacing);
  * Sends one request at a time per service. Use the plugin `HttpClient`, which times out, because a
  * request that hangs holds the queue of its service.
  */
-export const requestJson = <S extends Schema.Constraint>(
+export const requestJson = Effect.fn("requestJson")(function* <S extends Schema.Constraint>(
   service: Service,
   request: HttpClientRequest.HttpClientRequest,
   schema: S,
-) =>
-  Effect.gen(function* () {
-    const pace = (yield* Pacing)[service];
+) {
+  const pace = (yield* Pacing)[service];
 
-    return yield* pace(
-      getJson(request.pipe(HttpClientRequest.setHeader("User-Agent", userAgent)), schema),
-    ).pipe(
-      Effect.catchTags({
-        HttpStatusError: (error) => {
-          if (error.status === 429 || error.status === 503) {
-            return Effect.fail(
-              new RateLimited({ service, retryAfterSeconds: error.retryAfterSeconds }),
-            );
-          }
+  return yield* pace(
+    getJson(request.pipe(HttpClientRequest.setHeader("User-Agent", userAgent)), schema),
+  ).pipe(
+    Effect.catchTags({
+      HttpStatusError: (error) => {
+        if (error.status === 429 || error.status === 503) {
           return Effect.fail(
-            new LookupError({
-              service,
-              reason: `Answered status ${error.status}`,
-              status: error.status,
-            }),
+            new RateLimited({ service, retryAfterSeconds: error.retryAfterSeconds }),
           );
-        },
-        HttpRequestError: (error) =>
-          Effect.fail(new LookupError({ service, reason: error.reason, status: null })),
-      }),
-    );
-  });
+        }
+        return Effect.fail(
+          new LookupError({
+            service,
+            reason: `Answered status ${error.status}`,
+            status: error.status,
+          }),
+        );
+      },
+      HttpRequestError: (error) =>
+        Effect.fail(new LookupError({ service, reason: error.reason, status: null })),
+    }),
+  );
+});

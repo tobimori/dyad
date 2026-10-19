@@ -22,12 +22,11 @@ export function useSearch(props: {
     fiber.current = null;
   };
 
-  const failed = (cause: Cause.Cause<unknown>) =>
-    Effect.gen(function* () {
-      yield* Effect.logWarning("Cannot search", describeFailure(cause));
-      setStatus("Cannot search");
-      props.onFailure("The search failed. Check the connection and try again.");
-    });
+  const failed = Effect.fn("failed")(function* (cause: Cause.Cause<unknown>) {
+    yield* Effect.logWarning("Cannot search", describeFailure(cause));
+    setStatus("Cannot search");
+    props.onFailure("The search failed. Check the connection and try again.");
+  });
 
   const search = (value: string) => {
     if (value === query) return;

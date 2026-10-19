@@ -15,18 +15,17 @@ const pluginsCommand = Command.make("plugins", {}, () =>
   }),
 ).pipe(Command.withDescription("List the plugins of this device"));
 
-const changePlugin = (id: string, enable: boolean) =>
-  Effect.gen(function* () {
-    const plugin = clientPlugins.find((candidate) => candidate.id === id);
-    if (plugin === undefined) {
-      return yield* fail(
-        `Unknown plugin. Use one of: ${clientPlugins.map((candidate) => candidate.id).join(", ")}`,
-      );
-    }
+const changePlugin = Effect.fn("changePlugin")(function* (id: string, enable: boolean) {
+  const plugin = clientPlugins.find((candidate) => candidate.id === id);
+  if (plugin === undefined) {
+    return yield* fail(
+      `Unknown plugin. Use one of: ${clientPlugins.map((candidate) => candidate.id).join(", ")}`,
+    );
+  }
 
-    yield* updateSettings((settings) => withEnabled(settings, id, enable));
-    yield* Console.log(enable ? plugin.notice : `${plugin.name} off`);
-  });
+  yield* updateSettings((settings) => withEnabled(settings, id, enable));
+  yield* Console.log(enable ? plugin.notice : `${plugin.name} off`);
+});
 
 const enableCommand = Command.make("enable", { id: Argument.String("plugin") }, ({ id }) =>
   changePlugin(id, true),

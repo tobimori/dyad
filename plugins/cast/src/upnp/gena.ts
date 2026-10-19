@@ -67,122 +67,125 @@ const renewAfterSeconds = (timeout: string | undefined) => {
 };
 
 /** The variables of a GENA event. `LastChange` is expanded to its variables. */
-const eventVariables = (body: string) =>
-  Effect.gen(function* () {
-    const variables = new Map<string, string>();
-    const properties = yield* decodeXml(PropertySet, body);
+const eventVariables = Effect.fn("eventVariables")(function* (body: string) {
+  const variables = new Map<string, string>();
+  const properties = yield* decodeXml(PropertySet, body);
 
-    for (const property of properties.propertyset.property) {
-      for (const [name, value] of Object.entries(property)) {
-        if (name !== "LastChange") {
-          variables.set(name, value);
+  for (const property of properties.propertyset.property) {
+    for (const [name, value] of Object.entries(property)) {
+      if (name !== "LastChange") {
+        variables.set(name, value);
+        continue;
+      }
+
+      const change = yield* decodeXml(LastChange, value);
+      for (const [variable, entry] of Object.entries(change.Event.InstanceID)) {
+        if (entry instanceof Array) {
+          const master = entry.find((channel) => channel.channel === "Master") ?? entry[0];
+          if (master?.val !== undefined) variables.set(variable, master.val);
           continue;
         }
-
-        const change = yield* decodeXml(LastChange, value);
-        for (const [variable, entry] of Object.entries(change.Event.InstanceID)) {
-          if (entry instanceof Array) {
-            const master = entry.find((channel) => channel.channel === "Master") ?? entry[0];
-            if (master?.val !== undefined) variables.set(variable, master.val);
-            continue;
-          }
-          if (entry instanceof Object && entry.val !== undefined) {
-            variables.set(variable, entry.val);
-          }
+        if (entry instanceof Object && entry.val !== undefined) {
+          variables.set(variable, entry.val);
         }
       }
     }
+  }
 
-    return variables;
-  });
+  return variables;
+});
 
 /**
  * The local address of the route to `host`. A connected UDP socket sends nothing; the system
  * picks the address.
  */
-export const localAddressTo = (host: string) =>
-  Effect.gen(function* () {
+export const localAddressTo = Effect.fn("localAddressTo")(
+  function* (host: string) {
     // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
     const socket = yield* NodeDatagramSocket.make({ connect: { address: host, port: 1900 } });
     const reader = yield* socket.reader;
     return NetAddress.formatUrlHost(reader.address.address);
-  }).pipe(Effect.scoped);
+  },
+  (effect) => effect.pipe(Effect.scoped),
+);
 
 /**
  * Subscribes to the events of `services` on `host` and keeps the subscriptions alive. `active`
  * tells whether all subscriptions are active, so that the caller can poll when they are not.
  */
-export const subscribeEvents = (
+export const subscribeEvents = Effect.fn("subscribeEvents")(function* (
   host: string,
   services: ReadonlyArray<UpnpService>,
   onEvent: (variables: ReadonlyMap<string, string>) => Effect.Effect<void>,
-) =>
-  Effect.gen(function* () {
-    const bodies = yield* Queue.unbounded<string>();
-    const active = yield* Ref.make(0);
+) {
+  const bodies = yield* Queue.unbounded<string>();
+  const active = yield* Ref.make(0);
 
-    const server = yield* Effect.acquireRelease(
-      Effect.callback<ReturnType<typeof createServer>, GenaError>((resume) => {
-        const listener = createServer((incoming, response) => {
-          const chunks: Array<Buffer> = [];
-          incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-          incoming.on("end", () => {
-            response.writeHead(incoming.method === "NOTIFY" ? 200 : 405).end();
-            if (incoming.method === "NOTIFY") {
-              Queue.offerUnsafe(bodies, Buffer.concat(chunks).toString("utf8"));
-            }
-          });
+  const server = yield* Effect.acquireRelease(
+    Effect.callback<ReturnType<typeof createServer>, GenaError>((resume) => {
+      const listener = createServer((incoming, response) => {
+        const chunks: Array<Buffer> = [];
+        incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+        incoming.on("end", () => {
+          response.writeHead(incoming.method === "NOTIFY" ? 200 : 405).end();
+          if (incoming.method === "NOTIFY") {
+            Queue.offerUnsafe(bodies, Buffer.concat(chunks).toString("utf8"));
+          }
         });
-        listener.once("error", (error) =>
-          resume(Effect.fail(new GenaError({ reason: error.message }))),
-        );
-        listener.listen(0, () => resume(Effect.succeed(listener)));
-      }),
-      (listener) => Effect.sync(() => listener.close()),
-    );
-    const address = server.address();
-    const port = address instanceof Object ? address.port : 0;
-    const callback = `http://${yield* localAddressTo(host)}:${port}/`;
+      });
+      listener.once("error", (error) =>
+        resume(Effect.fail(new GenaError({ reason: error.message }))),
+      );
+      listener.listen(0, () => resume(Effect.succeed(listener)));
+    }),
+    (listener) => Effect.sync(() => listener.close()),
+  );
+  const address = server.address();
+  const port = address instanceof Object ? address.port : 0;
+  const callback = `http://${yield* localAddressTo(host)}:${port}/`;
 
-    const keepSubscribed = (service: UpnpService) =>
-      Effect.gen(function* () {
-        const first = yield* subscribe(service.eventUrl, {
-          CALLBACK: `<${callback}>`,
-          NT: "upnp:event",
-        });
-        yield* Ref.update(active, (count) => count + 1);
-        yield* Effect.addFinalizer(() =>
-          Ref.update(active, (count) => count - 1).pipe(
-            Effect.andThen(send("UNSUBSCRIBE", service.eventUrl, { SID: first.sid })),
-            Effect.ignore,
-          ),
-        );
+  const keepSubscribed = Effect.fn("keepSubscribed")(
+    function* (service: UpnpService) {
+      const first = yield* subscribe(service.eventUrl, {
+        CALLBACK: `<${callback}>`,
+        NT: "upnp:event",
+      });
+      yield* Ref.update(active, (count) => count + 1);
+      yield* Effect.addFinalizer(() =>
+        Ref.update(active, (count) => count - 1).pipe(
+          Effect.andThen(send("UNSUBSCRIBE", service.eventUrl, { SID: first.sid })),
+          Effect.ignore,
+        ),
+      );
 
-        let timeout = first.timeout;
-        while (true) {
-          yield* Effect.sleep(`${renewAfterSeconds(timeout)} seconds`);
-          const renewed = yield* subscribe(service.eventUrl, { SID: first.sid });
-          timeout = renewed.timeout;
-        }
-      }).pipe(
+      let timeout = first.timeout;
+      while (true) {
+        yield* Effect.sleep(`${renewAfterSeconds(timeout)} seconds`);
+        const renewed = yield* subscribe(service.eventUrl, { SID: first.sid });
+        timeout = renewed.timeout;
+      }
+    },
+    (effect, service) =>
+      effect.pipe(
         Effect.scoped,
         Effect.tapError((error) =>
           Effect.logDebug("UPnP event subscription failed", service.eventUrl, error.reason),
         ),
         Effect.retry(Schedule.spaced("30 seconds")),
-      );
-
-    yield* Effect.forEach(services, (service) => Effect.forkScoped(keepSubscribed(service)));
-
-    yield* Queue.take(bodies).pipe(
-      Effect.flatMap(eventVariables),
-      Effect.flatMap(onEvent),
-      Effect.catchTag("XmlError", (error) =>
-        Effect.logDebug("Ignored an unexpected UPnP event", error.reason),
       ),
-      Effect.forever,
-      Effect.forkScoped,
-    );
+  );
 
-    return { active: Ref.get(active).pipe(Effect.map((count) => count === services.length)) };
-  });
+  yield* Effect.forEach(services, (service) => Effect.forkScoped(keepSubscribed(service)));
+
+  yield* Queue.take(bodies).pipe(
+    Effect.flatMap(eventVariables),
+    Effect.flatMap(onEvent),
+    Effect.catchTag("XmlError", (error) =>
+      Effect.logDebug("Ignored an unexpected UPnP event", error.reason),
+    ),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+
+  return { active: Ref.get(active).pipe(Effect.map((count) => count === services.length)) };
+});

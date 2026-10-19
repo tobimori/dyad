@@ -26,29 +26,28 @@ const SearchResults = Schema.Union([
 ]);
 
 /** Deezer's global popularity of the tracks that match `query` */
-export const trackPopularity = (query: string) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(searchUrl).pipe(
-      HttpClientRequest.setUrlParams({ q: query, limit: resultLimit }),
-    );
-    const results = yield* getJson(request, SearchResults).pipe(
-      Effect.catchTags({
-        HttpStatusError: (error) =>
-          Effect.fail(new ProviderError({ reason: `Deezer answered status ${error.status}` })),
-        HttpRequestError: (error) => Effect.fail(new ProviderError({ reason: error.reason })),
-      }),
-    );
-    if ("error" in results) {
-      return yield* new ProviderError({ reason: `Deezer: ${results.error.message}` });
-    }
+export const trackPopularity = Effect.fn("trackPopularity")(function* (query: string) {
+  const request = HttpClientRequest.get(searchUrl).pipe(
+    HttpClientRequest.setUrlParams({ q: query, limit: resultLimit }),
+  );
+  const results = yield* getJson(request, SearchResults).pipe(
+    Effect.catchTags({
+      HttpStatusError: (error) =>
+        Effect.fail(new ProviderError({ reason: `Deezer answered status ${error.status}` })),
+      HttpRequestError: (error) => Effect.fail(new ProviderError({ reason: error.reason })),
+    }),
+  );
+  if ("error" in results) {
+    return yield* new ProviderError({ reason: `Deezer: ${results.error.message}` });
+  }
 
-    return results.data.map(
-      (track) =>
-        new PopularityHit({
-          title: track.title,
-          artist: track.artist.name,
-          isrc: track.isrc ?? null,
-          popularity: Math.min(Math.max(track.rank / maximumRank, 0), 1),
-        }),
-    );
-  });
+  return results.data.map(
+    (track) =>
+      new PopularityHit({
+        title: track.title,
+        artist: track.artist.name,
+        isrc: track.isrc ?? null,
+        popularity: Math.min(Math.max(track.rank / maximumRank, 0), 1),
+      }),
+  );
+});

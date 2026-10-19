@@ -40,161 +40,161 @@ export const listPlaylists = Effect.gen(function* () {
 const jitterDigits = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 // Two random characters make equal keys from inserts on two replicas at the same place unlikely
-const keyBetween = (before: string | null, after: string | null) =>
-  Effect.gen(function* () {
-    const key = generateKeyBetween(before, after);
-    const digit = Effect.map(
-      Random.nextIntBetween(0, jitterDigits.length, { halfOpen: true }),
-      (index) => jitterDigits[index],
-    );
-    const jittered = `${key}${yield* digit}${yield* digit}`;
-    return after === null || jittered < after ? jittered : key;
-  });
+const keyBetween = Effect.fn("keyBetween")(function* (before: string | null, after: string | null) {
+  const key = generateKeyBetween(before, after);
+  const digit = Effect.map(
+    Random.nextIntBetween(0, jitterDigits.length, { halfOpen: true }),
+    (index) => jitterDigits[index],
+  );
+  const jittered = `${key}${yield* digit}${yield* digit}`;
+  return after === null || jittered < after ? jittered : key;
+});
 
-const liveEntries = (playlistId: string) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    return yield* db
-      .select({ id: playlistEntry.id, position: playlistEntry.position })
-      .from(playlistEntry)
-      .where(and(eq(playlistEntry.playlistId, playlistId), eq(playlistEntry.deleted, false)))
-      .orderBy(asc(playlistEntry.position), asc(playlistEntry.id));
-  });
+const liveEntries = Effect.fn("liveEntries")(function* (playlistId: string) {
+  const db = yield* Database;
+  return yield* db
+    .select({ id: playlistEntry.id, position: playlistEntry.position })
+    .from(playlistEntry)
+    .where(and(eq(playlistEntry.playlistId, playlistId), eq(playlistEntry.deleted, false)))
+    .orderBy(asc(playlistEntry.position), asc(playlistEntry.id));
+});
 
-const ownedPlaylist = (playlistId: string) =>
-  Effect.gen(function* () {
-    const row = yield* readRow("playlist", playlistId);
-    if (row?.table !== "playlist" || row.deleted) {
-      return yield* new PlaylistNotFound();
-    }
-    return row;
-  });
+const ownedPlaylist = Effect.fn("ownedPlaylist")(function* (playlistId: string) {
+  const row = yield* readRow("playlist", playlistId);
+  if (row?.table !== "playlist" || row.deleted) {
+    return yield* new PlaylistNotFound();
+  }
+  return row;
+});
 
-const appendEntries = (playlistId: string, entries: ReadonlyArray<typeof EntryInput.Type>) =>
-  Effect.gen(function* () {
-    const db = yield* Database;
-    const crypto = yield* Crypto.Crypto;
-    const clock = yield* HlcClock;
-    yield* addReferencedSources(entries);
+const appendEntries = Effect.fn("appendEntries")(function* (
+  playlistId: string,
+  entries: ReadonlyArray<typeof EntryInput.Type>,
+) {
+  const db = yield* Database;
+  const crypto = yield* Crypto.Crypto;
+  const clock = yield* HlcClock;
+  yield* addReferencedSources(entries);
 
-    let last = (yield* liveEntries(playlistId)).at(-1)?.position ?? null;
-    const rows: Array<PlaylistEntryRow> = [];
-    for (const entry of entries) {
-      last = yield* keyBetween(last, null);
-      const hlc = yield* clock.next;
-      rows.push(
-        new PlaylistEntryRow({
-          table: "playlist_entry",
-          id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
-          playlistId,
-          recordingId: entry.recordingId,
-          position: last,
-          addedAt: wallTimeOf(hlc),
-          hlc,
-          fieldHlc: null,
-          deleted: false,
-        }),
-      );
-    }
-    yield* db.transaction(() =>
-      Effect.gen(function* () {
-        const changeSeq = yield* nextChangeSeq;
-        yield* Effect.forEach(rows, (row) => writeRow(row, changeSeq), { discard: true });
+  let last = (yield* liveEntries(playlistId)).at(-1)?.position ?? null;
+  const rows: Array<PlaylistEntryRow> = [];
+  for (const entry of entries) {
+    last = yield* keyBetween(last, null);
+    const hlc = yield* clock.next;
+    rows.push(
+      new PlaylistEntryRow({
+        table: "playlist_entry",
+        id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
+        playlistId,
+        recordingId: entry.recordingId,
+        position: last,
+        addedAt: wallTimeOf(hlc),
+        hlc,
+        fieldHlc: null,
+        deleted: false,
       }),
     );
-  });
+  }
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      const changeSeq = yield* nextChangeSeq;
+      yield* Effect.forEach(rows, (row) => writeRow(row, changeSeq), { discard: true });
+    }),
+  );
+});
 
 /** Returns the ID of the new playlist */
-export const createPlaylist = (
+export const createPlaylist = Effect.fn("createPlaylist")(function* (
   name: string,
   entries: ReadonlyArray<typeof EntryInput.Type>,
   twoWayProvider: string | null,
-) =>
-  Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const clock = yield* HlcClock;
-    const hlc = yield* clock.next;
-    const row = new PlaylistRow({
-      table: "playlist",
-      id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
-      name,
-      origin: null,
-      link:
-        twoWayProvider === null
-          ? null
-          : new PlaylistLink({ provider: twoWayProvider, remoteId: null, direction: "two-way" }),
-      linkState: null,
-      createdAt: wallTimeOf(hlc),
-      hlc,
-      fieldHlc: null,
-      deleted: false,
-    });
-    yield* writeRow(row, yield* nextChangeSeq);
-    yield* appendEntries(row.id, entries);
-    yield* pushIfHeld(row.id);
-    return row.id;
+) {
+  const crypto = yield* Crypto.Crypto;
+  const clock = yield* HlcClock;
+  const hlc = yield* clock.next;
+  const row = new PlaylistRow({
+    table: "playlist",
+    id: yield* crypto.randomUUIDv7().pipe(Effect.orDie),
+    name,
+    origin: null,
+    link:
+      twoWayProvider === null
+        ? null
+        : new PlaylistLink({ provider: twoWayProvider, remoteId: null, direction: "two-way" }),
+    linkState: null,
+    createdAt: wallTimeOf(hlc),
+    hlc,
+    fieldHlc: null,
+    deleted: false,
   });
+  yield* writeRow(row, yield* nextChangeSeq);
+  yield* appendEntries(row.id, entries);
+  yield* pushIfHeld(row.id);
+  return row.id;
+});
 
-export const addPlaylistEntries = (
+export const addPlaylistEntries = Effect.fn("addPlaylistEntries")(function* (
   playlistId: string,
   entries: ReadonlyArray<typeof EntryInput.Type>,
-) =>
-  Effect.gen(function* () {
-    yield* ownedPlaylist(playlistId);
-    yield* appendEntries(playlistId, entries);
-    yield* pushIfHeld(playlistId);
-  });
+) {
+  yield* ownedPlaylist(playlistId);
+  yield* appendEntries(playlistId, entries);
+  yield* pushIfHeld(playlistId);
+});
 
-export const editPlaylist = (
+export const editPlaylist = Effect.fn("editPlaylist")(function* (
   playlistId: string,
   edit: { readonly name?: string; readonly unlink?: true; readonly deleted?: true },
-) =>
-  Effect.gen(function* () {
-    yield* ownedPlaylist(playlistId);
-    yield* patchPlaylist(playlistId, {
-      name: edit.name,
-      link: edit.unlink === undefined ? undefined : null,
-      deleted: edit.deleted,
-    });
-    yield* pushIfHeld(playlistId);
+) {
+  yield* ownedPlaylist(playlistId);
+  yield* patchPlaylist(playlistId, {
+    name: edit.name,
+    link: edit.unlink === undefined ? undefined : null,
+    deleted: edit.deleted,
   });
+  yield* pushIfHeld(playlistId);
+});
 
-const patchEntry = (id: string, fields: { readonly position?: string; readonly deleted?: true }) =>
-  Effect.gen(function* () {
-    const clock = yield* HlcClock;
-    const current = yield* readRow("playlist_entry", id);
-    if (current?.table !== "playlist_entry") return;
-    const next = patchRow(current, fields, yield* clock.next);
-    if (Option.isSome(next)) yield* writeRow(next.value, yield* nextChangeSeq);
-  });
+const patchEntry = Effect.fn("patchEntry")(function* (
+  id: string,
+  fields: { readonly position?: string; readonly deleted?: true },
+) {
+  const clock = yield* HlcClock;
+  const current = yield* readRow("playlist_entry", id);
+  if (current?.table !== "playlist_entry") return;
+  const next = patchRow(current, fields, yield* clock.next);
+  if (Option.isSome(next)) yield* writeRow(next.value, yield* nextChangeSeq);
+});
 
-export const removePlaylistEntry = (entryId: string) =>
-  Effect.gen(function* () {
-    const entry = yield* readRow("playlist_entry", entryId);
-    if (entry?.table !== "playlist_entry") return;
-    yield* patchEntry(entryId, { deleted: true });
-    yield* pushIfHeld(entry.playlistId);
-  });
+export const removePlaylistEntry = Effect.fn("removePlaylistEntry")(function* (entryId: string) {
+  const entry = yield* readRow("playlist_entry", entryId);
+  if (entry?.table !== "playlist_entry") return;
+  yield* patchEntry(entryId, { deleted: true });
+  yield* pushIfHeld(entry.playlistId);
+});
 
-export const movePlaylistEntry = (playlistId: string, entryId: string, direction: 1 | -1) =>
-  Effect.gen(function* () {
-    const entries = yield* liveEntries(playlistId);
-    const index = entries.findIndex((entry) => entry.id === entryId);
-    const others = entries.filter((entry) => entry.id !== entryId);
-    const target = index + direction;
-    if (index === -1 || target < 0 || target > others.length) return;
+export const movePlaylistEntry = Effect.fn("movePlaylistEntry")(function* (
+  playlistId: string,
+  entryId: string,
+  direction: 1 | -1,
+) {
+  const entries = yield* liveEntries(playlistId);
+  const index = entries.findIndex((entry) => entry.id === entryId);
+  const others = entries.filter((entry) => entry.id !== entryId);
+  const target = index + direction;
+  if (index === -1 || target < 0 || target > others.length) return;
 
-    const before = others[target - 1]?.position ?? null;
-    const after = others[target];
-    if (after === undefined || before !== after.position) {
-      yield* patchEntry(entryId, { position: yield* keyBetween(before, after?.position ?? null) });
-      return yield* pushIfHeld(playlistId);
-    }
+  const before = others[target - 1]?.position ?? null;
+  const after = others[target];
+  if (after === undefined || before !== after.position) {
+    yield* patchEntry(entryId, { position: yield* keyBetween(before, after?.position ?? null) });
+    return yield* pushIfHeld(playlistId);
+  }
 
-    // Equal keys from inserts on two replicas: the entry after the place moves up first
-    const higher = others.slice(target + 1).find((entry) => entry.position > after.position);
-    const moved = yield* keyBetween(after.position, higher?.position ?? null);
-    yield* patchEntry(after.id, { position: moved });
-    yield* patchEntry(entryId, { position: yield* keyBetween(before, moved) });
-    yield* pushIfHeld(playlistId);
-  });
+  // Equal keys from inserts on two replicas: the entry after the place moves up first
+  const higher = others.slice(target + 1).find((entry) => entry.position > after.position);
+  const moved = yield* keyBetween(after.position, higher?.position ?? null);
+  yield* patchEntry(after.id, { position: moved });
+  yield* patchEntry(entryId, { position: yield* keyBetween(before, moved) });
+  yield* pushIfHeld(playlistId);
+});

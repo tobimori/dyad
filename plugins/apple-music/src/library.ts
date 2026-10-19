@@ -72,42 +72,41 @@ const toLibrarySong = (item: typeof LibrarySongItem.Type) => {
 
 // Apple sometimes answers 404 or an empty page after `next` promised more items. Then the snapshot
 // keeps the items so far, but is incomplete.
-const readPages = <S extends Schema.Top>(
+const readPages = Effect.fn("readPages")(function* <S extends Schema.Top>(
   pace: Pace,
   request: HttpClientRequest.HttpClientRequest,
   item: S,
   stage: string,
-) =>
-  Effect.gen(function* () {
-    const items: Array<S["Type"]> = [];
+) {
+  const items: Array<S["Type"]> = [];
 
-    while (true) {
-      const pageRequest = request.pipe(HttpClientRequest.setUrlParam("offset", `${items.length}`));
-      const page = yield* pace(getJson(pageRequest, Page(item))).pipe(
-        Effect.asSome,
-        Effect.catchIf(
-          (error) => error instanceof HttpStatusError && error.status === 404,
-          () => Effect.succeedNone,
-        ),
-        Effect.mapError(appleError(stage, pageRequest)),
-      );
-      if (Option.isNone(page)) {
-        return new LibrarySnapshot({ items, incompleteReason: `404 at offset ${items.length}` });
-      }
-
-      if (page.value.data.length === 0 && page.value.next !== undefined) {
-        return new LibrarySnapshot({
-          items,
-          incompleteReason: `empty page at offset ${items.length}`,
-        });
-      }
-
-      items.push(...page.value.data);
-      if (page.value.next === undefined) {
-        return new LibrarySnapshot({ items, incompleteReason: null });
-      }
+  while (true) {
+    const pageRequest = request.pipe(HttpClientRequest.setUrlParam("offset", `${items.length}`));
+    const page = yield* pace(getJson(pageRequest, Page(item))).pipe(
+      Effect.asSome,
+      Effect.catchIf(
+        (error) => error instanceof HttpStatusError && error.status === 404,
+        () => Effect.succeedNone,
+      ),
+      Effect.mapError(appleError(stage, pageRequest)),
+    );
+    if (Option.isNone(page)) {
+      return new LibrarySnapshot({ items, incompleteReason: `404 at offset ${items.length}` });
     }
-  });
+
+    if (page.value.data.length === 0 && page.value.next !== undefined) {
+      return new LibrarySnapshot({
+        items,
+        incompleteReason: `empty page at offset ${items.length}`,
+      });
+    }
+
+    items.push(...page.value.data);
+    if (page.value.next === undefined) {
+      return new LibrarySnapshot({ items, incompleteReason: null });
+    }
+  }
+});
 
 const libraryRequest = (session: AppleSession, path: string) =>
   HttpClientRequest.get(`${amp}${path}`).pipe(
@@ -115,51 +114,58 @@ const libraryRequest = (session: AppleSession, path: string) =>
     authorize(session),
   );
 
-export const readLibrarySongs = (pace: Pace, session: AppleSession) =>
-  Effect.gen(function* () {
-    const request = libraryRequest(session, "/v1/me/library/songs").pipe(
-      HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
-    );
-    const snapshot = yield* readPages(pace, request, LibrarySongItem, "library songs");
+export const readLibrarySongs = Effect.fn("readLibrarySongs")(function* (
+  pace: Pace,
+  session: AppleSession,
+) {
+  const request = libraryRequest(session, "/v1/me/library/songs").pipe(
+    HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
+  );
+  const snapshot = yield* readPages(pace, request, LibrarySongItem, "library songs");
 
-    return new LibrarySnapshot({
-      items: snapshot.items.map(toLibrarySong),
-      incompleteReason: snapshot.incompleteReason,
-    });
+  return new LibrarySnapshot({
+    items: snapshot.items.map(toLibrarySong),
+    incompleteReason: snapshot.incompleteReason,
   });
+});
 
-export const readPlaylists = (pace: Pace, session: AppleSession) =>
-  Effect.gen(function* () {
-    const request = libraryRequest(session, "/v1/me/library/playlists");
-    const snapshot = yield* readPages(pace, request, LibraryPlaylistItem, "library playlists");
+export const readPlaylists = Effect.fn("readPlaylists")(function* (
+  pace: Pace,
+  session: AppleSession,
+) {
+  const request = libraryRequest(session, "/v1/me/library/playlists");
+  const snapshot = yield* readPages(pace, request, LibraryPlaylistItem, "library playlists");
 
-    return new LibrarySnapshot({
-      items: snapshot.items.map(
-        (item) =>
-          new LibraryPlaylist({
-            remoteId: item.id,
-            name: item.attributes.name,
-            version: item.attributes.lastModifiedDate ?? null,
-          }),
-      ),
-      incompleteReason: snapshot.incompleteReason,
-    });
+  return new LibrarySnapshot({
+    items: snapshot.items.map(
+      (item) =>
+        new LibraryPlaylist({
+          remoteId: item.id,
+          name: item.attributes.name,
+          version: item.attributes.lastModifiedDate ?? null,
+        }),
+    ),
+    incompleteReason: snapshot.incompleteReason,
   });
+});
 
 /** The items are in playlist order. A song can be in the playlist more than once. */
-export const readPlaylistTracks = (pace: Pace, session: AppleSession, playlistId: string) =>
-  Effect.gen(function* () {
-    const path = `/v1/me/library/playlists/${encodeURIComponent(playlistId)}/tracks`;
-    const request = libraryRequest(session, path).pipe(
-      HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
-    );
-    const snapshot = yield* readPages(pace, request, LibrarySongItem, "playlist tracks");
+export const readPlaylistTracks = Effect.fn("readPlaylistTracks")(function* (
+  pace: Pace,
+  session: AppleSession,
+  playlistId: string,
+) {
+  const path = `/v1/me/library/playlists/${encodeURIComponent(playlistId)}/tracks`;
+  const request = libraryRequest(session, path).pipe(
+    HttpClientRequest.setUrlParams({ include: "catalog", ...songIncludes }),
+  );
+  const snapshot = yield* readPages(pace, request, LibrarySongItem, "playlist tracks");
 
-    return new LibrarySnapshot({
-      items: snapshot.items.map(toLibrarySong),
-      incompleteReason: snapshot.incompleteReason,
-    });
+  return new LibrarySnapshot({
+    items: snapshot.items.map(toLibrarySong),
+    incompleteReason: snapshot.incompleteReason,
   });
+});
 
 const CreatedPlaylist = Schema.Struct({
   data: Schema.NonEmptyArray(Schema.Struct({ id: Schema.String })),
@@ -170,15 +176,17 @@ const encodeFailed = (stage: string) => () =>
 
 // Apple's API can create library playlists and add songs to them, but it answers 403 or 401 to
 // removals, moves and deletes (October 2026)
-export const createPlaylist = (pace: Pace, session: AppleSession, name: string) =>
-  Effect.gen(function* () {
+export const createPlaylist = Effect.fn("createPlaylist")(
+  function* (pace: Pace, session: AppleSession, name: string) {
     const request = yield* HttpClientRequest.post(`${amp}/v1/me/library/playlists`).pipe(
       authorize(session),
       HttpClientRequest.bodyJson({ attributes: { name } }),
     );
     const response = yield* pace(requestJson(request, CreatedPlaylist, "create playlist"));
     return response.data[0].id;
-  }).pipe(Effect.catchTag("HttpBodyError", encodeFailed("create playlist")));
+  },
+  (effect) => effect.pipe(Effect.catchTag("HttpBodyError", encodeFailed("create playlist"))),
+);
 
 /** Adds catalog songs at the end of a library playlist */
 export const addPlaylistSongs = (
@@ -202,14 +210,16 @@ export const addPlaylistSongs = (
   );
 
 /** One request. The newest song and the count change when songs are added or removed. */
-export const probeLibrary = (pace: Pace, session: AppleSession) =>
-  Effect.gen(function* () {
-    const request = HttpClientRequest.get(`${amp}/v1/me/library/songs`).pipe(
-      HttpClientRequest.setUrlParams({ limit: "1", sort: "-dateAdded" }),
-      authorize(session),
-    );
-    const page = yield* pace(requestJson(request, ProbePage, "library probe"));
-    const newestId = page.data[0]?.id ?? "";
+export const probeLibrary = Effect.fn("probeLibrary")(function* (
+  pace: Pace,
+  session: AppleSession,
+) {
+  const request = HttpClientRequest.get(`${amp}/v1/me/library/songs`).pipe(
+    HttpClientRequest.setUrlParams({ limit: "1", sort: "-dateAdded" }),
+    authorize(session),
+  );
+  const page = yield* pace(requestJson(request, ProbePage, "library probe"));
+  const newestId = page.data[0]?.id ?? "";
 
-    return new LibraryProbe({ version: `${page.meta.total}:${newestId}`, total: page.meta.total });
-  });
+  return new LibraryProbe({ version: `${page.meta.total}:${newestId}`, total: page.meta.total });
+});

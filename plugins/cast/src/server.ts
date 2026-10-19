@@ -100,57 +100,56 @@ const leftRooms = (groups: ReadonlyArray<SonosGroup>, joined: Map<string, Joined
 const sameInfos = (left: ReadonlyArray<OutputInfo>, right: ReadonlyArray<OutputInfo>) =>
   left.length === right.length && left.every((info, index) => Equal.equals(info, right[index]));
 
-const openOutput = (device: UpnpDevice) =>
-  Effect.gen(function* () {
-    const target = yield* openUpnp(device).pipe(Effect.mapError(outputError));
-    const localAddress = yield* localAddressTo(device.host).pipe(
-      Effect.mapError((error) => new OutputError({ reason: error.message })),
-    );
+const openOutput = Effect.fn("openOutput")(function* (device: UpnpDevice) {
+  const target = yield* openUpnp(device).pipe(Effect.mapError(outputError));
+  const localAddress = yield* localAddressTo(device.host).pipe(
+    Effect.mapError((error) => new OutputError({ reason: error.message })),
+  );
 
-    const metadataOf = (media: UrlMedia) =>
-      new TrackMetadata({
-        mimeType: media.contentType,
-        title: media.title ?? "",
-        artist: media.artist,
-        album: media.album,
-        artworkUrl: media.artworkUrl,
-        durationMs: media.durationMs,
-      });
-
-    return new UrlOutput({
-      formats: formatsOf(device),
-      localAddress,
-      load: (media) =>
-        target.load(media.url, metadataOf(media), 0).pipe(Effect.mapError(outputError)),
-      // Gapless playback is tested only with the Sonos queue
-      ...(device.kind === "sonos" && {
-        loadNext: (media: UrlMedia | null) =>
-          (media === null ? target.clearNext : target.next(media.url, metadataOf(media))).pipe(
-            Effect.mapError(outputError),
-          ),
-      }),
-      live: device.kind === "sonos",
-      play: target.play.pipe(Effect.mapError(outputError)),
-      pause: target.pause.pipe(Effect.mapError(outputError)),
-      stop: target.stop.pipe(Effect.mapError(outputError)),
-      setVolume: (volume) => target.setVolume(volume).pipe(Effect.mapError(outputError)),
-      status: target.state.pipe(
-        Stream.map(
-          (state) =>
-            new UrlStatus({
-              state: state.status === "idle" ? "stopped" : state.status,
-              url: state.url,
-              positionMs: state.positionMs,
-              volume: state.volume,
-              muted: state.muted,
-            }),
-        ),
-        // A failed poll repeats the last state, which would report an old position again
-        Stream.changes,
-        Stream.mapError(outputError),
-      ),
+  const metadataOf = (media: UrlMedia) =>
+    new TrackMetadata({
+      mimeType: media.contentType,
+      title: media.title ?? "",
+      artist: media.artist,
+      album: media.album,
+      artworkUrl: media.artworkUrl,
+      durationMs: media.durationMs,
     });
+
+  return new UrlOutput({
+    formats: formatsOf(device),
+    localAddress,
+    load: (media) =>
+      target.load(media.url, metadataOf(media), 0).pipe(Effect.mapError(outputError)),
+    // Gapless playback is tested only with the Sonos queue
+    ...(device.kind === "sonos" && {
+      loadNext: (media: UrlMedia | null) =>
+        (media === null ? target.clearNext : target.next(media.url, metadataOf(media))).pipe(
+          Effect.mapError(outputError),
+        ),
+    }),
+    live: device.kind === "sonos",
+    play: target.play.pipe(Effect.mapError(outputError)),
+    pause: target.pause.pipe(Effect.mapError(outputError)),
+    stop: target.stop.pipe(Effect.mapError(outputError)),
+    setVolume: (volume) => target.setVolume(volume).pipe(Effect.mapError(outputError)),
+    status: target.state.pipe(
+      Stream.map(
+        (state) =>
+          new UrlStatus({
+            state: state.status === "idle" ? "stopped" : state.status,
+            url: state.url,
+            positionMs: state.positionMs,
+            volume: state.volume,
+            muted: state.muted,
+          }),
+      ),
+      // A failed poll repeats the last state, which would report an old position again
+      Stream.changes,
+      Stream.mapError(outputError),
+    ),
   });
+});
 
 /** UPnP MediaRenderers and Sonos rooms on the local network as outputs */
 export const castPlugin = new Plugin({

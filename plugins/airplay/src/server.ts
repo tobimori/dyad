@@ -55,73 +55,73 @@ export const airplayOutputs = Effect.fn("AirPlay.outputs")(function* (
       Effect.orElseSucceed(() => undefined),
     );
 
-  const openOutput = (device: AirPlayDevice) =>
-    Effect.gen(function* () {
-      const scope = yield* Effect.scope;
-      const sender = yield* openRaopSender(device).pipe(
-        Effect.provideService(NtpClock, clock),
-        Effect.mapError(outputError),
-      );
-      const failed = yield* Deferred.make<never, OutputError>();
+  const openOutput = Effect.fn("openOutput")(function* (device: AirPlayDevice) {
+    const scope = yield* Effect.scope;
+    const sender = yield* openRaopSender(device).pipe(
+      Effect.provideService(NtpClock, clock),
+      Effect.mapError(outputError),
+    );
+    const failed = yield* Deferred.make<never, OutputError>();
 
-      // One `play` per epoch: its last packet is padded with silence, so contiguous blocks must
-      // stay in one play
-      let playing:
-        | { readonly queue: Queue.Queue<Float32Array>; readonly fiber: Fiber.Fiber<unknown> }
-        | undefined;
+    // One `play` per epoch: its last packet is padded with silence, so contiguous blocks must
+    // stay in one play
+    let playing:
+      | { readonly queue: Queue.Queue<Float32Array>; readonly fiber: Fiber.Fiber<unknown> }
+      | undefined;
 
-      const write = (playAtUs: number, pcm: Float32Array) =>
-        Effect.gen(function* () {
-          if (yield* Deferred.isDone(failed)) return yield* Deferred.await(failed);
-          if (playing === undefined) {
-            const queue = yield* Queue.unbounded<Float32Array>();
-            const fiber = yield* sender.play(Stream.fromQueue(queue), ntpTime(playAtUs)).pipe(
-              Effect.catch((error) => Deferred.fail(failed, outputError(error))),
-              Effect.forkIn(scope),
-            );
-            playing = { queue, fiber };
-          }
-          yield* Queue.offer(playing.queue, pcm);
-        });
-
-      const flush = Effect.gen(function* () {
-        if (playing !== undefined) {
-          yield* Fiber.interrupt(playing.fiber);
-          playing = undefined;
-        }
-        yield* sender.flush.pipe(Effect.mapError(outputError));
-      });
-
-      const setMedia = (media: TimedMedia) =>
-        Effect.gen(function* () {
-          const art =
-            media.artworkUrl === null || !device.metadata.includes(1)
-              ? undefined
-              : yield* artwork(media.artworkUrl);
-          yield* sender.setMetadata(
-            new TrackMetadata({
-              title: media.title ?? "",
-              artist: media.artist ?? undefined,
-              album: media.album ?? undefined,
-              artwork: art,
-              startAt: ntpTime(media.startAtUs),
-              durationMs: media.durationMs ?? undefined,
-            }),
-          );
-        }).pipe(Effect.mapError(outputError));
-
-      return new TimedOutput({
-        leadMs: sender.leadMs,
-        write,
-        flush,
-        setVolume: (volume) => sender.setVolume(volume).pipe(Effect.mapError(outputError)),
-        setMedia,
-        closed: Effect.raceFirst(
-          sender.closed.pipe(Effect.mapError(outputError)),
-          Deferred.await(failed),
-        ),
-      });
+    const write = Effect.fn("write")(function* (playAtUs: number, pcm: Float32Array) {
+      if (yield* Deferred.isDone(failed)) return yield* Deferred.await(failed);
+      if (playing === undefined) {
+        const queue = yield* Queue.unbounded<Float32Array>();
+        const fiber = yield* sender.play(Stream.fromQueue(queue), ntpTime(playAtUs)).pipe(
+          Effect.catch((error) => Deferred.fail(failed, outputError(error))),
+          Effect.forkIn(scope),
+        );
+        playing = { queue, fiber };
+      }
+      yield* Queue.offer(playing.queue, pcm);
     });
+
+    const flush = Effect.gen(function* () {
+      if (playing !== undefined) {
+        yield* Fiber.interrupt(playing.fiber);
+        playing = undefined;
+      }
+      yield* sender.flush.pipe(Effect.mapError(outputError));
+    });
+
+    const setMedia = Effect.fn("setMedia")(
+      function* (media: TimedMedia) {
+        const art =
+          media.artworkUrl === null || !device.metadata.includes(1)
+            ? undefined
+            : yield* artwork(media.artworkUrl);
+        yield* sender.setMetadata(
+          new TrackMetadata({
+            title: media.title ?? "",
+            artist: media.artist ?? undefined,
+            album: media.album ?? undefined,
+            artwork: art,
+            startAt: ntpTime(media.startAtUs),
+            durationMs: media.durationMs ?? undefined,
+          }),
+        );
+      },
+      (effect) => effect.pipe(Effect.mapError(outputError)),
+    );
+
+    return new TimedOutput({
+      leadMs: sender.leadMs,
+      write,
+      flush,
+      setVolume: (volume) => sender.setVolume(volume).pipe(Effect.mapError(outputError)),
+      setMedia,
+      closed: Effect.raceFirst(
+        sender.closed.pipe(Effect.mapError(outputError)),
+        Deferred.await(failed),
+      ),
+    });
+  });
 
   const found = new Map<string, AirPlayDevice>();
   const discoverOutputs = devices.pipe(

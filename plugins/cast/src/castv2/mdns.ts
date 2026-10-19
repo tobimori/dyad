@@ -25,18 +25,17 @@ const query = encode({
   questions: [{ type: "PTR", name: service, class: "IN" }],
 });
 
-const open = (port: number) =>
-  Effect.gen(function* () {
-    // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
-    const socket = yield* NodeDatagramSocket.make({
-      bind: { address: "0.0.0.0", port },
-      reuseAddress: true,
-      multicast: { ttl: 255 },
-    });
-    const reader = yield* socket.reader;
-    const writer = yield* socket.writer;
-    return { reader, writer };
+const open = Effect.fn("open")(function* (port: number) {
+  // @effect-diagnostics-next-line experimentalApiUsage:off -- Effect has no stable UDP socket
+  const socket = yield* NodeDatagramSocket.make({
+    bind: { address: "0.0.0.0", port },
+    reuseAddress: true,
+    multicast: { ttl: 255 },
   });
+  const reader = yield* socket.reader;
+  const writer = yield* socket.writer;
+  return { reader, writer };
+});
 
 const txtRecord = (data: string | Uint8Array | ReadonlyArray<string | Uint8Array>) => {
   const entries = data instanceof Array ? data : [data];
@@ -50,8 +49,8 @@ const txtRecord = (data: string | Uint8Array | ReadonlyArray<string | Uint8Array
 };
 
 // A response usually holds the PTR, SRV, TXT and A records of a device
-const devicesIn = (payload: Uint8Array, source: string) =>
-  Effect.gen(function* () {
+const devicesIn = Effect.fn("devicesIn")(
+  function* (payload: Uint8Array, source: string) {
     const packet = yield* Effect.try(() => decode(Buffer.from(payload)));
     const records = [...(packet.answers ?? []), ...(packet.additionals ?? [])];
     const devices: Array<CastDevice> = [];
@@ -88,7 +87,9 @@ const devicesIn = (payload: Uint8Array, source: string) =>
     }
 
     return devices;
-  }).pipe(Effect.orElseSucceed(() => []));
+  },
+  Effect.orElseSucceed(() => []),
+);
 
 /** Finds Cast devices and groups with mDNS */
 export const castDevices = Stream.unwrap(

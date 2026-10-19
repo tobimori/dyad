@@ -297,29 +297,31 @@ const decodeVideoId = (externalId: string) =>
     Effect.mapError(() => new ProviderError({ reason: "Invalid video ID" })),
   );
 
-const readPlayer = (withVisitor: Effect.Success<typeof visitorCache>, videoId: string) =>
-  Effect.gen(function* () {
-    const player = yield* withVisitor((visitorData) =>
-      innertube(
-        "player",
-        { ...visionos, visitorData: Redacted.value(visitorData) },
-        { videoId, contentCheckOk: true, racyCheckOk: true },
-        Player,
-      ),
-    ).pipe(
-      Effect.catchTags({
-        HttpStatusError: (error) => Effect.fail(providerError("YouTube")(error)),
-        HttpRequestError: (error) => Effect.fail(providerError("YouTube")(error)),
-      }),
-    );
+const readPlayer = Effect.fn("readPlayer")(function* (
+  withVisitor: Effect.Success<typeof visitorCache>,
+  videoId: string,
+) {
+  const player = yield* withVisitor((visitorData) =>
+    innertube(
+      "player",
+      { ...visionos, visitorData: Redacted.value(visitorData) },
+      { videoId, contentCheckOk: true, racyCheckOk: true },
+      Player,
+    ),
+  ).pipe(
+    Effect.catchTags({
+      HttpStatusError: (error) => Effect.fail(providerError("YouTube")(error)),
+      HttpRequestError: (error) => Effect.fail(providerError("YouTube")(error)),
+    }),
+  );
 
-    if (player.playabilityStatus.status !== "OK") {
-      return yield* new ProviderError({
-        reason: `YouTube does not play the video: ${player.playabilityStatus.reason ?? player.playabilityStatus.status}`,
-      });
-    }
-    return player;
-  });
+  if (player.playabilityStatus.status !== "OK") {
+    return yield* new ProviderError({
+      reason: `YouTube does not play the video: ${player.playabilityStatus.reason ?? player.playabilityStatus.status}`,
+    });
+  }
+  return player;
+});
 
 // The URLs expire after 6 hours (October 2026), so a stream that starts from a cached answer
 // still has 5 hours
@@ -337,111 +339,111 @@ export const playerCache = (withVisitor: Effect.Success<typeof visitorCache>) =>
 
 type Players = Effect.Success<ReturnType<typeof playerCache>>;
 
-const adaptiveFormats = <S extends Schema.ConstraintDecoder<unknown>>(
-  players: Players,
-  externalId: string,
-  schema: S,
-) =>
-  Effect.gen(function* () {
-    const player = yield* Cache.get(players, yield* decodeVideoId(externalId));
-    return (player.streamingData?.adaptiveFormats ?? []).flatMap((item) =>
-      Option.toArray(Schema.decodeUnknownOption(schema)(item)),
-    );
-  });
+const adaptiveFormats = Effect.fn("adaptiveFormats")(function* <
+  S extends Schema.ConstraintDecoder<unknown>,
+>(players: Players, externalId: string, schema: S) {
+  const player = yield* Cache.get(players, yield* decodeVideoId(externalId));
+  return (player.streamingData?.adaptiveFormats ?? []).flatMap((item) =>
+    Option.toArray(Schema.decodeUnknownOption(schema)(item)),
+  );
+});
 
 // Itag 251, which nearly every video has, is Opus of up to 160 kbit/s
 const opusBitrate = 160_000;
 
 /** Videos in YouTube's order of relevance, without live streams */
-export const searchVideos = (query: string) =>
-  Effect.gen(function* () {
-    const response = yield* innertube(
-      "search",
-      web,
-      { query, params: videosOnly },
-      SearchResults,
-    ).pipe(Effect.mapError(providerError("YouTube")));
+export const searchVideos = Effect.fn("searchVideos")(function* (query: string) {
+  const response = yield* innertube(
+    "search",
+    web,
+    { query, params: videosOnly },
+    SearchResults,
+  ).pipe(Effect.mapError(providerError("YouTube")));
 
-    return response.contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents.flatMap(
-      (section) =>
-        (section.itemSectionRenderer?.contents ?? []).flatMap(({ videoRenderer: video }) => {
-          if (video === undefined || video.lengthText === undefined) return [];
+  return response.contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents.flatMap(
+    (section) =>
+      (section.itemSectionRenderer?.contents ?? []).flatMap(({ videoRenderer: video }) => {
+        if (video === undefined || video.lengthText === undefined) return [];
 
-          const channel = video.ownerText.runs[0];
-          const channelId = channel?.navigationEndpoint?.browseEndpoint?.browseId;
-          const artwork = video.thumbnail.thumbnails.toSorted((a, b) => b.width - a.width)[0];
-          return [
-            new ProviderSource({
-              externalId: video.videoId,
-              title: video.title.runs.map((run) => run.text).join(""),
-              // YouTube makes `<Artist> - Topic` channels for the releases of an artist
-              artist: channel?.text.replace(/ - Topic$/, "") ?? null,
-              album: null,
-              durationMs: clockMs(video.lengthText.simpleText),
-              isrc: null,
-              container: "webm",
-              codec: "opus",
-              lossless: false,
-              encrypted: false,
-              artworkUrl: artwork?.url ?? null,
-              artists: [],
-              explicit: null,
-              bitrate: opusBitrate,
-              uploader:
-                channel === undefined || channelId === undefined
-                  ? null
-                  : new CreditedArtist({ id: channelId, name: channel.text }),
-              albumId: null,
-              video: true,
-            }),
-          ];
-        }),
-    );
-  });
+        const channel = video.ownerText.runs[0];
+        const channelId = channel?.navigationEndpoint?.browseEndpoint?.browseId;
+        const artwork = video.thumbnail.thumbnails.toSorted((a, b) => b.width - a.width)[0];
+        return [
+          new ProviderSource({
+            externalId: video.videoId,
+            title: video.title.runs.map((run) => run.text).join(""),
+            // YouTube makes `<Artist> - Topic` channels for the releases of an artist
+            artist: channel?.text.replace(/ - Topic$/, "") ?? null,
+            album: null,
+            durationMs: clockMs(video.lengthText.simpleText),
+            isrc: null,
+            container: "webm",
+            codec: "opus",
+            lossless: false,
+            encrypted: false,
+            artworkUrl: artwork?.url ?? null,
+            artists: [],
+            explicit: null,
+            bitrate: opusBitrate,
+            uploader:
+              channel === undefined || channelId === undefined
+                ? null
+                : new CreditedArtist({ id: channelId, name: channel.text }),
+            albumId: null,
+            video: true,
+          }),
+        ];
+      }),
+  );
+});
 
-const playerStream = (
+const playerStream = Effect.fn("playerStream")(function* (
   format: {
     readonly url: string;
     readonly contentLength: number;
     readonly indexRange: { readonly start: number; readonly end: number };
   },
   kind: "audio" | "video",
-) =>
-  Effect.gen(function* () {
-    // October 2026: `/player` can give this server URLs that answer 403. One byte shows it before
-    // the play starts, so that the plugin can switch to yt-dlp.
-    yield* Stream.runDrain(readChunks(format.url, 0, 1)).pipe(Effect.mapError(streamError(kind)));
-    // `indexRange` includes its end byte
-    return yield* webmStream(format.url, format.contentLength, kind, {
-      start: format.indexRange.start,
-      end: format.indexRange.end + 1,
-    });
+) {
+  // October 2026: `/player` can give this server URLs that answer 403. One byte shows it before
+  // the play starts, so that the plugin can switch to yt-dlp.
+  yield* Stream.runDrain(readChunks(format.url, 0, 1)).pipe(Effect.mapError(streamError(kind)));
+  // `indexRange` includes its end byte
+  return yield* webmStream(format.url, format.contentLength, kind, {
+    start: format.indexRange.start,
+    end: format.indexRange.end + 1,
   });
+});
 
 /** Streams the Opus audio of a video in its WebM file */
-export const resolveAudio = (players: Players, externalId: string) =>
-  Effect.gen(function* () {
-    const format = (yield* adaptiveFormats(players, externalId, OpusFormat))
-      .filter((item) => item.isDrc !== true && item.audioTrack?.audioIsDefault !== false)
-      .toSorted((a, b) => b.bitrate - a.bitrate)[0];
-    if (format === undefined) {
-      return yield* new ProviderError({ reason: "The video has no Opus audio" });
-    }
-    return new ProviderAudio(yield* playerStream(format, "audio"));
-  });
+export const resolveAudio = Effect.fn("resolveAudio")(function* (
+  players: Players,
+  externalId: string,
+) {
+  const format = (yield* adaptiveFormats(players, externalId, OpusFormat))
+    .filter((item) => item.isDrc !== true && item.audioTrack?.audioIsDefault !== false)
+    .toSorted((a, b) => b.bitrate - a.bitrate)[0];
+  if (format === undefined) {
+    return yield* new ProviderError({ reason: "The video has no Opus audio" });
+  }
+  return new ProviderAudio(yield* playerStream(format, "audio"));
+});
 
 /** Of streams with equal height, the lowest bitrate wins, which skips 60 fps streams */
-export const resolveVideo = (players: Players, externalId: string, maxHeight: number) =>
-  Effect.gen(function* () {
-    const formats = (yield* adaptiveFormats(players, externalId, Vp9Format)).toSorted(
-      (a, b) => b.height - a.height || a.bitrate - b.bitrate,
-    );
-    const format = formats.find((item) => item.height <= maxHeight) ?? formats.at(-1);
-    if (format === undefined) {
-      return yield* new ProviderError({ reason: "The video has no VP9 stream" });
-    }
-    return new ProviderVideo(yield* playerStream(format, "video"));
-  });
+export const resolveVideo = Effect.fn("resolveVideo")(function* (
+  players: Players,
+  externalId: string,
+  maxHeight: number,
+) {
+  const formats = (yield* adaptiveFormats(players, externalId, Vp9Format)).toSorted(
+    (a, b) => b.height - a.height || a.bitrate - b.bitrate,
+  );
+  const format = formats.find((item) => item.height <= maxHeight) ?? formats.at(-1);
+  if (format === undefined) {
+    return yield* new ProviderError({ reason: "The video has no VP9 stream" });
+  }
+  return new ProviderVideo(yield* playerStream(format, "video"));
+});
 
 // YouTube makes chapters from the description. `AUTO_CHAPTERS` are topics, not tracks.
 const descriptionChapters = "DESCRIPTION_CHAPTERS";
@@ -463,105 +465,103 @@ const likeCount = (text: string | undefined) => {
 const commentPages = 3;
 
 // The pinned comment, then comments of the uploader, then the most likes
-const commentTracklist = (next: typeof Next.Type) =>
-  Effect.gen(function* () {
-    const first = next.contents?.twoColumnWatchNextResults.results.results.contents
-      .find((content) => content.itemSectionRenderer?.sectionIdentifier === "comment-item-section")
-      ?.itemSectionRenderer?.contents.flatMap((item) =>
-        Option.toArray(Schema.decodeUnknownOption(Continuation)(item)),
-      )[0]?.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
-    if (first === undefined) return [];
+const commentTracklist = Effect.fn("commentTracklist")(function* (next: typeof Next.Type) {
+  const first = next.contents?.twoColumnWatchNextResults.results.results.contents
+    .find((content) => content.itemSectionRenderer?.sectionIdentifier === "comment-item-section")
+    ?.itemSectionRenderer?.contents.flatMap((item) =>
+      Option.toArray(Schema.decodeUnknownOption(Continuation)(item)),
+    )[0]?.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+  if (first === undefined) return [];
 
-    const pages = yield* Stream.paginate(first, (token) =>
-      innertube("next", web, { continuation: token }, Comments).pipe(
-        Effect.mapError(providerError("YouTube")),
-        Effect.map((page) => {
-          const items = (page.onResponseReceivedEndpoints ?? []).flatMap(
-            (endpoint) =>
-              (endpoint.reloadContinuationItemsCommand ?? endpoint.appendContinuationItemsAction)
-                ?.continuationItems ?? [],
-          );
-          const following =
-            items.at(-1)?.continuationItemRenderer?.continuationEndpoint.continuationCommand.token;
-          return [[{ page, items }], Option.fromUndefinedOr(following)] as const;
+  const pages = yield* Stream.paginate(first, (token) =>
+    innertube("next", web, { continuation: token }, Comments).pipe(
+      Effect.mapError(providerError("YouTube")),
+      Effect.map((page) => {
+        const items = (page.onResponseReceivedEndpoints ?? []).flatMap(
+          (endpoint) =>
+            (endpoint.reloadContinuationItemsCommand ?? endpoint.appendContinuationItemsAction)
+              ?.continuationItems ?? [],
+        );
+        const following =
+          items.at(-1)?.continuationItemRenderer?.continuationEndpoint.continuationCommand.token;
+        return [[{ page, items }], Option.fromUndefinedOr(following)] as const;
+      }),
+    ),
+  ).pipe(Stream.take(commentPages), Stream.runCollect);
+
+  const pinned = new Set(
+    pages.flatMap(({ items }) =>
+      items.flatMap((item) => {
+        const comment = item.commentThreadRenderer?.commentViewModel.commentViewModel;
+        return comment?.pinnedText === undefined ? [] : [comment.commentId];
+      }),
+    ),
+  );
+
+  const [best] = pages
+    .flatMap(({ page }) => page.frameworkUpdates?.entityBatchUpdate.mutations ?? [])
+    .flatMap(({ payload }) => {
+      const comment = payload?.commentEntityPayload;
+      if (comment === undefined) return [];
+
+      const entries = parseTracklist(comment.properties.content.content);
+      if (entries.filter((entry) => entry.artist !== null).length < minimumCommentTracks) {
+        return [];
+      }
+      const id = comment.properties.commentId;
+      return [
+        {
+          id,
+          entries,
+          pinned: pinned.has(id) ? 1 : 0,
+          creator: comment.author.isCreator === true ? 1 : 0,
+          likes: likeCount(comment.toolbar.likeCountNotliked),
+        },
+      ];
+    })
+    .toSorted((a, b) => b.pinned - a.pinned || b.creator - a.creator || b.likes - a.likes);
+  return best === undefined
+    ? []
+    : [
+        new ProviderTracklist({
+          part: `comment:${best.id}`,
+          entries: best.entries,
+          confidence: 0.6,
         }),
-      ),
-    ).pipe(Stream.take(commentPages), Stream.runCollect);
-
-    const pinned = new Set(
-      pages.flatMap(({ items }) =>
-        items.flatMap((item) => {
-          const comment = item.commentThreadRenderer?.commentViewModel.commentViewModel;
-          return comment?.pinnedText === undefined ? [] : [comment.commentId];
-        }),
-      ),
-    );
-
-    const [best] = pages
-      .flatMap(({ page }) => page.frameworkUpdates?.entityBatchUpdate.mutations ?? [])
-      .flatMap(({ payload }) => {
-        const comment = payload?.commentEntityPayload;
-        if (comment === undefined) return [];
-
-        const entries = parseTracklist(comment.properties.content.content);
-        if (entries.filter((entry) => entry.artist !== null).length < minimumCommentTracks) {
-          return [];
-        }
-        const id = comment.properties.commentId;
-        return [
-          {
-            id,
-            entries,
-            pinned: pinned.has(id) ? 1 : 0,
-            creator: comment.author.isCreator === true ? 1 : 0,
-            likes: likeCount(comment.toolbar.likeCountNotliked),
-          },
-        ];
-      })
-      .toSorted((a, b) => b.pinned - a.pinned || b.creator - a.creator || b.likes - a.likes);
-    return best === undefined
-      ? []
-      : [
-          new ProviderTracklist({
-            part: `comment:${best.id}`,
-            entries: best.entries,
-            confidence: 0.6,
-          }),
-        ];
-  });
+      ];
+});
 
 /**
  * The chapters, the timed lines of the description and the best tracklist in the comments. All
  * come from the web client's `/next`, which has no bot check like `/player`.
  */
-export const videoTracklists = (externalId: string) =>
-  Effect.gen(function* () {
-    const videoId = yield* decodeVideoId(externalId);
-    const next = yield* innertube("next", web, { videoId }, Next).pipe(
-      Effect.mapError(providerError("YouTube")),
-    );
+export const videoTracklists = Effect.fn("videoTracklists")(function* (externalId: string) {
+  const videoId = yield* decodeVideoId(externalId);
+  const next = yield* innertube("next", web, { videoId }, Next).pipe(
+    Effect.mapError(providerError("YouTube")),
+  );
 
-    const chapters = (
-      next.playerOverlays?.playerOverlayRenderer?.decoratedPlayerBarRenderer?.decoratedPlayerBarRenderer?.playerBar?.multiMarkersPlayerBarRenderer?.markersMap?.find(
-        (marker) => marker.key === descriptionChapters,
-      )?.value.chapters ?? []
-    ).flatMap(({ chapterRenderer: chapter }) => {
-      const entry = tracklistEntry(chapter.title.simpleText, chapter.timeRangeStartMillis);
-      return entry === undefined ? [] : [entry];
-    });
-    const description = parseTracklist(
-      next.contents?.twoColumnWatchNextResults.results.results.contents.find(
-        (content) => content.videoSecondaryInfoRenderer !== undefined,
-      )?.videoSecondaryInfoRenderer?.attributedDescription?.content ?? "",
-    );
-
-    return [
-      new ProviderTracklist({ part: "chapters", entries: chapters, confidence: 0.9 }),
-      new ProviderTracklist({ part: "description", entries: description, confidence: 0.8 }),
-    ]
-      .filter((tracklist) => tracklist.entries.length >= minimumEntries)
-      .concat(yield* commentTracklist(next));
+  const chapters = (
+    next.playerOverlays?.playerOverlayRenderer?.decoratedPlayerBarRenderer?.decoratedPlayerBarRenderer?.playerBar?.multiMarkersPlayerBarRenderer?.markersMap?.find(
+      (marker) => marker.key === descriptionChapters,
+    )?.value.chapters ?? []
+  ).flatMap(({ chapterRenderer: chapter }) => {
+    const entry = tracklistEntry(chapter.title.simpleText, chapter.timeRangeStartMillis);
+    return entry === undefined ? [] : [entry];
   });
+  const description = parseTracklist(
+    next.contents?.twoColumnWatchNextResults.results.results.contents.find(
+      (content) => content.videoSecondaryInfoRenderer !== undefined,
+    )?.videoSecondaryInfoRenderer?.attributedDescription?.content ?? "",
+  );
+
+  return [
+    new ProviderTracklist({ part: "chapters", entries: chapters, confidence: 0.9 }),
+    new ProviderTracklist({ part: "description", entries: description, confidence: 0.8 }),
+  ]
+    .filter((tracklist) => tracklist.entries.length >= minimumEntries)
+    .concat(yield* commentTracklist(next));
+});
 
 const youtubeHosts = new Set([
   "youtube.com",

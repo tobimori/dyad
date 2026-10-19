@@ -377,8 +377,8 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
     return packet;
   };
 
-  const play = <E, R>(source: Stream.Stream<Int16Array | Float32Array, E, R>, startAt: NtpTime) =>
-    Effect.gen(function* () {
+  const play = Effect.fn("play")(
+    function* <E, R>(source: Stream.Stream<Int16Array | Float32Array, E, R>, startAt: NtpTime) {
       const own = generation;
       const startRtp = rtpTime;
       mapping = { rtp: startRtp, ntp: startAt };
@@ -444,11 +444,14 @@ export const openRaopSender = Effect.fn("AirPlay.openSender")(function* (
         endAt: addFrames(startAt, endFrames, sampleRate),
         stopped: generation !== own,
       });
-    }).pipe(
-      Effect.catchTag("DatagramSocketError", (cause) => Effect.fail(networkError(cause))),
-      Effect.raceFirst(rtsp.closed),
-      Effect.annotateLogs({ device: device.name }),
-    );
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.catchTag("DatagramSocketError", (cause) => Effect.fail(networkError(cause))),
+        Effect.raceFirst(rtsp.closed),
+        Effect.annotateLogs({ device: device.name }),
+      ),
+  );
 
   const setVolume = (volume: number) => {
     const decibels = volume <= 0 ? -144 : -30 + 30 * Math.min(volume, 1);

@@ -20,23 +20,22 @@ const FanSummary = Schema.Union([
 ]);
 
 /** The username of the signed-in fan */
-export const readFanName = (credentials: Credentials) =>
-  Effect.gen(function* () {
-    const identity = credentials.get(identityCookie);
-    if (identity === undefined) {
-      return yield* new AccountLinkFailed({ reason: `No ${identityCookie} cookie` });
-    }
+export const readFanName = Effect.fn("readFanName")(function* (credentials: Credentials) {
+  const identity = credentials.get(identityCookie);
+  if (identity === undefined) {
+    return yield* new AccountLinkFailed({ reason: `No ${identityCookie} cookie` });
+  }
 
-    const request = HttpClientRequest.get(summaryUrl).pipe(
-      HttpClientRequest.setHeader("Cookie", `${identityCookie}=${Redacted.value(identity)}`),
-    );
-    const summary = yield* getJson(request, FanSummary).pipe(
-      Effect.mapError(
-        (error) => new AccountLinkFailed({ reason: providerError("Bandcamp")(error).reason }),
-      ),
-    );
-    if ("error" in summary) {
-      return yield* new AccountLinkFailed({ reason: `Bandcamp: ${summary.error_message}` });
-    }
-    return summary.collection_summary.username;
-  });
+  const request = HttpClientRequest.get(summaryUrl).pipe(
+    HttpClientRequest.setHeader("Cookie", `${identityCookie}=${Redacted.value(identity)}`),
+  );
+  const summary = yield* getJson(request, FanSummary).pipe(
+    Effect.mapError(
+      (error) => new AccountLinkFailed({ reason: providerError("Bandcamp")(error).reason }),
+    ),
+  );
+  if ("error" in summary) {
+    return yield* new AccountLinkFailed({ reason: `Bandcamp: ${summary.error_message}` });
+  }
+  return summary.collection_summary.username;
+});

@@ -19,23 +19,22 @@ const toMusicBrainzError = (error: LookupError | RateLimited) =>
 
 // The ListenBrainz mapper first. Only its misses use the MusicBrainz search, which allows one
 // request per second.
-const recordingsByText = (
+const recordingsByText = Effect.fn("recordingsByText")(function* (
   items: ReadonlyArray<{ readonly key: string; readonly artist: string; readonly title: string }>,
-) =>
-  Effect.gen(function* () {
-    const mapped = yield* lookupRecordings(items);
-    const searched = yield* Effect.forEach(
-      items.filter((item) => !mapped.has(item.key)),
-      (item) =>
-        searchRecording(item.artist, item.title).pipe(
-          Effect.map((recordings) => [item.key, recordings] as const),
-        ),
-    );
-    return new Map<string, ReadonlyArray<MusicBrainzRecording>>([
-      ...[...mapped].map(([key, recording]) => [key, [recording]] as const),
-      ...searched,
-    ]);
-  });
+) {
+  const mapped = yield* lookupRecordings(items);
+  const searched = yield* Effect.forEach(
+    items.filter((item) => !mapped.has(item.key)),
+    (item) =>
+      searchRecording(item.artist, item.title).pipe(
+        Effect.map((recordings) => [item.key, recordings] as const),
+      ),
+  );
+  return new Map<string, ReadonlyArray<MusicBrainzRecording>>([
+    ...[...mapped].map(([key, recording]) => [key, [recording]] as const),
+    ...searched,
+  ]);
+});
 
 /**
  * Finds MusicBrainz recordings for the matching of the core. The plugin owns HTTP, pacing and
