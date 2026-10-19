@@ -6,7 +6,6 @@ import {
   Output,
   OutputId,
   Playback,
-  PlayerResume,
   QueueEntry,
   QueueSplice,
   SessionCommand,
@@ -187,8 +186,6 @@ const makeSession = Effect.fn(function* (
     closing: Effect.void,
     // A play on a URL output counts for the device that sent the last command
     commandDevice: Option.none<DeviceId>(),
-    // The play of an entry that the output started offline. The server continues it.
-    handover: Option.none<PlayerResume>(),
     // The entry that asked for radio songs last, so that it asks once
     refilled: Option.none<EntryId>(),
   };
@@ -321,7 +318,6 @@ const makeSession = Effect.fn(function* (
       }
     }
 
-    state.handover = Option.filter(state.handover, (resume) => resume.entryId === playback.entryId);
     const entry = currentEntry();
     const output = playback.outputId === null ? undefined : players.get(playback.outputId);
     const deviceId =
@@ -330,16 +326,8 @@ const makeSession = Effect.fn(function* (
         ? Option.getOrUndefined(state.commandDevice)
         : undefined);
     if (Option.isNone(state.play) && playback.rate === 1 && entry && deviceId) {
-      const handover = Option.getOrUndefined(state.handover)?.play;
-      state.handover = Option.none();
       state.play = Option.some(
-        new OpenPlay({
-          entry,
-          deviceId,
-          startedAt: handover?.startedAt ?? now,
-          playedMs: handover?.playedMs ?? 0,
-          resumedAt: now,
-        }),
+        new OpenPlay({ entry, deviceId, startedAt: now, playedMs: 0, resumedAt: now }),
       );
     }
   });
@@ -767,6 +755,49 @@ const makeSession = Effect.fn(function* (
             return [];
           }),
 
+        Receive: (command) =>
+          Effect.gen(function* () {
+            if (command.ifRevision !== null && command.ifRevision !== playback.revision) {
+              return yield* fail("stale_queue");
+            }
+            const entries = command.entries.map(
+              (entry) => new QueueEntry({ ...entry, unplayable: false }),
+            );
+            spliceQueue([
+              new QueueSplice({ index: 0, remove: state.entries.length, insert: entries }),
+            ]);
+            state.nextEntryId = Math.max(
+              state.nextEntryId,
+              command.nextEntryId,
+              ...entries.map((entry) => entry.id + 1),
+            );
+            state.failures = 0;
+            // The sending replica records its part of the play; this part counts the lost time
+            state.play = Option.none();
+
+            const received = command.playback;
+            const { shuffle, repeat, autoplay, crossfadeSeconds, djStyle } = received;
+            setPlayback({ shuffle, repeat, autoplay, crossfadeSeconds, djStyle });
+            const current = entries.find((entry) => entry.id === received.entryId);
+            if (current === undefined || received.state === "stopped") {
+              stop(current?.id ?? null, now);
+            } else if (received.state === "playing") {
+              start(current.id, received.positionMs, now, room);
+            } else {
+              setPlayback({
+                state: "paused",
+                entryId: current.id,
+                positionMs: received.positionMs,
+                at: now,
+                rate: 0,
+                revision: playback.revision + 1,
+                outputId: room,
+                lost: !available(room),
+              });
+            }
+            return [];
+          }),
+
         // `Sessions` moves the queue, because it needs two rooms
         Transfer: () => Effect.die(new Error("A room cannot transfer by itself")),
 
@@ -1011,41 +1042,12 @@ const makeSession = Effect.fn(function* (
     );
   };
 
-  // The room's device connected as a player. It played on while it was away, and nobody changed
-  // the transport since.
-  const playerJoined = (resume: PlayerResume | null) =>
-    modify((now) =>
-      Effect.sync(() => {
-        const playback = state.playback;
-        if (playback.outputId !== room) return;
-
-        const adopts =
-          resume !== null &&
-          playback.group.length === 0 &&
-          resume.revision >= playback.revision &&
-          indexOf(resume.entryId) !== -1;
-        if (adopts) {
-          // An entry that ended on the device offline has a complete play, as after a natural end
-          if (playback.entryId !== null && resume.advanced.includes(playback.entryId)) {
-            state.ended = Option.some(playback.entryId);
-          }
-          if (resume.play !== null) state.handover = Option.some(resume);
-        }
-        setPlayback(
-          adopts
-            ? {
-                state: resume.state,
-                entryId: resume.entryId,
-                positionMs: resume.positionMs,
-                at: now,
-                rate: resume.state === "playing" ? 1 : 0,
-                revision: resume.revision,
-                lost: false,
-              }
-            : { lost: false },
-        );
-      }),
-    );
+  // The room's device connected as a player
+  const playerJoined = modify(() =>
+    Effect.sync(() => {
+      if (state.playback.outputId === room && state.playback.lost) setPlayback({ lost: false });
+    }),
+  );
 
   // In a group, the renderer finds that the device is gone
   const playerLeft = modify(() =>
@@ -1066,6 +1068,7 @@ const makeSession = Effect.fn(function* (
             room,
             name,
             queueVersion: state.queueVersion,
+            nextEntryId: state.nextEntryId,
             entries: state.entries,
             playback: state.playback,
           }),
@@ -1414,7 +1417,6 @@ const makeSessions = Effect.gen(function* () {
   const attach = (
     connection: Connection,
     player: { readonly name: string; readonly volume: number } | null,
-    resume: PlayerResume | null,
   ) =>
     roomsLock.withPermits(1)(
       Effect.gen(function* () {
@@ -1447,7 +1449,7 @@ const makeSessions = Effect.gen(function* () {
           { discard: true },
         );
         broadcastOutputs();
-        if (player !== null) yield* rooms.get(own)?.playerJoined(resume) ?? Effect.void;
+        if (player !== null) yield* rooms.get(own)?.playerJoined ?? Effect.void;
       }),
     );
 
@@ -1466,12 +1468,11 @@ const makeSessions = Effect.gen(function* () {
   const connect = Effect.fn(function* (
     deviceId: DeviceId,
     player: { readonly name: string; readonly volume: number } | null,
-    resume: PlayerResume | null,
   ) {
     const events = yield* Queue.unbounded<Event, Cause.Done>();
     const connection = new Connection({ deviceId, events, rooms: new Set() });
 
-    yield* Effect.acquireRelease(attach(connection, player, resume), () => detach(connection));
+    yield* Effect.acquireRelease(attach(connection, player), () => detach(connection));
     return Stream.fromQueue(events);
   });
 
@@ -1504,7 +1505,7 @@ const makeSessions = Effect.gen(function* () {
     const session = yield* roomOf(room);
     if (SessionCommand.guards.SetGroup(command))
       yield* releaseFor(room, [room, ...command.members]);
-    if (SessionCommand.isAnyOf(["Play", "JumpTo", "Resume"])(command)) {
+    if (SessionCommand.isAnyOf(["Play", "JumpTo", "Resume", "Receive"])(command)) {
       yield* releaseFor(room, [room]);
     }
     return yield* session.control(deviceId, request, sources, disliked);
@@ -1632,7 +1633,6 @@ const sourceSummaries = Effect.fn(function* (sourceIds: ReadonlyArray<string>) {
 
 export const connectDevice = Effect.fn("connectDevice")(function* (payload: {
   readonly player: { readonly volume: number } | null;
-  readonly resume: PlayerResume | null;
 }) {
   const principal = yield* CurrentPrincipal;
   const db = yield* Database;
@@ -1650,7 +1650,7 @@ export const connectDevice = Effect.fn("connectDevice")(function* (payload: {
     payload.player === null || row === undefined
       ? null
       : { name: row.name, volume: payload.player.volume };
-  return yield* sessions.connect(principal.deviceId, player, payload.resume);
+  return yield* sessions.connect(principal.deviceId, player);
 });
 
 export const controlSession = Effect.fn("controlSession")(function* (

@@ -1,5 +1,5 @@
 import { dieOnDatabaseError, orDieOnDatabaseError } from "@dyad/db/node";
-import { CurrentPrincipal, ServerDescriptor, ServerRpc, SourceCopies } from "@dyad/domain";
+import { ServerDescriptor, ServerRpc, SourceCopies } from "@dyad/domain";
 import { Context, Effect, Layer, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
@@ -15,7 +15,7 @@ import {
 } from "./auth.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
-import { insertPlay, listRecentPlays } from "./history.ts";
+import { listRecentPlays } from "./history.ts";
 import { homePage } from "./home.ts";
 import { forwardEffect, forwardStream } from "./home-server.ts";
 import { jobsLayer } from "./jobs.ts";
@@ -174,10 +174,6 @@ export const serverRoutes = Layer.unwrap(
         movePlaylistEntry(playlistId, entryId, direction).pipe(
           orDieOnDatabaseError("movePlaylistEntry"),
         ),
-      appendPlay: (play) =>
-        Effect.flatMap(CurrentPrincipal, (principal) =>
-          insertPlay({ ...play, deviceId: principal.deviceId }),
-        ).pipe(orDieOnDatabaseError("appendPlay")),
       watchChanges: () => watchChanges,
       prepareDownload: ({ sourceId, quality, capabilities }) =>
         prepareDownload(sourceId, quality, capabilities).pipe(

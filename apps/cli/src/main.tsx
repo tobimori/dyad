@@ -64,8 +64,8 @@ const player = Effect.fn(function* (controller: boolean) {
   yield* processErrorLogging(logServices);
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
-  // Views and edits use the replica of this device. Playback stays with the session on the
-  // home server until rooms run on each replica.
+  // Views and edits use the replica of this device. The rooms run on the home server; the
+  // replica of this device runs the room of the device while the home server is offline.
   const local = yield* startLocalReplica.pipe(Effect.provide(FetchHttpClient.layer));
   const localToken = yield* loadDeviceToken(local.origin);
   if (Option.isNone(localToken)) return yield* new NotJoined();
@@ -79,11 +79,6 @@ const player = Effect.fn(function* (controller: boolean) {
   const connection = yield* Layer.build(
     serverConnectionLayer(serverUrl, Option.some(token)).pipe(Layer.provide(logging)),
   );
-  const recordPlay = (play: Parameters<typeof replica.appendPlay>[0]) =>
-    replica.appendPlay(play).pipe(
-      Effect.catchCause((cause) => Effect.logWarning("Cannot record a play", cause)),
-      Effect.provideContext(logServices),
-    );
 
   const settings = yield* loadSettings.pipe(Effect.orElseSucceed(() => defaultSettings));
   const saveVolume = (value: number) =>
@@ -141,7 +136,7 @@ const player = Effect.fn(function* (controller: boolean) {
               serverUrl,
               volume,
               saveVolume,
-              recordPlay,
+              local: { url: local.origin, connection: replica },
               downloads,
             }).pipe(
               Layer.provide(Layer.succeedContext(connection)),
@@ -165,8 +160,8 @@ const player = Effect.fn(function* (controller: boolean) {
 
   const sessionServices = yield* Layer.build(
     sessionClientLayer({
-      player:
-        engine === null ? null : { capabilities, volume: engine.volume, resume: engine.resume },
+      player: engine === null ? null : { capabilities, volume: engine.volume },
+      local: engine === null ? null : replica,
     }).pipe(Layer.provide(Layer.succeedContext(connection)), Layer.provide(logging)),
   );
   const session = Context.get(sessionServices, SessionClient);

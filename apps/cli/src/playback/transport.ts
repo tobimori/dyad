@@ -1,4 +1,4 @@
-import { currentEntryOf, isOwnRoom, isTransportCommand, positionOf } from "@dyad/client-runtime";
+import { currentEntryOf, positionOf } from "@dyad/client-runtime";
 import type { SessionClient } from "@dyad/client-runtime";
 import { SessionCommand, skipSeekTarget } from "@dyad/domain";
 import type { SourceSegment } from "@dyad/domain";
@@ -13,12 +13,6 @@ export const pluginTransport = (
   segmentsOf: (sourceId: string) => ReadonlyArray<SourceSegment>,
 ) => {
   const send = Effect.fn(function* (command: typeof SessionCommand.Type) {
-    const view = yield* SubscriptionRef.get(session.view);
-    // Offline, only the device that plays can change its own audio
-    const offline = !view.connected && isOwnRoom(view) && isTransportCommand(command);
-    if (offline && engine?.controlOffline(command)) {
-      return;
-    }
     yield* session
       .send(command)
       .pipe(

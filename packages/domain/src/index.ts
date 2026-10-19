@@ -613,7 +613,10 @@ export class DeviceSummary extends Schema.Class<DeviceSummary>("DeviceSummary")(
   current: Schema.Boolean,
 }) {}
 
-/** Unique in its room. The room never uses an ID again, also after a restart. */
+/**
+ * Unique in its room. The room never makes an ID again, also after a restart; `Receive` keeps the
+ * IDs of the room that sent the queue.
+ */
 export const EntryId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("EntryId"));
 export type EntryId = typeof EntryId.Type;
 
@@ -722,6 +725,8 @@ export const SessionEvent = Schema.TaggedUnion({
     room: OutputId,
     name: Schema.String,
     queueVersion: Schema.Int,
+    /** The ID of the next entry that the room makes */
+    nextEntryId: Schema.Int,
     entries: Schema.Array(QueueEntry),
     playback: Playback,
   },
@@ -793,6 +798,18 @@ export const SessionCommand = Schema.TaggedUnion({
    * `groupable` outputs. `[]` ends the group.
    */
   SetGroup: { members: Schema.Array(OutputId).check(Schema.isMaxLength(31)) },
+  /**
+   * Replaces the queue and the transport with those of another room, with their entry IDs, for a
+   * move between replicas. `playback.positionMs` is the position when the client sends it. Fails
+   * with `stale_queue` when the room's revision is not `ifRevision`.
+   */
+  Receive: {
+    entries: Schema.Array(QueueEntry).check(Schema.isMaxLength(10_000)),
+    playback: Playback,
+    /** The sender's next entry ID, so that the room makes no ID that the sender made */
+    nextEntryId: Schema.Int,
+    ifRevision: Schema.NullOr(Schema.Int),
+  },
   SetOutputDelay: {
     outputId: OutputId,
     delayMs: Schema.Int.check(Schema.isBetween({ minimum: -2000, maximum: 2000 })),
@@ -824,25 +841,6 @@ export class SessionCommandFailed extends Schema.TaggedError<SessionCommandFaile
     ]),
   },
 ) {}
-
-/**
- * What a device played in its own room before it lost the server. The server continues from it only
- * when the room still plays on the device and nobody changed the transport since `revision`.
- */
-export class PlayerResume extends Schema.Class<PlayerResume>("PlayerResume")({
-  revision: Schema.Int,
-  entryId: EntryId,
-  positionMs: Schema.Number,
-  state: Schema.Literals(["playing", "paused"]),
-  /** The entries that ended by themselves on the device while it was offline */
-  advanced: Schema.Array(EntryId)
-    .check(Schema.isMaxLength(10_000))
-    .pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
-  /** The play of `entryId` when it started offline. The server continues it when it adopts. */
-  play: Schema.NullOr(Schema.Struct({ startedAt: Schema.Number, playedMs: Schema.Number })).pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(null)),
-  ),
-}) {}
 
 const PublicRpc = RpcGroup.make(
   Rpc.make("describe", { success: ServerDescriptor }),
@@ -922,7 +920,6 @@ const OwnerRpc = RpcGroup.make(
           volume: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
         }),
       ),
-      resume: Schema.NullOr(PlayerResume),
     },
     success: SessionEvent,
     stream: true,
@@ -1007,16 +1004,6 @@ const OwnerRpc = RpcGroup.make(
       playlistId: Schema.String,
       entryId: Schema.String,
       direction: Schema.Literals([1, -1]),
-    },
-  }),
-  // A play of this device while it played without its room
-  Rpc.make("appendPlay", {
-    payload: {
-      sourceId: Schema.String,
-      context: PlayContext,
-      startedAt: Schema.Number,
-      playedMs: Schema.Number,
-      completed: Schema.Boolean,
     },
   }),
   // A hint after the subscription, then at most one per 250 ms after a commit that replicates

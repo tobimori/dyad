@@ -8,13 +8,7 @@ import {
   nextEntry,
   positionAt,
 } from "@dyad/domain";
-import type {
-  DeviceId,
-  PlaybackCapabilities,
-  PlayerResume,
-  QueueEntry,
-  SourceSummary,
-} from "@dyad/domain";
+import type { DeviceId, PlaybackCapabilities, QueueEntry, SourceSummary } from "@dyad/domain";
 import { NowPlaying } from "@dyad/plugin/client";
 import {
   Clock,
@@ -45,6 +39,8 @@ export class RoomSummary extends Data.Class<{
 
 /** The client's copy of one room */
 export class SessionView extends Data.Class<{
+  /** `local` while the replica of this device runs its room without the home server */
+  readonly replica: "home" | "local";
   /** `false` while the client has no stream from the server. The view keeps the last state. */
   readonly connected: boolean;
   /** `null` before the first connection */
@@ -89,6 +85,7 @@ const stoppedPlayback = new Playback({
 });
 
 const initialView = new SessionView({
+  replica: "home",
   connected: false,
   deviceId: null,
   generation: 0,
@@ -119,15 +116,6 @@ export const positionOf = (view: SessionView, now: number) => {
   const durationMs = currentEntryOf(view)?.source.durationMs ?? null;
   return durationMs === null ? position : Math.min(position, durationMs);
 };
-
-/** The view shows these at once, before the server confirms them */
-export const isTransportCommand = SessionCommand.isAnyOf([
-  "Pause",
-  "Resume",
-  "Seek",
-  "Skip",
-  "SetVolume",
-]);
 
 // The playback fields that the server sets for a transport command, as `sessions.ts` does.
 // `undefined` when the command changes nothing.
@@ -229,6 +217,7 @@ const sameNowPlaying = (left: NowPlaying | null, right: NowPlaying | null) => {
 class RoomState extends Data.Class<{
   readonly name: string;
   readonly queueVersion: number;
+  readonly nextEntryId: number;
   readonly entries: ReadonlyArray<QueueEntry>;
   readonly confirmed: Playback;
   readonly pending: ReadonlyArray<Pending>;
@@ -242,68 +231,104 @@ const withPending = (room: RoomState) =>
     revision: room.confirmed.revision + room.pending.length,
   });
 
+// What the client knows of the rooms of one replica
+const makeReplicaState = (connection: typeof ServerConnection.Service) => ({
+  connection,
+  // Counts the connections, so that a retry stops when a new connection replaces the old one
+  epoch: 0,
+  connected: false,
+  deviceId: Option.none<DeviceId>(),
+  generation: 0,
+  superseded: false,
+  outputs: new Array<Output>(),
+  clockOffset: 0,
+  rooms: new Map<OutputId, RoomState>(),
+  // The rooms of `Connected` whose snapshot did not come yet
+  awaiting: new Set<OutputId>(),
+});
+
+const ownRoomOf = (replica: ReturnType<typeof makeReplicaState>) =>
+  Option.getOrNull(Option.map(replica.deviceId, deviceOutputId));
+
+const changeRoom = (
+  replica: ReturnType<typeof makeReplicaState>,
+  id: OutputId,
+  change: (room: RoomState) => Partial<RoomState>,
+) => {
+  const room = replica.rooms.get(id);
+  if (room === undefined) return;
+  const next = new RoomState({ ...room, ...change(room) });
+  replica.rooms.set(
+    id,
+    new RoomState({
+      ...next,
+      pending: next.pending.filter(
+        (pending) => pending.revision === null || pending.revision > next.confirmed.revision,
+      ),
+    }),
+  );
+};
+
 const makeSessionClient = Effect.fn(function* (options: {
   /** `null` for a client that only controls */
   readonly player: {
     readonly capabilities: PlaybackCapabilities;
     readonly volume: Effect.Effect<number>;
-    /** What the device plays now, sent when it connects again */
-    readonly resume: Effect.Effect<PlayerResume | null>;
   } | null;
+  /**
+   * The replica of this device, which runs its room while the home server is offline. Only for a
+   * client with a `player`.
+   */
+  readonly local: typeof ServerConnection.Service | null;
 }) {
-  const connection = yield* ServerConnection;
   const crypto = yield* Crypto.Crypto;
+  const scope = yield* Effect.scope;
   const view = yield* SubscriptionRef.make(initialView);
   const own = yield* SubscriptionRef.make(initialView);
   // Commands reach the server in the order of the user's keys
   const sending = yield* Semaphore.make(1);
+  const home = makeReplicaState(yield* ServerConnection);
+  const local = options.local === null ? null : makeReplicaState(options.local);
   const state = {
-    // Counts the connections, so that a retry stops when a new connection replaces the old one
-    epoch: 0,
-    connected: false,
-    deviceId: Option.none<DeviceId>(),
-    generation: 0,
-    superseded: false,
-    outputs: new Array<Output>(),
-    clockOffset: 0,
-    rooms: new Map<OutputId, RoomState>(),
     // The room that the owner chose, or the first choice after all snapshots came
     selected: Option.none<OutputId>(),
-    // The rooms of `Connected` whose snapshot did not come yet
-    awaiting: new Set<OutputId>(),
-    // What this device plays in its own room while it is offline
-    local: Option.none<Playback>(),
+    // The local replica plays the room of this device until the home server takes it back
+    offline: false,
+    // The home room when the local replica took it over
+    handedOver: Option.none<{ readonly revision: number; readonly queueVersion: number }>(),
+    // Each set of snapshots can start a hand-back, but only one runs
+    handingBack: false,
+    // The view changes replica when the room there has the revision of `Receive`. Before, the
+    // engine sees a room without the queue.
+    switching: Option.none<{ readonly offline: boolean; readonly revision: number }>(),
   };
-
-  const ownRoom = () => Option.getOrNull(Option.map(state.deviceId, deviceOutputId));
 
   // A device that plays starts on its own room, a controller on the room that plays
   const selectedRoom = () => {
-    if (Option.isSome(state.selected) && state.rooms.has(state.selected.value)) {
+    if (Option.isSome(state.selected) && home.rooms.has(state.selected.value)) {
       return state.selected.value;
     }
-    const mine = ownRoom();
-    if (options.player !== null && mine !== null && state.rooms.has(mine)) return mine;
-    const playing = [...state.rooms].find(([, room]) => room.confirmed.state === "playing");
-    return playing?.[0] ?? state.rooms.keys().next().value ?? null;
+    const mine = ownRoomOf(home);
+    if (options.player !== null && mine !== null && home.rooms.has(mine)) return mine;
+    const playing = [...home.rooms].find(([, room]) => room.confirmed.state === "playing");
+    return playing?.[0] ?? home.rooms.keys().next().value ?? null;
   };
 
-  const viewOf = (id: OutputId | null) => {
-    const room = id === null ? undefined : state.rooms.get(id);
-    const local = id !== null && id === ownRoom() ? state.local : Option.none<Playback>();
-    const confirmed = room?.confirmed ?? stoppedPlayback;
+  const viewOf = (replica: ReturnType<typeof makeReplicaState>, id: OutputId | null) => {
+    const room = id === null ? undefined : replica.rooms.get(id);
     return new SessionView({
-      connected: state.connected,
-      deviceId: Option.getOrNull(state.deviceId),
-      generation: state.generation,
-      superseded: state.superseded,
+      replica: replica === home ? "home" : "local",
+      connected: replica.connected,
+      deviceId: Option.getOrNull(replica.deviceId),
+      generation: replica.generation,
+      superseded: replica.superseded,
       room: room === undefined ? null : id,
       name: room?.name ?? "",
-      rooms: [...state.rooms].map(
+      rooms: [...replica.rooms].map(
         ([roomId, summary]) =>
           new RoomSummary({
             id: roomId,
-            name: state.outputs.find((output) => output.id === roomId)?.name ?? summary.name,
+            name: replica.outputs.find((output) => output.id === roomId)?.name ?? summary.name,
             playback: summary.confirmed,
             current:
               summary.entries.find((entry) => entry.id === summary.confirmed.entryId)?.source ??
@@ -312,151 +337,285 @@ const makeSessionClient = Effect.fn(function* (options: {
       ),
       queueVersion: room?.queueVersion ?? 0,
       entries: room?.entries ?? [],
-      playback: Option.getOrElse(local, () =>
-        room === undefined ? stoppedPlayback : withPending(room),
-      ),
-      confirmed,
-      outputs: state.outputs,
-      clockOffset: state.clockOffset,
+      playback: room === undefined ? stoppedPlayback : withPending(room),
+      confirmed: room?.confirmed ?? stoppedPlayback,
+      outputs: replica.outputs,
+      clockOffset: replica.clockOffset,
     });
   };
 
   const publish = Effect.suspend(() => {
+    if (state.offline && local !== null) {
+      const offlineView = viewOf(local, ownRoomOf(local));
+      return Effect.all([
+        SubscriptionRef.set(view, offlineView),
+        SubscriptionRef.set(own, offlineView),
+      ]);
+    }
     const selected = selectedRoom();
-    if (Option.isNone(state.selected) && state.awaiting.size === 0 && selected !== null) {
+    if (Option.isNone(state.selected) && home.awaiting.size === 0 && selected !== null) {
       state.selected = Option.some(selected);
     }
     return Effect.all([
-      SubscriptionRef.set(view, viewOf(selected)),
-      SubscriptionRef.set(own, viewOf(ownRoom())),
+      SubscriptionRef.set(view, viewOf(home, selected)),
+      SubscriptionRef.set(own, viewOf(home, ownRoomOf(home))),
     ]);
   });
 
-  const changeRoom = (id: OutputId, change: (room: RoomState) => Partial<RoomState>) => {
-    const room = state.rooms.get(id);
-    if (room === undefined) return;
-    const next = new RoomState({ ...room, ...change(room) });
-    state.rooms.set(
-      id,
-      new RoomState({
-        ...next,
-        pending: next.pending.filter(
-          (pending) => pending.revision === null || pending.revision > next.confirmed.revision,
-        ),
-      }),
-    );
-  };
-
-  const deviceIdOf = Effect.gen(function* () {
-    if (Option.isSome(state.deviceId)) return state.deviceId.value;
-
-    const devices = yield* connection.listDevices();
+  const deviceIdOf = Effect.fn(function* (replica: ReturnType<typeof makeReplicaState>) {
+    if (Option.isSome(replica.deviceId)) return replica.deviceId.value;
+    const devices = yield* replica.connection.listDevices();
     return devices.find((device) => device.current)?.id ?? null;
   });
 
-  const follow = Effect.gen(function* () {
-    const deviceId = yield* deviceIdOf;
-    // After a newer connection took over, this client stays a controller
-    const player = state.superseded ? null : options.player;
-    const payload = {
-      player:
-        player === null
-          ? null
-          : { capabilities: player.capabilities, volume: yield* player.volume },
-      resume: player === null ? null : yield* player.resume,
-    };
+  const control = (
+    replica: ReturnType<typeof makeReplicaState>,
+    room: OutputId,
+    requestId: string,
+    command: Command,
+    ifQueueVersion: number | null,
+  ) => replica.connection.controlSession({ room, requestId, command, ifQueueVersion });
 
-    yield* connection.connectDevice(payload).pipe(
-      Stream.runForEach((event) =>
-        Effect.flatMap(Clock.currentTimeMillis, (receivedAt) =>
-          SessionEvent.match<Effect.Effect<void, MissedQueueChange>>(event, {
-            Connected: (connected) =>
-              Effect.sync(() => {
-                state.epoch += 1;
-                state.connected = true;
-                state.deviceId = Option.fromNullishOr(deviceId);
-                state.generation = connected.generation;
-                state.outputs = [...connected.outputs];
-                state.clockOffset = connected.serverTime - receivedAt;
-                state.local = Option.none();
-                state.awaiting = new Set(connected.rooms);
-                // The rooms keep their last state until their snapshot comes
-                for (const id of state.rooms.keys()) {
-                  if (!connected.rooms.includes(id)) state.rooms.delete(id);
-                }
-                for (const id of state.rooms.keys()) changeRoom(id, () => ({ pending: [] }));
-              }),
+  // The queue and the transport of a room, with the position now, for `Receive`
+  const receiveOf = Effect.fn(function* (
+    replica: ReturnType<typeof makeReplicaState>,
+    room: RoomState,
+    ifRevision: number | null,
+  ) {
+    const now = (yield* Clock.currentTimeMillis) + replica.clockOffset;
+    return SessionCommand.cases.Receive.make({
+      entries: room.entries,
+      playback: new Playback({ ...room.confirmed, positionMs: positionAt(room.confirmed, now) }),
+      nextEntryId: room.nextEntryId,
+      ifRevision,
+    });
+  });
 
-            RoomSnapshot: (snapshot) =>
-              Effect.sync(() => {
-                state.awaiting.delete(snapshot.room);
-                state.rooms.set(
-                  snapshot.room,
-                  new RoomState({
-                    name: snapshot.name,
-                    queueVersion: snapshot.queueVersion,
-                    entries: snapshot.entries,
-                    confirmed: snapshot.playback,
-                    pending: [],
-                  }),
-                );
-              }),
+  const switchTo = (offline: boolean, revision: number) =>
+    Effect.suspend(() => {
+      state.switching = Option.some({ offline, revision });
+      return settleSwitch;
+    });
 
-            QueueChanged: (change) =>
-              Effect.gen(function* () {
-                const room = state.rooms.get(change.room);
-                if (room === undefined || change.fromVersion !== room.queueVersion) {
-                  return yield* new MissedQueueChange();
-                }
-                changeRoom(change.room, () => ({
-                  queueVersion: change.version,
-                  entries: applySplices(room.entries, change.splices),
-                }));
-              }),
+  const settleSwitch = Effect.suspend(() => {
+    if (Option.isNone(state.switching) || local === null) return Effect.void;
+    const { offline, revision } = state.switching.value;
+    const replica = offline ? local : home;
+    const id = ownRoomOf(replica);
+    const room = id === null ? undefined : replica.rooms.get(id);
+    if (room === undefined || room.confirmed.revision < revision) return Effect.void;
+    state.switching = Option.none();
+    state.offline = offline;
+    // The local room stops, so that it does not play on or start a radio
+    const source = ownRoomOf(local);
+    const stale = source === null ? undefined : local.rooms.get(source);
+    const clear =
+      offline || source === null || stale === undefined || stale.entries.length === 0
+        ? Effect.void
+        : Effect.flatMap(crypto.randomUUIDv4(), (requestId) =>
+            control(
+              local,
+              source,
+              requestId,
+              SessionCommand.cases.Clear.make({ keepCurrent: false }),
+              null,
+            ),
+          ).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot clear the room", cause)));
+    return Effect.andThen(publish, Effect.forkIn(clear, scope));
+  });
 
-            // The sample with the shortest delay gives the best offset
-            PlaybackChanged: (change) =>
-              Effect.sync(() => {
-                changeRoom(change.room, () => ({ confirmed: change.playback }));
-                state.clockOffset = Math.max(state.clockOffset, change.serverTime - receivedAt);
-              }),
+  // The home server went away while its room of this device had a queue
+  const handOff = Effect.gen(function* () {
+    if (local === null || !local.connected || state.offline || Option.isSome(state.switching)) {
+      return;
+    }
+    const mine = ownRoomOf(home);
+    const target = ownRoomOf(local);
+    const room = mine === null ? undefined : home.rooms.get(mine);
+    if (target === null) return;
 
-            RoomRemoved: ({ room }) => Effect.sync(() => state.rooms.delete(room)),
+    if (room !== undefined && room.entries.length > 0 && room.confirmed.outputId === mine) {
+      const command = yield* receiveOf(home, room, null);
+      const requestId = yield* crypto.randomUUIDv4();
+      const result = yield* control(local, target, requestId, command, null);
+      state.handedOver = Option.some({
+        revision: room.confirmed.revision,
+        queueVersion: room.queueVersion,
+      });
+      return yield* switchTo(true, result.revision);
+    }
+    state.offline = true;
+    yield* publish;
+  }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot play without the server", cause)));
 
-            OutputsChanged: (change) => Effect.sync(() => (state.outputs = [...change.outputs])),
+  // The home server is back, or the app quit while offline. The home room of this device
+  // continues from the local room, unless somebody changed it in the meantime.
+  const handBack = Effect.gen(function* () {
+    if (local === null || state.handingBack || Option.isSome(state.switching)) return;
+    state.handingBack = true;
+    const mine = ownRoomOf(home);
+    const source = ownRoomOf(local);
+    const room = source === null ? undefined : local.rooms.get(source);
+    const target = mine === null ? undefined : home.rooms.get(mine);
+    const handedOver = state.handedOver;
+    state.handedOver = Option.none();
 
-            Superseded: () => Effect.sync(() => (state.superseded = true)),
-          }).pipe(Effect.andThen(publish)),
-        ),
-      ),
-    );
+    const used =
+      room !== undefined && room.entries.length > 0 && room.confirmed.state !== "stopped";
+    // A local room from a start without the server never replaces a room that plays
+    const takes = Option.isSome(handedOver) || (used && target?.confirmed.state !== "playing");
+    const received =
+      mine !== null && room !== undefined && takes
+        ? yield* control(
+            home,
+            mine,
+            yield* crypto.randomUUIDv4(),
+            yield* receiveOf(
+              local,
+              room,
+              Option.getOrNull(Option.map(handedOver, (known) => known.revision)),
+            ),
+            Option.getOrNull(Option.map(handedOver, (known) => known.queueVersion)),
+          ).pipe(
+            Effect.map((result) => result.revision),
+            Effect.catchTag("SessionCommandFailed", () => Effect.succeed(0)),
+          )
+        : 0;
+    yield* switchTo(false, received);
   }).pipe(
-    Effect.catchCause((cause) => Effect.logDebug("The session stream ended", cause)),
-    Effect.andThen(
-      Effect.suspend(() => {
-        state.connected = false;
-        return publish;
-      }),
-    ),
+    Effect.catchCause((cause) => Effect.logWarning("Cannot give the room back", cause)),
+    Effect.ensuring(Effect.sync(() => (state.handingBack = false))),
   );
 
-  yield* Effect.forkScoped(Effect.repeat(follow, Schedule.spaced("1 second")));
+  const follow = Effect.fn(
+    function* (replica: ReturnType<typeof makeReplicaState>) {
+      const deviceId = yield* deviceIdOf(replica);
+      // After a newer connection took over, this client stays a controller
+      const player = replica.superseded ? null : options.player;
+      const payload = {
+        player:
+          player === null
+            ? null
+            : { capabilities: player.capabilities, volume: yield* player.volume },
+      };
+
+      yield* replica.connection.connectDevice(payload).pipe(
+        Stream.runForEach((event) =>
+          Effect.flatMap(Clock.currentTimeMillis, (receivedAt) =>
+            SessionEvent.match<Effect.Effect<void, MissedQueueChange>>(event, {
+              Connected: (connected) =>
+                Effect.sync(() => {
+                  replica.epoch += 1;
+                  replica.connected = true;
+                  replica.deviceId = Option.fromNullishOr(deviceId);
+                  replica.generation = connected.generation;
+                  replica.outputs = [...connected.outputs];
+                  replica.clockOffset = connected.serverTime - receivedAt;
+                  replica.awaiting = new Set(connected.rooms);
+                  // The rooms keep their last state until their snapshot comes
+                  for (const id of replica.rooms.keys()) {
+                    if (!connected.rooms.includes(id)) replica.rooms.delete(id);
+                  }
+                  for (const id of replica.rooms.keys()) {
+                    changeRoom(replica, id, () => ({ pending: [] }));
+                  }
+                }),
+
+              RoomSnapshot: (snapshot) =>
+                Effect.gen(function* () {
+                  replica.awaiting.delete(snapshot.room);
+                  replica.rooms.set(
+                    snapshot.room,
+                    new RoomState({
+                      name: snapshot.name,
+                      queueVersion: snapshot.queueVersion,
+                      nextEntryId: snapshot.nextEntryId,
+                      entries: snapshot.entries,
+                      confirmed: snapshot.playback,
+                      pending: [],
+                    }),
+                  );
+                  const complete = (known: typeof home | null) =>
+                    known === null || (known.connected && known.awaiting.size === 0);
+                  if (complete(home) && complete(local)) yield* Effect.forkIn(handBack, scope);
+                }),
+
+              QueueChanged: (change) =>
+                Effect.gen(function* () {
+                  const room = replica.rooms.get(change.room);
+                  if (room === undefined || change.fromVersion !== room.queueVersion) {
+                    return yield* new MissedQueueChange();
+                  }
+                  const entries = applySplices(room.entries, change.splices);
+                  changeRoom(replica, change.room, () => ({
+                    queueVersion: change.version,
+                    entries,
+                    nextEntryId: Math.max(
+                      room.nextEntryId,
+                      ...change.splices.flatMap((splice) =>
+                        splice.insert.map((entry) => entry.id + 1),
+                      ),
+                    ),
+                  }));
+                }),
+
+              // The sample with the shortest delay gives the best offset
+              PlaybackChanged: (change) =>
+                Effect.sync(() => {
+                  changeRoom(replica, change.room, () => ({ confirmed: change.playback }));
+                  replica.clockOffset = Math.max(
+                    replica.clockOffset,
+                    change.serverTime - receivedAt,
+                  );
+                }),
+
+              RoomRemoved: ({ room }) => Effect.sync(() => replica.rooms.delete(room)),
+
+              OutputsChanged: (change) =>
+                Effect.sync(() => (replica.outputs = [...change.outputs])),
+
+              Superseded: () => Effect.sync(() => (replica.superseded = true)),
+            }).pipe(Effect.andThen(publish), Effect.andThen(settleSwitch)),
+          ),
+        ),
+      );
+    },
+    Effect.catchCause((cause) => Effect.logDebug("The session stream ended", cause)),
+    (effect, replica) =>
+      effect.pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            replica.connected = false;
+            return replica === home ? Effect.andThen(publish, handOff) : publish;
+          }),
+        ),
+      ),
+  );
+
+  for (const replica of local === null ? [home] : [home, local]) {
+    yield* Effect.forkScoped(Effect.repeat(follow(replica), Schedule.spaced("1 second")));
+  }
 
   /**
-   * Sends a command to `target`, by default the selected room. A transport command shows in the
-   * view at once. A retry sends the same request ID, so that the server applies the command once.
+   * Sends a command to `target`, by default the room of the view. A transport command shows in
+   * the view at once. A retry sends the same request ID, so that the server applies the command
+   * once.
    */
   const send = Effect.fn(function* (command: Command, target?: OutputId) {
-    const current = target === undefined ? yield* SubscriptionRef.get(view) : viewOf(target);
+    const replica = state.offline && local !== null ? local : home;
+    const current =
+      target === undefined
+        ? yield* SubscriptionRef.get(state.offline ? own : view)
+        : viewOf(replica, target);
     const room = current.room;
     if (!current.connected || room === null) return yield* new SessionOffline();
 
     const requestId = yield* crypto.randomUUIDv4();
-    const epoch = state.epoch;
+    const epoch = replica.epoch;
     const now = (yield* Clock.currentTimeMillis) + current.clockOffset;
 
     if (SessionCommand.guards.SetVolume(command)) {
-      state.outputs = state.outputs.map((output) =>
+      replica.outputs = replica.outputs.map((output) =>
         output.id === command.outputId
           ? new Output({ ...output, volume: command.volume, muted: false })
           : output,
@@ -464,27 +623,29 @@ const makeSessionClient = Effect.fn(function* (options: {
     }
     const fields = optimisticFields(current, command, now);
     if (fields !== undefined) {
-      changeRoom(room, (latest) => ({
+      changeRoom(replica, room, (latest) => ({
         pending: [...latest.pending, new Pending({ requestId, fields, revision: null })],
       }));
     }
     yield* publish;
 
     const forget = Effect.suspend(() => {
-      changeRoom(room, (latest) => ({
+      changeRoom(replica, room, (latest) => ({
         pending: latest.pending.filter((pending) => pending.requestId !== requestId),
       }));
       return publish;
     });
 
     const request = Effect.gen(function* () {
-      if (state.epoch !== epoch) return yield* new SessionOffline();
-      return yield* connection.controlSession({ room, requestId, command, ifQueueVersion: null });
+      if (replica.epoch !== epoch) return yield* new SessionOffline();
+      return yield* control(replica, room, requestId, command, null);
     }).pipe(
       Effect.retry({
         schedule: Schedule.spaced("500 millis"),
         while: (error) =>
-          Predicate.isTagged(error, "RpcClientError") && state.epoch === epoch && state.connected,
+          Predicate.isTagged(error, "RpcClientError") &&
+          replica.epoch === epoch &&
+          replica.connected,
       }),
     );
 
@@ -493,7 +654,7 @@ const makeSessionClient = Effect.fn(function* (options: {
       .pipe(
         Effect.tap((result) =>
           Effect.suspend(() => {
-            changeRoom(room, (latest) => ({
+            changeRoom(replica, room, (latest) => ({
               pending: latest.pending.map((pending) =>
                 pending.requestId === requestId
                   ? new Pending({ ...pending, revision: result.revision })
@@ -517,6 +678,15 @@ const makeSessionClient = Effect.fn(function* (options: {
       return publish;
     });
 
+  /** From the device that plays `own`, to the replica of that room */
+  const report = (
+    from: SessionView,
+    fields: Omit<Parameters<typeof home.connection.reportPlayback>[0], "generation">,
+  ) => {
+    const replica = from.replica === "local" && local !== null ? local : home;
+    return replica.connection.reportPlayback({ ...fields, generation: from.generation });
+  };
+
   const nowPlaying = SubscriptionRef.changes(view).pipe(
     // While the output loads, plugins keep the previous source, so that a skip is one change
     Stream.filter((current) => !isLoading(current)),
@@ -526,27 +696,15 @@ const makeSessionClient = Effect.fn(function* (options: {
     Stream.changesWith(sameNowPlaying),
   );
 
-  /** While offline, the own room shows what this device plays. The next snapshot replaces it. */
-  const showLocal = (local: { readonly playback: Playback; readonly volume: number }) =>
-    Effect.suspend(() => {
-      if (state.connected) return Effect.void;
-      state.local = Option.some(local.playback);
-      const mine = ownRoom();
-      state.outputs = state.outputs.map((output) =>
-        output.id === mine ? new Output({ ...output, volume: local.volume }) : output,
-      );
-      return publish;
-    });
-
   return {
-    /** The room that the owner chose */
+    /** The room that the owner chose, or the local room of this device while offline */
     view,
     /** The room of this device, which its engine plays */
     own,
     send,
     selectRoom,
+    report,
     nowPlaying,
-    showLocal,
   };
 });
 

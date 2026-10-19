@@ -1,10 +1,4 @@
-import {
-  currentEntryOf,
-  deviceOutputId,
-  isOwnRoom,
-  isTransportCommand,
-  positionOf,
-} from "@dyad/client-runtime";
+import { currentEntryOf, isOwnRoom, positionOf } from "@dyad/client-runtime";
 import type { ListenFeed, SessionClient } from "@dyad/client-runtime";
 import { SessionCommand, skipSeekTarget } from "@dyad/domain";
 import type { OutputId, PlayContext, SourceSegment, SourceSummary } from "@dyad/domain";
@@ -95,7 +89,6 @@ export function usePlayer(props: {
   const entries = view.entries;
   const current = currentEntryOf(view);
   const currentIndex = current === undefined ? null : entries.indexOf(current);
-  const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
   const volumeTarget = playback.outputId ?? view.room;
   const volumeOutput = view.outputs.find((output) => output.id === volumeTarget);
   const volume = volumeOutput?.volume ?? null;
@@ -114,10 +107,6 @@ export function usePlayer(props: {
   }, [playback.state]);
 
   const send = (command: typeof SessionCommand.Type) => {
-    // Offline, only the device that plays can change its own audio
-    const offline = !view.connected && isOwnRoom(view) && isTransportCommand(command);
-    if (offline && props.engine?.controlOffline(command)) return;
-
     props.run(
       props.session.send(command).pipe(
         Effect.catchTags({
@@ -216,10 +205,8 @@ export function usePlayer(props: {
 
   // Offline, the view shows what this device plays, or the last state of another output
   const offlineText = () => {
-    if (view.connected) return null;
-    return props.engine !== null && playback.outputId === own && !view.superseded
-      ? "Offline, playing downloaded audio"
-      : "Offline, showing the last known state";
+    if (view.replica === "local") return "Offline, playing downloaded audio";
+    return view.connected ? null : "Offline, showing the last known state";
   };
 
   // A loading state on another output; this device shows its own audio

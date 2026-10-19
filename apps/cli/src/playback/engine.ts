@@ -1,13 +1,7 @@
 import { ServerConnection, deviceOutputId, positionOf, titleOf } from "@dyad/client-runtime";
 import type { Downloads, SessionClient, SessionView } from "@dyad/client-runtime";
-import {
-  Playback,
-  PlaybackUnavailable,
-  PlayerResume,
-  SessionCommand,
-  nextEntry,
-} from "@dyad/domain";
-import type { EntryId, PlayContext, QueueEntry, RepeatMode } from "@dyad/domain";
+import { PlaybackUnavailable, nextEntry } from "@dyad/domain";
+import type { EntryId, QueueEntry, RepeatMode } from "@dyad/domain";
 import type { Audio } from "@opentui/core";
 import {
   Cause,
@@ -52,17 +46,14 @@ const nothingFollowed = new Followed({ generation: -1, revision: -1, entryId: nu
 // The download of one entry. Closing `scope` stops it.
 class Buffered extends Data.Class<{
   readonly scope: Scope.Closeable;
+  // The server of the stream, also for seeks
+  readonly url: string;
   readonly fetching: Fiber.Fiber<Fetched, Effect.Error<ReturnType<typeof fetchSource>>>;
 }> {}
 
 const settled = (buffered: Buffered) => {
   const exit = buffered.fetching.pollUnsafe();
   return exit !== undefined && (Exit.isFailure(exit) || downloadState(exit.value) !== "loading");
-};
-
-const complete = (buffered: Buffered | undefined) => {
-  const exit = buffered?.fetching.pollUnsafe();
-  return exit !== undefined && Exit.isSuccess(exit) && downloadState(exit.value) === "done";
 };
 
 const failed = (buffered: Buffered) => {
@@ -92,19 +83,6 @@ const upcoming = (
   return result;
 };
 
-// A play of an entry that started while the device was offline
-class Listen extends Data.Class<{
-  readonly entry: QueueEntry;
-  /** Server time */
-  readonly startedAt: number;
-  readonly playedMs: number;
-  /** Local time, `null` while paused */
-  readonly resumedAt: number | null;
-}> {}
-
-const playedMsOf = (listen: Listen, now: number) =>
-  listen.resumedAt === null ? listen.playedMs : listen.playedMs + now - listen.resumedAt;
-
 // The text stays until the next entry, so that the user can read why nothing plays
 const failureText = (error: Option.Option<unknown>, title: string) => {
   if (Option.isNone(error) || !Schema.is(PlaybackUnavailable)(error.value)) {
@@ -128,14 +106,11 @@ const makeEngine = Effect.fn(function* (options: {
   readonly serverUrl: string;
   readonly volume: number;
   readonly saveVolume: (volume: number) => Effect.Effect<void>;
-  /** Records a play of offline time in the replica of this device */
-  readonly recordPlay: (play: {
-    readonly sourceId: string;
-    readonly context: typeof PlayContext.Type;
-    readonly startedAt: number;
-    readonly playedMs: number;
-    readonly completed: boolean;
-  }) => Effect.Effect<void>;
+  /** The replica of this device, which plays the room of the device without the home server */
+  readonly local: {
+    readonly url: string;
+    readonly connection: typeof ServerConnection.Service;
+  } | null;
   /** A downloaded file plays first, also without the server */
   readonly downloads: typeof Downloads.Service | null;
 }) {
@@ -159,23 +134,12 @@ const makeEngine = Effect.fn(function* (options: {
   // The last revision that the server accepted a report for
   let reportedRevision = -1;
   let volume = options.volume;
-  let listen: Listen | null = null;
-  // The entries that ended by themselves since the connection dropped
-  let advanced: Array<EntryId> = [];
-  // The last `resume`, to know after the snapshot whether the server adopted it
-  let sentResume: PlayerResume | null = null;
-  // Set while `run` follows a session
-  let controlOffline: ((command: typeof SessionCommand.Type) => boolean) | null = null;
 
   const positionNow = () => track?.position() ?? positionMs;
 
-  const downloaded = (entry: QueueEntry) =>
-    options.downloads !== null &&
-    SubscriptionRef.getUnsafe(options.downloads.state).files.has(entry.source.id);
-
   // A file that went away, for example at the end of its lease, falls back to the server
-  const fetchEntry = (entry: QueueEntry) => {
-    const stream = fetchSource(options.serverUrl, entry);
+  const fetchEntry = (entry: QueueEntry, server: { readonly url: string }) => {
+    const stream = fetchSource(server.url, entry);
     if (options.downloads === null) return stream;
     return options.downloads.file(entry.source.id).pipe(
       Effect.flatMap(
@@ -197,24 +161,6 @@ const makeEngine = Effect.fn(function* (options: {
     return closing === null ? Effect.void : Scope.close(closing, Exit.void);
   });
 
-  const closeListen = Effect.fn(function* (completed: boolean) {
-    const closing = listen;
-    if (closing === null) return;
-    listen = null;
-
-    const now = yield* Clock.currentTimeMillis;
-    yield* options.recordPlay({
-      sourceId: closing.entry.source.id,
-      context: closing.entry.context,
-      startedAt: closing.startedAt,
-      playedMs: playedMsOf(closing, now),
-      completed,
-    });
-  });
-
-  // A quit while offline keeps the play of the current entry
-  yield* Effect.addFinalizer(() => closeListen(false));
-
   const run = Effect.fn(
     function* (
       session: typeof SessionClient.Service,
@@ -226,6 +172,11 @@ const makeEngine = Effect.fn(function* (options: {
     ) {
       const actions = yield* Queue.unbounded<Effect.Effect<void>>();
       const latest = SubscriptionRef.get(session.own);
+      // The replica that runs the room of this device: the home server, or the local replica
+      const serverOf = (view: SessionView) =>
+        view.replica === "local" && options.local !== null
+          ? { url: options.local.url, connection: options.local.connection }
+          : { url: options.serverUrl, connection };
       const buffers = new Map<EntryId, Buffered>();
       // Entries that failed once before their audio started. The next plan of the server skips
       // the source that failed, so one more start can play another source of the recording.
@@ -245,9 +196,11 @@ const makeEngine = Effect.fn(function* (options: {
         if (existing !== undefined) return existing;
 
         const scope = yield* Scope.make();
-        const fetching = yield* fetchEntry(entry).pipe(
+        const server = serverOf(yield* latest);
+        const fetching = yield* fetchEntry(entry, server).pipe(
           Scope.provide(scope),
           Effect.provideContext(services),
+          Effect.provideService(ServerConnection, server.connection),
           Effect.forkIn(scope),
         );
         // The next download starts when this one ends
@@ -262,7 +215,7 @@ const makeEngine = Effect.fn(function* (options: {
           Effect.andThen(Queue.offer(actions, Effect.void)),
           Effect.forkIn(scope),
         );
-        const created = new Buffered({ scope, fetching });
+        const created = new Buffered({ scope, fetching, url: server.url });
         buffers.set(entry.id, created);
         return created;
       });
@@ -310,43 +263,12 @@ const makeEngine = Effect.fn(function* (options: {
         const revision = followed.revision;
         // The server ignores a report of a revision that it does not know yet
         if (view.confirmed.revision === revision) reportedRevision = revision;
-        yield* connection
-          .reportPlayback({ ...fields, generation: view.generation, revision, volume })
+        yield* session
+          .report(view, { ...fields, revision, volume })
           .pipe(Effect.timeout("2 seconds"), Effect.ignore);
       });
 
-      // Offline, the view shows what this device plays, until the next snapshot
-      const showLocal = Effect.gen(function* () {
-        const view = yield* latest;
-        if (view.connected) return;
-
-        const now = yield* Clock.currentTimeMillis;
-        const audible = playing && track !== null;
-        if (listen !== null && audible !== (listen.resumedAt !== null)) {
-          listen = new Listen({
-            ...listen,
-            playedMs: playedMsOf(listen, now),
-            resumedAt: audible ? now : null,
-          });
-        }
-
-        const transport = playing ? "playing" : "paused";
-        yield* session.showLocal({
-          playback: new Playback({
-            ...view.playback,
-            state: current === null ? "stopped" : transport,
-            entryId: current,
-            positionMs: positionNow(),
-            at: now + view.clockOffset,
-            rate: audible ? 1 : 0,
-            lost: false,
-          }),
-          volume,
-        });
-      });
-
       const reportState = (view: SessionView) => {
-        if (!view.connected) return showLocal;
         if (current === null) return Effect.void;
 
         const loading = trackScope !== null && track === null;
@@ -389,7 +311,7 @@ const makeEngine = Effect.fn(function* (options: {
 
         const play = Effect.gen(function* () {
           const fetched = yield* Fiber.join(buffered.fetching);
-          const loaded = yield* openTrack(audio, options.serverUrl, fetched, startMs);
+          const loaded = yield* openTrack(audio, buffered.url, fetched, startMs);
           yield* Queue.offer(actions, started(opened, loaded, fetched.copy));
           yield* loaded.ended;
         });
@@ -408,70 +330,7 @@ const makeEngine = Effect.fn(function* (options: {
         );
       });
 
-      // Offline, the device goes on with the next entry that it downloaded completely. A skip of
-      // the user stays on the current entry when no other entry has its audio.
       // RETURN TYPE: `open` and the functions that it calls back refer to each other
-      const advanceOffline = Effect.fn(function* (
-        reason: "end" | "skip" | "failed",
-        direction: 1 | -1,
-      ): Effect.fn.Return<void> {
-        const from = current;
-        if (from === null) return;
-
-        const view = yield* latest;
-        const repeat = view.playback.repeat;
-        const passed = new Set<EntryId>();
-        let target = nextEntry(
-          view.entries,
-          from,
-          repeat,
-          reason === "end" ? "end" : "skip",
-          direction,
-        );
-        const playable = (entry: QueueEntry) =>
-          complete(buffers.get(entry.id)) || downloaded(entry);
-        while (target !== undefined && !playable(target) && !passed.has(target.id)) {
-          passed.add(target.id);
-          target = nextEntry(view.entries, target.id, repeat, "skip", direction);
-        }
-        // Only the end of an entry plays the same entry again
-        const repeats = target?.id === from && reason !== "end";
-        if (repeats || (target !== undefined && !playable(target))) {
-          target = undefined;
-        }
-
-        if (passed.size > 0) {
-          callbacks.onNotice(
-            passed.size === 1
-              ? "Skipped 1 entry that is not downloaded"
-              : `Skipped ${passed.size} entries that are not downloaded`,
-          );
-        }
-        if (target === undefined && reason === "skip" && (passed.size > 0 || direction === -1)) {
-          if (direction === -1 && track !== null) yield* track.seek(0);
-          return yield* showLocal;
-        }
-
-        if (reason === "end") advanced = [...advanced, from];
-        yield* closeListen(reason === "end");
-        if (target === undefined) {
-          yield* stopAudio;
-          playing = false;
-          return yield* showLocal;
-        }
-
-        yield* open(target, 0);
-        const now = yield* Clock.currentTimeMillis;
-        listen = new Listen({
-          entry: target,
-          startedAt: now + view.clockOffset,
-          playedMs: 0,
-          resumedAt: null,
-        });
-        yield* showLocal;
-      });
-
-      // RETURN TYPE: see `advanceOffline`
       const failedTrack = Effect.fn(function* (
         opened: number,
         entry: QueueEntry,
@@ -488,15 +347,16 @@ const makeEngine = Effect.fn(function* (options: {
         yield* dropBuffer(entry.id);
 
         const view = yield* latest;
-        if (!view.connected) return yield* advanceOffline("failed", 1);
-        // Without the server, the entry did not fail. It waits for the connection.
+        // Without the server, the entry did not fail. It waits for the connection, or for the
+        // replica that takes over the room.
         const error = Cause.findErrorOption(cause);
-        if (Option.exists(error, Predicate.isTagged("RpcClientError"))) return;
+        const lost = Option.exists(error, Predicate.isTagged("RpcClientError"));
+        if (lost && !view.connected) return;
 
         // The server marks a source that failed before its first byte, and the next plan
         // tries the other sources of the recording. A plan that fails needs no second try.
         const planFailed = Option.exists(error, Schema.is(PlaybackUnavailable));
-        if (!audible && !planFailed && !retried.has(entry.id)) {
+        if ((lost || !audible) && !planFailed && !retried.has(entry.id)) {
           retried.add(entry.id);
           return yield* open(entry, positionMs);
         }
@@ -516,13 +376,18 @@ const makeEngine = Effect.fn(function* (options: {
 
       // The engine starts the next entry itself, then reports the end, so that the gap stays
       // short. The server then makes the next entry current.
-      // RETURN TYPE: see `advanceOffline`
+      // RETURN TYPE: see `failedTrack`
       const ended = Effect.fn(function* (opened: number): Effect.fn.Return<void> {
         const entryId = current;
         if (opened !== token || entryId === null) return;
 
         const view = yield* latest;
-        if (!view.connected) return yield* advanceOffline("end", 1);
+        // The replica that takes over the room continues from here
+        if (!view.connected) {
+          yield* stopAudio;
+          playing = false;
+          return;
+        }
 
         const next = nextEntry(view.entries, entryId, view.playback.repeat, "end");
         const endMs = positionNow();
@@ -548,31 +413,17 @@ const makeEngine = Effect.fn(function* (options: {
         return setVolume(output.volume);
       };
 
-      // The server adopted what this device did offline, or its state wins
-      const reconnected = Effect.fn(function* (view: SessionView) {
-        const sent = sentResume;
-        sentResume = null;
-        advanced = [];
-        // Reports at once, so that the session does not mark this output as lost
+      // Reports at once, so that the room does not mark this output as lost
+      const reconnected = Effect.gen(function* () {
         reportedRevision = -1;
         for (const [entryId, buffered] of buffers) {
           if (failed(buffered)) yield* dropBuffer(entryId);
         }
-        if (listen === null) return;
-
-        const adopted =
-          sent?.play != null &&
-          isMine(view) &&
-          view.playback.revision === sent.revision &&
-          view.playback.entryId === sent.entryId;
-        // The server continues the play that `resume` sent
-        if (adopted) listen = null;
-        yield* closeListen(false);
       });
 
       const reconcile = Effect.fn(function* (view: SessionView) {
         yield* applyVolume(view);
-        // Offline, this device decides what it plays
+        // The audio plays on until the room continues on a replica
         if (!view.connected) {
           disconnected = true;
           return;
@@ -580,7 +431,7 @@ const makeEngine = Effect.fn(function* (options: {
         // A restart of the server can repeat a generation, so only the view shows a new connection
         if (disconnected) {
           disconnected = false;
-          yield* reconnected(view);
+          yield* reconnected;
         }
 
         const playback = view.playback;
@@ -632,63 +483,9 @@ const makeEngine = Effect.fn(function* (options: {
         yield* reportConfirmed(view);
       });
 
-      // Offline, the transport of this device changes its own audio
-      const offlineAction = (command: typeof SessionCommand.Type) =>
-        SessionCommand.matchOrElse<Effect.Effect<void> | undefined>(
-          command,
-          {
-            Pause: () =>
-              Effect.suspend(() => {
-                playing = false;
-                audio.stop();
-                return showLocal;
-              }),
-
-            Resume: () =>
-              Effect.gen(function* () {
-                const view = yield* latest;
-                const entry = view.entries.find((candidate) => candidate.id === current);
-                if (track === null && entry !== undefined) yield* open(entry, positionMs);
-                playing = true;
-                audio.start();
-                yield* showLocal;
-              }),
-
-            Seek: (seek) =>
-              seek.entryId !== current
-                ? undefined
-                : Effect.gen(function* () {
-                    if (track === null) positionMs = seek.positionMs;
-                    else if (track.covers(seek.positionMs)) yield* track.seek(seek.positionMs);
-                    else callbacks.onNotice("That part is not downloaded");
-                    yield* showLocal;
-                  }),
-
-            Skip: (skip) =>
-              skip.fromEntryId === current ? advanceOffline("skip", skip.direction) : undefined,
-
-            SetVolume: (change) => {
-              const view = SubscriptionRef.getUnsafe(session.own);
-              const own = view.deviceId === null ? null : deviceOutputId(view.deviceId);
-              return change.outputId === own
-                ? setVolume(change.volume).pipe(Effect.andThen(showLocal))
-                : undefined;
-            },
-          },
-          () => undefined,
-        );
-
       const tick = Effect.gen(function* () {
         if (track !== null && playing) yield* reportState(yield* latest);
       });
-
-      controlOffline = (command) => {
-        if (SubscriptionRef.getUnsafe(session.own).connected || current === null) return false;
-        const action = offlineAction(command);
-        if (action === undefined) return false;
-        Queue.offerUnsafe(actions, action);
-        return true;
-      };
 
       // After a restart of the app, the engine starts from the session again
       followed = nothingFollowed;
@@ -706,10 +503,9 @@ const makeEngine = Effect.fn(function* (options: {
       effect.pipe(
         Effect.ensuring(
           Effect.suspend(() => {
-            controlOffline = null;
             current = null;
             playing = false;
-            return closeListen(false).pipe(Effect.andThen(stopAudio));
+            return stopAudio;
           }),
         ),
       ),
@@ -719,25 +515,6 @@ const makeEngine = Effect.fn(function* (options: {
   const trackOf = (entryId: EntryId) => (current === entryId ? track : null);
 
   return {
-    /** What the device plays, for `connectDevice` after the connection dropped */
-    resume: Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      sentResume =
-        current === null
-          ? null
-          : new PlayerResume({
-              revision: followed.revision,
-              entryId: current,
-              positionMs: positionNow(),
-              state: playing && track !== null ? "playing" : "paused",
-              advanced,
-              play:
-                listen === null
-                  ? null
-                  : { startedAt: listen.startedAt, playedMs: playedMsOf(listen, now) },
-            });
-      return sentResume;
-    }),
     volume: Effect.sync(() => volume),
     /** The audio position, `null` when this device does not play `entryId` */
     position: (entryId: EntryId) => trackOf(entryId)?.position() ?? null,
@@ -747,11 +524,6 @@ const makeEngine = Effect.fn(function* (options: {
     tap: (entryId: EntryId) => trackOf(entryId)?.tap() ?? null,
     /** For example `FLAC 24/96`, `null` when this device does not play `entryId` */
     quality: (entryId: EntryId) => trackOf(entryId)?.quality ?? null,
-    /**
-     * Applies a transport command to this device's audio while it plays without the server.
-     * `false` when the command needs the server.
-     */
-    controlOffline: (command: typeof SessionCommand.Type) => controlOffline?.(command) ?? false,
     /** Follows the session until it is interrupted */
     run,
   };
