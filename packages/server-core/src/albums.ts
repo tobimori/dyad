@@ -16,7 +16,7 @@ import { Array as Arr, Effect, Schema } from "effect";
 import { creditNames, creditedArtists, projectArtistRows, sameNames } from "./artists.ts";
 import { ArtistCredit, assertFields, resolveField } from "./assertions.ts";
 import { AlbumType, ReleaseDate } from "./editions.ts";
-import { boundRecordingId, uuidV5 } from "./ids.ts";
+import { boundRecordingId, upcEditionId, uuidV5 } from "./ids.ts";
 import { effectiveTarget, followEdges, writeSystemMerge } from "./matching.ts";
 import { Providers } from "./providers.ts";
 
@@ -354,28 +354,26 @@ export const deriveAlbums = (input: {
     }
   });
 
-// Same UPC, same edition. The edge goes into the lower ID, so that every writer agrees.
+// Same UPC, same edition: the plugin edition goes into the UPC edition
 const matchUpc = (editionId: string) =>
   Effect.gen(function* () {
     const db = yield* Database;
-    const [row] = yield* db.select().from(edition).where(eq(edition.id, editionId));
-    if (row?.upc == null) return [];
-    const others = yield* db
-      .select({ id: edition.id })
+    const [row] = yield* db
+      .select({ upc: edition.upc })
       .from(edition)
-      .where(and(eq(edition.upc, row.upc), ne(edition.id, editionId)));
-    const changed = yield* Effect.forEach(others, (other) =>
-      writeSystemMerge({
-        entityType: "edition",
-        fromId: other.id < editionId ? editionId : other.id,
-        intoId: other.id < editionId ? other.id : editionId,
-        decision: "merge",
-        method: "upc",
-        confidence: 1,
-        evidence: { upc: row.upc ?? "" },
-      }),
-    );
-    return changed.some(Boolean) ? [editionId, ...others.map((other) => other.id)] : [];
+      .where(eq(edition.id, editionId));
+    if (row?.upc == null) return [];
+    const into = yield* upcEditionId(row.upc);
+    const changed = yield* writeSystemMerge({
+      entityType: "edition",
+      fromId: editionId,
+      intoId: into,
+      decision: "merge",
+      method: "upc",
+      confidence: 0.95,
+      evidence: { upc: row.upc },
+    });
+    return changed ? [editionId, into] : [];
   });
 
 // Root recordings of the tracks of the root editions of each root album
@@ -452,11 +450,30 @@ const matchAlbum = (albumId: string) =>
         intoId: candidate.id < row.id ? candidate.id : row.id,
         decision: "merge",
         method: "edition_rule",
-        confidence: shared / smaller,
+        confidence: 0.8,
         evidence: { shared: String(shared), smaller: String(smaller) },
       });
     });
     return changed.some(Boolean) ? [row.id, ...fitting.map((candidate) => candidate.id)] : [];
+  });
+
+/**
+ * Runs the edition rule again for the albums with these recordings, after a song merge changed the
+ * shared songs. Only the replica that merged decides; the others follow the merges.
+ */
+export const matchAlbumsOf = (recordingIds: Iterable<string>) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const ids = [...new Set(recordingIds)];
+    if (ids.length === 0) return;
+    const albums = yield* db
+      .selectDistinct({ id: sql<string>`coalesce(${album.mergedIntoId}, ${album.id})` })
+      .from(editionTrack)
+      .innerJoin(edition, eq(edition.id, editionTrack.editionId))
+      .innerJoin(album, eq(album.id, edition.albumId))
+      .where(inArray(editionTrack.recordingId, ids));
+    const albumMerges = (yield* Effect.forEach(albums, (row) => matchAlbum(row.id))).flat();
+    yield* deriveAlbums({ editions: [], albumMerges, editionMerges: [] });
   });
 
 /**

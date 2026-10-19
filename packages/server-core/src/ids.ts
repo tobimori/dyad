@@ -15,6 +15,7 @@ export const variantId = (source: string) => uuidV5(`${source}:variant`);
 
 /** The provisional recording of all sources with the ISRC, until MusicBrainz knows it */
 export const isrcRecordingId = (isrc: string) => uuidV5(`isrc:recording:${isrc}`);
+export const upcEditionId = (upc: string) => uuidV5(`upc:edition:${upc}`);
 
 export const musicbrainzRecordingId = (mbid: string) => uuidV5(`mb:recording:${mbid}`);
 

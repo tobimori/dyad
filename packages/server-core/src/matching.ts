@@ -6,6 +6,8 @@ import { HlcClock } from "@dyad/sync";
 import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
 import { Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
 
+// `albums.ts` imports this module, so use its exports only inside functions
+import { matchAlbumsOf } from "./albums.ts";
 import { artistLinksKind } from "./artist-links.ts";
 import { matchArtistsOf } from "./artist-matching.ts";
 import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
@@ -428,6 +430,7 @@ export const updateRecording = (recordingId: string, mbid: string | null) =>
     const projected = [...affected, recordingId, row?.mergedIntoId ?? recordingId];
     yield* projectRecordings(projected);
     yield* matchArtistsOf(projected);
+    yield* matchAlbumsOf(affected);
   });
 
 /**
@@ -471,6 +474,7 @@ export const decideMerge = (
         const affected = yield* resolveRoots([pair.fromId]);
         yield* projectRecordings(affected);
         yield* matchArtistsOf(affected);
+        yield* matchAlbumsOf(affected);
       }),
     );
   });
@@ -544,6 +548,7 @@ const writeLookup = (isrc: string, recordings: ReadonlyArray<MusicBrainzRecordin
     const affected = changed.length === 0 ? [] : yield* resolveRoots(changed);
     yield* projectRecordings([...affected, ...assertedIds]);
     yield* matchArtistsOf([...affected, ...assertedIds]);
+    yield* matchAlbumsOf(affected);
   });
 
 // ISRCs that wait share the request of this job
