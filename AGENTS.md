@@ -66,6 +66,7 @@ Before you call a change done, check which of these apply and say so:
 - `vp run check` is the full check: format, lint, type check and builds. Run it before you commit.
 - `packages/oxlint` has the project lint rules. Fix findings; do not suppress them. A suppression must say why (`-- reason`).
 - The CLI follows the design language of opencode's TUI: theme tokens only, few borders, one accent, dim secondary text, key hints in the footer, centered dialogs. Effects may be bold, but text stays readable.
+- A CLI feature adds a route, a section, commands or item actions from its own folder in `apps/cli/src/routes/`. It does not edit the shell (`app.tsx`). A shell change needs a reason in the commit message.
 - `apps/cli` needs Node 26.9 or later (OpenTUI audio). Other packages must stay compatible with Node 24 and Electron.
 - Plugins import `@dyad/plugin` and shared libraries, never `server-core` or `db`.
 - Migrations: `vp run db:generate <descriptive_name>`, for example `add_source_segment`. Do not edit or rename a migration after it is committed, unless all databases are reset.
