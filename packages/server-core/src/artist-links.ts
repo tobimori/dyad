@@ -76,7 +76,7 @@ const sweep = Effect.gen(function* () {
  * decides the merges of these provider artists. Peers receive the assertions and merges, so they
  * need no request.
  */
-const readLinks = Effect.fn("readLinks")(function* (mbid: string) {
+const readLinks = Effect.fnUntraced(function* (mbid: string) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const providers = yield* Providers;

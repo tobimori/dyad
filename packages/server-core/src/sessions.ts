@@ -127,7 +127,7 @@ class OpenPlay extends Data.Class<{
   readonly resumedAt: number | null;
 }> {}
 
-const makeSession = Effect.fn("makeSession")(function* (
+const makeSession = Effect.fnUntraced(function* (
   initial: SessionState,
   prefetch: (sourceIds: ReadonlyArray<string>) => void,
   queueEnds: (entries: ReadonlyArray<QueueEntry>) => void,
@@ -306,7 +306,7 @@ const makeSession = Effect.fn("makeSession")(function* (
 
   // A play ends when its entry stops being current or ends by itself. Its time counts while the
   // clock of the session runs.
-  const trackPlay = Effect.fn("trackPlay")(function* (now: number) {
+  const trackPlay = Effect.fnUntraced(function* (now: number) {
     const playback = state.playback;
     const ended = state.ended;
     state.ended = Option.none();
@@ -493,7 +493,7 @@ const makeSession = Effect.fn("makeSession")(function* (
     const playback = state.playback;
     const position = positionAt(playback, now);
 
-    const transfer = Effect.fn("transfer")(function* (
+    const transfer = Effect.fnUntraced(function* (
       outputId: OutputId,
       play: boolean | null,
       group: ReadonlyArray<OutputId>,
@@ -1145,7 +1145,7 @@ const makeSession = Effect.fn("makeSession")(function* (
     );
 
   /** A `Snapshot`, then the changes. A device with a `player` can be the output. */
-  const connect = Effect.fn("connect")(function* (
+  const connect = Effect.fnUntraced(function* (
     deviceId: DeviceId,
     player: { readonly name: string; readonly volume: number } | null,
     resume: PlayerResume | null,
@@ -1390,7 +1390,7 @@ export const sessionsLayer = Layer.effect(
 );
 
 // A search result is not in `source` until it plays, so its summary comes from the provider cache
-const sourceSummaries = Effect.fn("sourceSummaries")(function* (sourceIds: ReadonlyArray<string>) {
+const sourceSummaries = Effect.fnUntraced(function* (sourceIds: ReadonlyArray<string>) {
   const db = yield* Database;
   const rows = yield* playableSources(inArray(source.id, sourceIds));
   const summaries = new Map(rows.map((row) => [row.source.id, sourceSummary(row)]));

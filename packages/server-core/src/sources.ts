@@ -49,7 +49,7 @@ const uploaderCredit = (parsed: ParsedTitle, uploader: CreditedArtist | null) =>
   };
 };
 
-const assertParsedTitle = Effect.fn("assertParsedTitle")(function* (
+const assertParsedTitle = Effect.fnUntraced(function* (
   recordingId: string,
   item: {
     readonly provider: string;

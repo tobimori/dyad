@@ -11,7 +11,7 @@ const encodeMessage = Schema.encodeSync(Schema.fromJsonString(TimedServerMessage
 
 const nowUs = Effect.map(Clock.monotonicTimeNanos, (nanos) => Number(nanos / 1000n));
 
-const serve = Effect.fn("serve")(function* (socket: Socket.Socket) {
+const serve = Effect.fnUntraced(function* (socket: Socket.Socket) {
   const receivers = yield* Receivers;
   const reader = yield* socket.reader;
   const writer = yield* socket.writer;
@@ -31,7 +31,7 @@ const serve = Effect.fn("serve")(function* (socket: Socket.Socket) {
   });
   yield* receivers.add(client);
 
-  const receive = Effect.fn("receive")(function* (data: string | Uint8Array) {
+  const receive = Effect.fnUntraced(function* (data: string | Uint8Array) {
     const receivedUs = yield* nowUs;
     const message = data instanceof Uint8Array ? Option.none() : decodeMessage(data);
     if (Option.isNone(message)) return;

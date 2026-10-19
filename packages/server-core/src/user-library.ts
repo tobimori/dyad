@@ -94,7 +94,7 @@ export const setMembership = Effect.fn("setMembership")(function* (
 const markTables = { recording, album, artist };
 
 // The entity IDs of the merge group of an entity
-const groupOf = Effect.fn("groupOf")(function* (entityType: LibraryEntityType, entityId: string) {
+const groupOf = Effect.fnUntraced(function* (entityType: LibraryEntityType, entityId: string) {
   const db = yield* Database;
   const table = markTables[entityType];
   const [row] = yield* db
@@ -448,7 +448,7 @@ export const unlinkPlaylists = Effect.fn("unlinkPlaylists")(function* (
 });
 
 // The canonical recording is `coalesce(merged_into_id, id)`
-const loadLibraryView = Effect.fn("loadLibraryView")(function* (boundIds: ReadonlyArray<string>) {
+const loadLibraryView = Effect.fnUntraced(function* (boundIds: ReadonlyArray<string>) {
   const db = yield* Database;
 
   const bound = yield* db

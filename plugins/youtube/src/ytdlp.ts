@@ -99,7 +99,7 @@ export const ytdlpResolver = Effect.gen(function* () {
   const pausedUntil = yield* Ref.make(0);
   const missingLogged = yield* Ref.make(false);
 
-  const pause = Effect.fn("pause")(function* (reason: string) {
+  const pause = Effect.fnUntraced(function* (reason: string) {
     yield* Ref.set(pausedUntil, (yield* Clock.currentTimeMillis) + hourMs);
     yield* Effect.logWarning(`yt-dlp: ${reason}. No YouTube account requests for 1 hour.`);
   });
@@ -202,7 +202,7 @@ export const ytdlpResolver = Effect.gen(function* () {
 
   // yt-dlp nightly 2026.10.10: URLs of the embedded client sometimes answer 403 before the first
   // byte, and the URLs of a new run play
-  const playable = Effect.fn("playable")(function* (
+  const playable = Effect.fnUntraced(function* (
     videoId: string,
     credentials: Credentials,
     kind: "audio" | "video",

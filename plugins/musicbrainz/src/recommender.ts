@@ -119,7 +119,7 @@ export const listenbrainzRecommender = Effect.gen(function* () {
   const userName = (credentials: Credentials) =>
     Cache.get(userNames, Redacted.value(credentials.get("token") ?? Redacted.make("")));
 
-  const shelves = Effect.fn("shelves")(
+  const shelves = Effect.fnUntraced(
     function* (credentials: Credentials) {
       const user = yield* userName(credentials);
       const list = yield* getJson(
@@ -233,7 +233,7 @@ export const listenbrainzRecommender = Effect.gen(function* () {
       Effect.provide(services),
     );
 
-  const link = Effect.fn("link")(
+  const link = Effect.fnUntraced(
     function* (credentials: Credentials) {
       yield* Cache.invalidate(
         userNames,

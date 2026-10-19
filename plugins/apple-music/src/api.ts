@@ -187,7 +187,7 @@ const getWebBearer = Effect.gen(function* () {
   }),
 );
 
-const getStorefront = Effect.fn("getStorefront")(function* (
+const getStorefront = Effect.fnUntraced(function* (
   bearer: Redacted.Redacted<string>,
   mediaUserToken: Redacted.Redacted<string>,
 ) {

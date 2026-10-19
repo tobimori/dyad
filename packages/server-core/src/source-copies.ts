@@ -33,7 +33,7 @@ import { versionWordsOf } from "./ranking.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 
 // The root of an artist ID of a provider
-const artistRoot = Effect.fn("artistRoot")(function* (provider: string, externalId: string) {
+const artistRoot = Effect.fnUntraced(function* (provider: string, externalId: string) {
   const db = yield* Database;
   const id = yield* artistIdOf(provider, externalId);
   const [row] = yield* db
@@ -44,7 +44,7 @@ const artistRoot = Effect.fn("artistRoot")(function* (provider: string, external
 });
 
 // The song of a cached result for the `artist_title` rule
-const cachedSongFacts = Effect.fn("cachedSongFacts")(function* (item: CachedSource) {
+const cachedSongFacts = Effect.fnUntraced(function* (item: CachedSource) {
   const artistId = yield* cachedArtistId(item);
   const { title } = yield* cachedSummary(item, item.provider);
   const { durationMs } = item.source;
@@ -65,7 +65,7 @@ const digraphs = new Map([
 ]);
 
 // The cached results of the song by the `artist_title` rule
-const cachedCopies = Effect.fn("cachedCopies")(function* (
+const cachedCopies = Effect.fnUntraced(function* (
   facts: NonNullable<Effect.Success<ReturnType<typeof cachedSongFacts>>>,
 ) {
   const db = yield* Database;
@@ -117,7 +117,7 @@ const cachedCopies = Effect.fn("cachedCopies")(function* (
 // The recordings of the canonical recording of the source, and the cached results of the same
 // song. A search result that is not in the catalog finds its group through its ISRC, else through
 // the `artist_title` rule.
-const groupOf = Effect.fn("groupOf")(function* (sourceId: string) {
+const groupOf = Effect.fnUntraced(function* (sourceId: string) {
   const db = yield* Database;
   const [own] = yield* db
     .select({ recordingId: source.recordingId })
@@ -274,7 +274,7 @@ export class CopyDiscoveries extends Context.Service<CopyDiscoveries, Map<string
 export const copyDiscoveriesLayer = Layer.sync(CopyDiscoveries, () => new Map());
 
 // The artist and title that a provider search for the song uses
-const songText = Effect.fn("songText")(function* (sourceId: string) {
+const songText = Effect.fnUntraced(function* (sourceId: string) {
   const db = yield* Database;
   const [own] = yield* db
     .select({ title: recording.title, artist: recording.artistName })
@@ -290,10 +290,7 @@ const songText = Effect.fn("songText")(function* (sourceId: string) {
 
 // The usable providers with search that were not searched for the song in the last day. In the
 // background, only providers that allow requests without a user action.
-const discoveryTargets = Effect.fn("discoveryTargets")(function* (
-  sourceId: string,
-  background: boolean,
-) {
+const discoveryTargets = Effect.fnUntraced(function* (sourceId: string, background: boolean) {
   const discoveries = yield* CopyDiscoveries;
   const now = yield* Clock.currentTimeMillis;
   return [...(yield* usableProviders)].flatMap(([id, usable]) => {
@@ -306,7 +303,7 @@ const discoveryTargets = Effect.fn("discoveryTargets")(function* (
 });
 
 // Searches each target for the song and keeps the results in the provider cache
-const discover = Effect.fn("discover")(function* (
+const discover = Effect.fnUntraced(function* (
   sourceId: string,
   query: string,
   targets: Effect.Success<ReturnType<typeof discoveryTargets>>,

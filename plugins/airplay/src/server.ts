@@ -55,7 +55,7 @@ export const airplayOutputs = Effect.fn("AirPlay.outputs")(function* (
       Effect.orElseSucceed(() => undefined),
     );
 
-  const openOutput = Effect.fn("openOutput")(function* (device: AirPlayDevice) {
+  const openOutput = Effect.fnUntraced(function* (device: AirPlayDevice) {
     const scope = yield* Effect.scope;
     const sender = yield* openRaopSender(device).pipe(
       Effect.provideService(NtpClock, clock),
@@ -69,7 +69,7 @@ export const airplayOutputs = Effect.fn("AirPlay.outputs")(function* (
       | { readonly queue: Queue.Queue<Float32Array>; readonly fiber: Fiber.Fiber<unknown> }
       | undefined;
 
-    const write = Effect.fn("write")(function* (playAtUs: number, pcm: Float32Array) {
+    const write = Effect.fnUntraced(function* (playAtUs: number, pcm: Float32Array) {
       if (yield* Deferred.isDone(failed)) return yield* Deferred.await(failed);
       if (playing === undefined) {
         const queue = yield* Queue.unbounded<Float32Array>();
@@ -90,7 +90,7 @@ export const airplayOutputs = Effect.fn("AirPlay.outputs")(function* (
       yield* sender.flush.pipe(Effect.mapError(outputError));
     });
 
-    const setMedia = Effect.fn("setMedia")(
+    const setMedia = Effect.fnUntraced(
       function* (media: TimedMedia) {
         const art =
           media.artworkUrl === null || !device.metadata.includes(1)

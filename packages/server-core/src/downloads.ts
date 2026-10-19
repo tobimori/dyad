@@ -68,7 +68,7 @@ class DownloadChoice extends Data.Class<{
 }> {}
 
 // Provider sources often have no bit depth or bitrate
-const chooseDownload = Effect.fn("chooseDownload")(function* (
+const chooseDownload = Effect.fnUntraced(function* (
   format: SourceFormat,
   audio: AudioQuality,
   quality: typeof DownloadQuality.Type,
@@ -127,7 +127,7 @@ const chooseDownload = Effect.fn("chooseDownload")(function* (
 
 // How the user can download the source, by the same rules as playback and the provider's policy.
 // A search result enters the shared catalog here.
-const downloadSource = Effect.fn("downloadSource")(function* (
+const downloadSource = Effect.fnUntraced(function* (
   sourceId: string,
   quality: typeof DownloadQuality.Type,
   capabilities: PlaybackCapabilities,

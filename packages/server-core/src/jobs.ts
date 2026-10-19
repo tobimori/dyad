@@ -51,7 +51,7 @@ const makeJobs = Effect.gen(function* () {
    * earlier run time, unless `replace` is set. `runAt` is in epoch milliseconds and defaults to
    * now. A higher `priority` runs first among due jobs.
    */
-  const enqueue = Effect.fn("enqueue")(function* (
+  const enqueue = Effect.fnUntraced(function* (
     kind: string,
     key: string,
     payload: Schema.Json,
@@ -102,7 +102,7 @@ const makeJobs = Effect.gen(function* () {
    * Runs the jobs of `kind` with `handler`. A payload that does not decode fails the run. Jobs of
    * kinds without a handler wait. A device leaves `homeOnly` jobs to its home server.
    */
-  const register = Effect.fn("register")(function* <A, E extends Error, R>(
+  const register = Effect.fnUntraced(function* <A, E extends Error, R>(
     kind: string,
     payload: Schema.Decoder<A>,
     handler: (payload: A) => Effect.Effect<void, E, R>,
@@ -127,7 +127,7 @@ const makeJobs = Effect.gen(function* () {
     yield* wake.open;
   });
 
-  const run = Effect.fn("run")(function* (row: typeof job.$inferSelect, startedAt: number) {
+  const run = Effect.fnUntraced(function* (row: typeof job.$inferSelect, startedAt: number) {
     const handler = handlers.get(row.kind);
     if (handler === undefined) return;
 

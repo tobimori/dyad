@@ -243,7 +243,7 @@ export const openUpnp = Effect.fn("openUpnp")(function* (device: UpnpDevice) {
   yield* Effect.forkScoped(Effect.repeat(poll, Schedule.spaced("1 second")));
 
   // Sends the MIME type in the spelling that the renderer lists
-  const protocolMimeType = Effect.fn("protocolMimeType")(function* (mimeType: string) {
+  const protocolMimeType = Effect.fnUntraced(function* (mimeType: string) {
     const listed = device.capabilities.mimeTypes;
     if (listed.length === 0) return mimeType;
 
@@ -278,7 +278,7 @@ export const openUpnp = Effect.fn("openUpnp")(function* (device: UpnpDevice) {
       ? `x-rincon-queue:${transport.id.replace(/^uuid:/, "")}#0`
       : null;
 
-  const enqueue = Effect.fn("enqueue")(function* (url: string, metadata: TrackMetadata) {
+  const enqueue = Effect.fnUntraced(function* (url: string, metadata: TrackMetadata) {
     const mimeType = yield* protocolMimeType(metadata.mimeType);
     yield* transportCommand("AddURIToQueue", [
       ["EnqueuedURI", url],
@@ -316,7 +316,7 @@ export const openUpnp = Effect.fn("openUpnp")(function* (device: UpnpDevice) {
     yield* remove(1, track - 1);
   }).pipe(Effect.provideContext(context));
 
-  const load = Effect.fn("load")(function* (url: string, metadata: TrackMetadata, startMs: number) {
+  const load = Effect.fnUntraced(function* (url: string, metadata: TrackMetadata, startMs: number) {
     const mimeType = yield* protocolMimeType(metadata.mimeType);
     if (sonosQueue === null) {
       // Rygel 45.2 plays a new URI at once when it played before, and then rejects `Play`
@@ -343,7 +343,7 @@ export const openUpnp = Effect.fn("openUpnp")(function* (device: UpnpDevice) {
     }
   });
 
-  const next = Effect.fn("next")(function* (url: string, metadata: TrackMetadata) {
+  const next = Effect.fnUntraced(function* (url: string, metadata: TrackMetadata) {
     if (sonosQueue !== null) {
       yield* trimQueue;
       return yield* enqueue(url, metadata);

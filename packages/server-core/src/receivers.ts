@@ -46,7 +46,7 @@ const makeReceivers = Effect.gen(function* () {
     );
 
   /** Plays the audio of a group on the device of `outputId` */
-  const open = Effect.fn("open")(function* (outputId: OutputId) {
+  const open = Effect.fnUntraced(function* (outputId: OutputId) {
     const client = receiverOf(outputId);
     if (client === undefined) {
       return yield* new OutputError({ reason: "The device does not play groups" });

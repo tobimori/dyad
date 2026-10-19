@@ -88,7 +88,7 @@ const readFreeformAtom = (bytes: Uint8Array, atom: Box) => {
   return { key: mean === iTunesNamespace ? name : `${mean}:${name}`, values };
 };
 
-const findTopLevelBox = Effect.fn("findTopLevelBox")(function* (blob: Blob, type: string) {
+const findTopLevelBox = Effect.fnUntraced(function* (blob: Blob, type: string) {
   let offset = 0;
   while (offset + 8 <= blob.size) {
     const bytes = yield* readSlice(blob, offset, Math.min(offset + 16, blob.size));

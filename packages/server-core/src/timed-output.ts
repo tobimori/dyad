@@ -35,7 +35,7 @@ const renderCapabilities = new PlaybackCapabilities({
   ],
 });
 
-const renderInput = Effect.fn("renderInput")(function* (entry: QueueEntry) {
+const renderInput = Effect.fnUntraced(function* (entry: QueueEntry) {
   const fs = yield* FileSystem.FileSystem;
   const { sourceId, playable, choice } = yield* choosePlayableCopy(
     entry.source.id,
@@ -133,7 +133,7 @@ export const driveTimedOutputs = Effect.fn("driveTimedOutputs")(function* (optio
   const report = (state: OutputReport["state"], entryId: EntryId, positionMs: number) =>
     options.report(new OutputReport({ revision: local.revision, entryId, state, positionMs }));
 
-  const closeMember = Effect.fn("closeMember")(function* (id: OutputId) {
+  const closeMember = Effect.fnUntraced(function* (id: OutputId) {
     const member = members.get(id);
     if (member === undefined) return;
     members.delete(id);
@@ -141,7 +141,7 @@ export const driveTimedOutputs = Effect.fn("driveTimedOutputs")(function* (optio
     yield* Scope.close(member.scope, Exit.void);
   });
 
-  const openMember = Effect.fn("openMember")(function* (id: OutputId) {
+  const openMember = Effect.fnUntraced(function* (id: OutputId) {
     const memberScope = yield* Scope.fork(scope);
     const taken = options.taken ?? (() => Effect.void);
     const opening =
@@ -177,10 +177,7 @@ export const driveTimedOutputs = Effect.fn("driveTimedOutputs")(function* (optio
   });
 
   // A changed setting plans the next join again
-  const applyTransitions = Effect.fn("applyTransitions")(function* ({
-    crossfadeSeconds,
-    djStyle,
-  }: Playback) {
+  const applyTransitions = Effect.fnUntraced(function* ({ crossfadeSeconds, djStyle }: Playback) {
     const transitions = `${crossfadeSeconds} ${djStyle}`;
     if (transitions === local.transitions) return;
     local.transitions = transitions;

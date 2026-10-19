@@ -54,7 +54,7 @@ const durationTimeout = "4 seconds";
 
 class Release extends Data.Class<{ bandId: number; type: "a" | "t"; id: number }> {}
 
-const fetchDetails = Effect.fn("fetchDetails")(function* ({ bandId, type, id }: Release) {
+const fetchDetails = Effect.fnUntraced(function* ({ bandId, type, id }: Release) {
   const request = HttpClientRequest.get(detailsUrl).pipe(
     HttpClientRequest.setUrlParams({ band_id: bandId, tralbum_type: type, tralbum_id: id }),
   );

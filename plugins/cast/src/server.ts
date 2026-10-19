@@ -100,7 +100,7 @@ const leftRooms = (groups: ReadonlyArray<SonosGroup>, joined: Map<string, Joined
 const sameInfos = (left: ReadonlyArray<OutputInfo>, right: ReadonlyArray<OutputInfo>) =>
   left.length === right.length && left.every((info, index) => Equal.equals(info, right[index]));
 
-const openOutput = Effect.fn("openOutput")(function* (device: UpnpDevice) {
+const openOutput = Effect.fnUntraced(function* (device: UpnpDevice) {
   const target = yield* openUpnp(device).pipe(Effect.mapError(outputError));
   const localAddress = yield* localAddressTo(device.host).pipe(
     Effect.mapError((error) => new OutputError({ reason: error.message })),

@@ -49,7 +49,7 @@ export const startPluginHost = Effect.fn("startPluginHost")(function* (
     Effect.orElseSucceed(() => defaultSettings),
   );
 
-  const start = Effect.fn("start")(function* (plugin: ClientPlugin) {
+  const start = Effect.fnUntraced(function* (plugin: ClientPlugin) {
     if (running.has(plugin.id)) return;
 
     const scope = yield* Scope.fork(parent);
@@ -65,7 +65,7 @@ export const startPluginHost = Effect.fn("startPluginHost")(function* (
     );
   });
 
-  const stop = Effect.fn("stop")(function* (id: string) {
+  const stop = Effect.fnUntraced(function* (id: string) {
     const scope = running.get(id);
     if (scope === undefined) return;
 
@@ -76,7 +76,7 @@ export const startPluginHost = Effect.fn("startPluginHost")(function* (
   const enabled = clientPlugins.filter((plugin) => isPluginEnabled(settings, plugin));
   yield* Effect.forEach(enabled, start, { discard: true });
 
-  const setEnabled = Effect.fn("setEnabled")(function* (id: string, enable: boolean) {
+  const setEnabled = Effect.fnUntraced(function* (id: string, enable: boolean) {
     const plugin = clientPlugins.find((candidate) => candidate.id === id);
     if (plugin === undefined) return;
 

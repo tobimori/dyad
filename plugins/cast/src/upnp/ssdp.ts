@@ -60,7 +60,7 @@ export const upnpDevices = Stream.unwrap(
     const described = new Set<string>();
     const emitted = new Map<string, string>();
 
-    const deviceIn = Effect.fn("deviceIn")(function* (payload: Uint8Array) {
+    const deviceIn = Effect.fnUntraced(function* (payload: Uint8Array) {
       const answer = yield* Schema.decodeUnknownEffect(SearchAnswer)(headersOf(payload)).pipe(
         Effect.option,
       );

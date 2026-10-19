@@ -33,7 +33,7 @@ export const youtubePlugin = new Plugin({
       // After the bot check or refused URLs, anonymous `/player` requests rest for an hour
       const anonymousPausedUntil = yield* Ref.make(0);
 
-      const anonymously = Effect.fn("anonymously")(function* <A>(
+      const anonymously = Effect.fnUntraced(function* <A>(
         resolve: Effect.Effect<A, ProviderError, HttpClient.HttpClient>,
       ) {
         const now = yield* Clock.currentTimeMillis;

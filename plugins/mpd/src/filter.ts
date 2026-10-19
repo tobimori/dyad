@@ -40,7 +40,7 @@ export const parseFilter = Effect.fn("parseFilter")(function* (
   const fold = (value: string) => (mode === "find" ? value : value.toLowerCase());
   let query: string | null = null;
 
-  const compare = Effect.fn("compare")(function* (
+  const compare = Effect.fnUntraced(function* (
     tag: string,
     operator: string,
     value: string,
@@ -86,7 +86,7 @@ export const parseFilter = Effect.fn("parseFilter")(function* (
     const skipSpaces = () => {
       while (text[index] === " ") index += 1;
     };
-    const expect = Effect.fn("expect")(function* (token: string) {
+    const expect = Effect.fnUntraced(function* (token: string) {
       skipSpaces();
       if (!text.startsWith(token, index)) return yield* invalid(`'${token}' expected`);
       index += token.length;
@@ -108,7 +108,7 @@ export const parseFilter = Effect.fn("parseFilter")(function* (
     });
 
     // RETURN TYPE: recursive function
-    const expression = Effect.fn("expression")(function* (
+    const expression = Effect.fnUntraced(function* (
       negated: boolean,
     ): Effect.fn.Return<Matcher, Ack> {
       yield* expect("(");

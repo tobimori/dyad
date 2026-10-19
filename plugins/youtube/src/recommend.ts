@@ -138,7 +138,7 @@ const suggest = (source: ProviderSource) =>
  * The radio of YouTube Music after a video: the `RDAMVM` watch playlist, without an account. The
  * playlist starts with the seed itself.
  */
-const watchPlaylist = Effect.fn("watchPlaylist")(function* (videoId: string) {
+const watchPlaylist = Effect.fnUntraced(function* (videoId: string) {
   const response = yield* getJson(
     HttpClientRequest.post(`${music}/youtubei/v1/next`).pipe(
       HttpClientRequest.setUrlParam("prettyPrint", "false"),

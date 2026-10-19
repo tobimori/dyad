@@ -79,7 +79,7 @@ const albumTypeOf = (type: typeof AlbumType.Type | null) => {
  * edges of `ids`. A merge can arrive before the facts, so it makes missing rows. Returns the
  * affected IDs.
  */
-const resolveGroups = Effect.fn("resolveGroups")(function* (
+const resolveGroups = Effect.fnUntraced(function* (
   entityType: "album" | "edition",
   ids: ReadonlyArray<string>,
 ) {
@@ -244,7 +244,7 @@ export const albumPageRefs = Effect.fn("albumPageRefs")(function* (
  * Makes each album and its root from root editions: a root from the editions of all its members,
  * a merged album from its own
  */
-const projectAlbums = Effect.fn("projectAlbums")(function* (albumIds: Iterable<string>) {
+const projectAlbums = Effect.fnUntraced(function* (albumIds: Iterable<string>) {
   const db = yield* Database;
   const providers = yield* Providers;
   const ids = [...new Set(albumIds)];
@@ -370,7 +370,7 @@ const projectAlbums = Effect.fn("projectAlbums")(function* (albumIds: Iterable<s
  * Makes the edition rows and their tracks from the assertions, then their albums. A root
  * resolves over the assertions of all editions merged into it. Returns the album IDs.
  */
-const projectEditions = Effect.fn("projectEditions")(function* (editionIds: Iterable<string>) {
+const projectEditions = Effect.fnUntraced(function* (editionIds: Iterable<string>) {
   const db = yield* Database;
   const providers = yield* Providers;
   const ids = [...new Set(editionIds)];
@@ -466,7 +466,7 @@ export const deriveAlbums = Effect.fn("deriveAlbums")(function* (input: {
 });
 
 // Same UPC, same edition: the plugin edition goes into the UPC edition
-const matchUpc = Effect.fn("matchUpc")(function* (editionId: string) {
+const matchUpc = Effect.fnUntraced(function* (editionId: string) {
   const db = yield* Database;
   const [row] = yield* db
     .select({ upc: edition.upc })
@@ -487,7 +487,7 @@ const matchUpc = Effect.fn("matchUpc")(function* (editionId: string) {
 });
 
 // Root recordings of the tracks of the root editions of each root album
-const songsOf = Effect.fn("songsOf")(function* (albumIds: ReadonlyArray<string>) {
+const songsOf = Effect.fnUntraced(function* (albumIds: ReadonlyArray<string>) {
   const db = yield* Database;
   const rows = yield* db
     .select({
@@ -508,7 +508,7 @@ const songsOf = Effect.fn("songsOf")(function* (albumIds: ReadonlyArray<string>)
  * The edition rule: two albums are one album when they have the same album artist, the same
  * title without edition words, no other stated type, and most songs of the smaller one
  */
-const matchAlbum = Effect.fn("matchAlbum")(function* (albumId: string) {
+const matchAlbum = Effect.fnUntraced(function* (albumId: string) {
   const db = yield* Database;
   const [known] = yield* db.select().from(album).where(eq(album.id, albumId));
   const [row] =
@@ -702,7 +702,7 @@ export const queueEditions = Effect.fn("queueEditions")(function* (
 });
 
 // The album page of the provider, so that the page opens from the cache
-const readEdition = Effect.fn("readEdition")(function* ({
+const readEdition = Effect.fnUntraced(function* ({
   provider,
   albumId,
 }: typeof EditionPayload.Type) {

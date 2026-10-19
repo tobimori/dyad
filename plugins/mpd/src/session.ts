@@ -109,7 +109,7 @@ export const openSession = Effect.fn("openSession")(function* (mirror: SessionMi
   });
   const ready = yield* Deferred.make<void>();
 
-  const apply = Effect.fn("apply")(function* (event: typeof SessionEvent.Type) {
+  const apply = Effect.fnUntraced(function* (event: typeof SessionEvent.Type) {
     const receivedAt = yield* Clock.currentTimeMillis;
     const before = yield* SubscriptionRef.get(session.view);
     if (SessionEvent.guards.QueueChanged(event) && event.fromVersion !== before.queueVersion) {

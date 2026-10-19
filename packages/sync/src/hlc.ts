@@ -68,7 +68,7 @@ export const makeHlcClock = Effect.fn("makeHlcClock")(function* (options: {
   const now = options.now ?? Clock.currentTimeMillis;
   const last = yield* Ref.make(options.latest === null ? origin : decode(options.latest));
 
-  const advance = Effect.fn("advance")(function* (remote: ClockTime) {
+  const advance = Effect.fnUntraced(function* (remote: ClockTime) {
     const wallTime = yield* now;
     const time = yield* Ref.modify(last, (previous) => {
       const value = tick(previous, wallTime, remote);

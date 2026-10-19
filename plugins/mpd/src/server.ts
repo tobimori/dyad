@@ -84,7 +84,7 @@ class Rejected extends Data.TaggedError("Rejected")<{
   readonly ack: Ack;
 }> {}
 
-const execute = Effect.fn("execute")(function* (line: string, connection: Connection) {
+const execute = Effect.fnUntraced(function* (line: string, connection: Connection) {
   const { name, args } = yield* parseLine(line).pipe(
     Effect.mapError((ack) => new Rejected({ command: "", ack })),
   );
@@ -115,7 +115,7 @@ const execute = Effect.fn("execute")(function* (line: string, connection: Connec
 });
 
 // Runs the lines of one command or of one command list, and stops at the first error
-const runList = Effect.fn("runList")(function* (
+const runList = Effect.fnUntraced(function* (
   lines: ReadonlyArray<string>,
   listOk: boolean,
   connection: Connection,
@@ -135,7 +135,7 @@ const runList = Effect.fn("runList")(function* (
   return response;
 });
 
-const handleConnection = Effect.fn("handleConnection")(function* (
+const handleConnection = Effect.fnUntraced(function* (
   socket: Socket.Socket,
   server: Server,
   login: Login,
@@ -188,7 +188,7 @@ const handleConnection = Effect.fn("handleConnection")(function* (
   });
 
   // Answers when a wanted subsystem changes or at `noidle`. `false` closes the connection.
-  const idle = Effect.fn("idle")(function* (args: ReadonlyArray<string>) {
+  const idle = Effect.fnUntraced(function* (args: ReadonlyArray<string>) {
     const current = yield* Ref.get(session);
     if (Option.isNone(current)) {
       yield* send([`ACK [${ackCode.permission}@0] {idle} you don't have permission for "idle"`]);

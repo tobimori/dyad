@@ -31,7 +31,7 @@ class Seed extends Data.Class<{
   readonly externalId: string | null;
 }> {}
 
-const sourceSeed = Effect.fn("sourceSeed")(function* (sourceId: string) {
+const sourceSeed = Effect.fnUntraced(function* (sourceId: string) {
   const [row] = yield* playableSources(eq(source.id, sourceId), 1);
   if (row !== undefined) {
     const summary = sourceSummary(row);
@@ -75,7 +75,7 @@ const seedOf = (start: typeof RadioStart.Type) =>
   });
 
 // The songs before and after the seed in DJ sets, or the songs of a seed that is a set
-const setNeighbours = Effect.fn("setNeighbours")(function* (seed: Seed) {
+const setNeighbours = Effect.fnUntraced(function* (seed: Seed) {
   const db = yield* Database;
   const summary = seed.summary;
   if (summary === null) return [];
@@ -175,7 +175,7 @@ const setNeighbours = Effect.fn("setNeighbours")(function* (seed: Seed) {
  * Songs after the seed from every recommender with a radio, highest priority first, and from DJ
  * sets, ranked by the user's plays. A recommender that fails or does not answer in time is skipped.
  */
-const radioTracks = Effect.fn("radioTracks")(function* (
+const radioTracks = Effect.fnUntraced(function* (
   seed: Seed,
   options: { readonly exclude: ReadonlySet<string>; readonly limit: number },
 ) {

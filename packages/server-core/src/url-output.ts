@@ -150,7 +150,7 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
     const report = (state: OutputReport["state"], entryId: EntryId, positionMs: number) =>
       options.report(new OutputReport({ revision: local.revision, entryId, state, positionMs }));
 
-    const command = Effect.fn("command")(function* (
+    const command = Effect.fnUntraced(function* (
       state: UrlStatus["state"],
       effect: Effect.Effect<void, OutputError>,
     ) {
@@ -160,7 +160,7 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
     });
 
     // The stream of `entry` from `startMs`, or none when the user cannot play it
-    const prepare = Effect.fn("prepare")(function* (entry: QueueEntry, startMs: number) {
+    const prepare = Effect.fnUntraced(function* (entry: QueueEntry, startMs: number) {
       const plan = yield* streamPlan(
         entry.source.id,
         options.outputId,
@@ -185,7 +185,7 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
       });
     });
 
-    const load = Effect.fn("load")(function* (entry: QueueEntry, positionMs: number) {
+    const load = Effect.fnUntraced(function* (entry: QueueEntry, positionMs: number) {
       const startMs = Math.max(0, Math.round(positionMs));
       const stream = yield* prepare(entry, startMs);
       if (Option.isNone(stream)) return yield* report("failed", entry.id, startMs);
@@ -214,13 +214,13 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
     });
 
     // Members leave first, so that they do not play the next stream
-    const joinMembers = Effect.fn("joinMembers")(function* (group: ReadonlyArray<OutputId>) {
+    const joinMembers = Effect.fnUntraced(function* (group: ReadonlyArray<OutputId>) {
       for (const [id, memberScope] of joined) {
         if (group.includes(id)) continue;
         joined.delete(id);
         yield* Scope.close(memberScope, Exit.void);
       }
-      const join = Effect.fn("join")(function* (id: OutputId) {
+      const join = Effect.fnUntraced(function* (id: OutputId) {
         const memberScope = yield* Scope.fork(runScope);
         const exit = yield* outputs
           .join(id, options.outputId, {
@@ -253,7 +253,7 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
 
     // The live stream replaces the item. The device stops the item when it loads the stream, so
     // the renderer starts at that position and not where the session is when the stream plays.
-    const startLive = Effect.fn("startLive")(function* (current: UrlDesired) {
+    const startLive = Effect.fnUntraced(function* (current: UrlDesired) {
       const now = yield* Clock.currentTimeMillis;
       const positionMs = positionAt(current.playback, now);
       const stopped = new Playback({ ...current.playback, positionMs, at: now, rate: 0 });
@@ -340,7 +340,7 @@ export const driveUrlOutput = Effect.fn("driveUrlOutput")(function* (options: {
       !status.url.startsWith(`${streamOrigin}/stream/`) &&
       !status.url.startsWith(`${streamOrigin}/live/`);
 
-    const observe = Effect.fn("observe")(function* (status: UrlStatus) {
+    const observe = Effect.fnUntraced(function* (status: UrlStatus) {
       const now = yield* Clock.currentTimeMillis;
       local.status = Option.some(status);
       // The live stream follows the device itself

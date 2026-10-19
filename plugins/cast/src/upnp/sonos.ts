@@ -33,7 +33,7 @@ const Topology = Schema.Union([
 
 const uuidOf = (device: UpnpDevice) => device.id.replace(/^uuid:/, "");
 
-const zoneGroups = Effect.fn("zoneGroups")(function* (device: UpnpDevice) {
+const zoneGroups = Effect.fnUntraced(function* (device: UpnpDevice) {
   const topology = findService(device.services, "ZoneGroupTopology");
   if (topology === undefined) return [];
 

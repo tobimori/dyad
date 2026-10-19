@@ -26,7 +26,7 @@ const grantLines = (grant: VideoGrant) => [
 ];
 
 // A search result is not in the catalog yet, so it comes from the provider cache
-const findVideo = Effect.fn("findVideo")(function* (sourceId: string) {
+const findVideo = Effect.fnUntraced(function* (sourceId: string) {
   const db = yield* Database;
   const [row] = yield* db
     .select({ provider: source.provider, externalId: source.externalId })

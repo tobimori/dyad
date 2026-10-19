@@ -112,7 +112,7 @@ export const connectTimed = Effect.fn("connectTimed")(function* (options: {
     if (picked !== undefined) filter.update(picked.measurement, picked.maxError, picked.at);
   });
 
-  const receive = Effect.fn("receive")(function* (data: string | Uint8Array) {
+  const receive = Effect.fnUntraced(function* (data: string | Uint8Array) {
     if (data instanceof Uint8Array) {
       const frame = decodeTimedFrame(data);
       if (frame === undefined) return;

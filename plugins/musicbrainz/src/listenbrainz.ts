@@ -31,7 +31,7 @@ class RecordingDetails extends Schema.Class<RecordingDetails>("RecordingDetails"
 const pairKey = (pair: { readonly artist: string; readonly title: string }) =>
   JSON.stringify([pair.artist.toLowerCase(), pair.title.toLowerCase()]);
 
-const lookupBatch = Effect.fn("lookupBatch")(function* (
+const lookupBatch = Effect.fnUntraced(function* (
   pairs: ReadonlyArray<{ readonly artist: string; readonly title: string }>,
 ) {
   const acrRequest = HttpClientRequest.post(acrLookupUrl).pipe(

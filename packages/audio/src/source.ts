@@ -74,7 +74,7 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
     });
   };
 
-  const start = Effect.fn("start")(function* (bytes: Uint8Array, complete: boolean, first: number) {
+  const start = Effect.fnUntraced(function* (bytes: Uint8Array, complete: boolean, first: number) {
     const next = findSeekPoint(bytes, info, target, first);
     rewind = first > info.dataOffset && (next === undefined || next.frame > target);
     if (rewind) return false;
@@ -95,7 +95,7 @@ export const openSource = Effect.fn("Audio.openSource")(function* (info: SourceI
     return true;
   });
 
-  const read = Effect.fn("read")(function* (bytes: Uint8Array, complete: boolean, first = 0) {
+  const read = Effect.fnUntraced(function* (bytes: Uint8Array, complete: boolean, first = 0) {
     if (!started && !(yield* start(bytes, complete, first))) return empty;
 
     while (decoded < end) {

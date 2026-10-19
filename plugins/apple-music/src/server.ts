@@ -49,7 +49,7 @@ const login = new BrowserLogin({
   cookies: [tokenCookie],
 });
 
-const mediaUserToken = Effect.fn("mediaUserToken")(function* (credentials: Credentials) {
+const mediaUserToken = Effect.fnUntraced(function* (credentials: Credentials) {
   const token = credentials.get(tokenCookie);
   if (token === undefined) {
     return yield* new AppleAccountError({ stage: "account", reason: `No ${tokenCookie} cookie` });
@@ -108,7 +108,7 @@ export const appleMusicPlugin = new Plugin({
           Effect.fail(new AppleMusicError({ stage: "license", reason: "Keys are not cached" })),
       });
 
-      const contentKeys = Effect.fn("contentKeys")(function* (
+      const contentKeys = Effect.fnUntraced(function* (
         session: AppleSession,
         songId: string,
         playlistUrl: string,
@@ -157,7 +157,7 @@ export const appleMusicPlugin = new Plugin({
         timeToLive: (exit) => (Exit.isSuccess(exit) ? "5 minutes" : 0),
       });
 
-      const resolve = Effect.fn("resolve")(
+      const resolve = Effect.fnUntraced(
         function* (songId: string, credentials: Credentials) {
           const token = yield* mediaUserToken(credentials);
           const play = new SongPlay({ mediaUserToken: token, songId });
@@ -187,7 +187,7 @@ export const appleMusicPlugin = new Plugin({
 
       // Keys that are not in memory, for example after a restart, need the asset again for the
       // license exchange
-      const keys = Effect.fn("keys")(
+      const keys = Effect.fnUntraced(
         function* (songId: string, credentials: Credentials) {
           const token = yield* mediaUserToken(credentials);
           const cached = yield* Cache.getOption(songKeys, songId);
@@ -204,7 +204,7 @@ export const appleMusicPlugin = new Plugin({
       );
 
       // The catalog needs only the web client token, but the storefront comes from the account
-      const search = Effect.fn("search")(
+      const search = Effect.fnUntraced(
         function* (query: string, credentials: Credentials) {
           const token = yield* mediaUserToken(credentials);
 
@@ -216,7 +216,7 @@ export const appleMusicPlugin = new Plugin({
       );
 
       // Pages come from the catalog of the user's storefront, like search results
-      const catalogPage = Effect.fn("catalogPage")(
+      const catalogPage = Effect.fnUntraced(
         function* <A>(
           credentials: Credentials,
           read: (
@@ -261,7 +261,7 @@ export const appleMusicPlugin = new Plugin({
           ),
       });
 
-      const link = Effect.fn("link")(
+      const link = Effect.fnUntraced(
         function* (credentials: Credentials) {
           const token = yield* mediaUserToken(credentials);
           const session = yield* withSession(token, Effect.succeed);

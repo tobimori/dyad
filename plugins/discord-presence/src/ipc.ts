@@ -156,7 +156,7 @@ const closedBy = (frame: Frame) =>
   );
 
 // Succeeds when an open connection drops, so that the next connection starts the backoff again
-const connect = Effect.fn("connect")(
+const connect = Effect.fnUntraced(
   function* (clientId: string, activity: SubscriptionRef.SubscriptionRef<Activity | null>) {
     const { pull, writer } = yield* open(yield* socketPaths);
     const next = frameReader(pull);

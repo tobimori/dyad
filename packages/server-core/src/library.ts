@@ -25,7 +25,7 @@ export const albumArtistOf = (tags: typeof Tags.Type) =>
 // A blank name gives no key
 const libraryKey = (name: string | undefined) => (name === undefined ? null : normV1(name) || null);
 
-const importFile = Effect.fn("importFile")(function* (
+const importFile = Effect.fnUntraced(function* (
   rootId: string,
   relativePath: string,
   file: AudioFile,

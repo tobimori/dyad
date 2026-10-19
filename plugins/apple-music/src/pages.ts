@@ -132,10 +132,7 @@ const toCard = (artist: typeof AppleArtist.Type) =>
 export const includes = { ...songIncludes, "include[albums]": "artists" };
 
 // A view has 10 items and a `next` link. One more request gives up to 100 items.
-const allAlbums = Effect.fn("allAlbums")(function* (
-  session: AppleSession,
-  view: typeof AlbumView.Type,
-) {
+const allAlbums = Effect.fnUntraced(function* (session: AppleSession, view: typeof AlbumView.Type) {
   if (view?.next === undefined) return view?.data ?? [];
 
   const request = HttpClientRequest.get(new URL(view.next, amp)).pipe(

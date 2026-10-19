@@ -161,7 +161,7 @@ const readInfo = (entry: Entry) => {
   return Effect.succeed(info);
 };
 
-const openTrack = Effect.fn("openTrack")(function* (entry: Entry, info: SourceInfo, input: number) {
+const openTrack = Effect.fnUntraced(function* (entry: Entry, info: SourceInfo, input: number) {
   const scope = yield* Scope.make();
   const source = yield* openSource(info).pipe(
     Scope.provide(scope),
@@ -425,7 +425,7 @@ export const openRenderer = Effect.gen(function* () {
   };
 
   // A lane that opens `late` frames after its start keeps the timing of its fade and tempo
-  const openLane = Effect.fn("openLane")(function* (start: Start, late: number) {
+  const openLane = Effect.fnUntraced(function* (start: Start, late: number) {
     const info = yield* readInfo(start.entry);
     if (info === undefined) return undefined;
 
@@ -447,7 +447,7 @@ export const openRenderer = Effect.gen(function* () {
   });
 
   // Gives false when the lane needs bytes that did not arrive yet
-  const feed = Effect.fn("feed")(function* (lane: Lane) {
+  const feed = Effect.fnUntraced(function* (lane: Lane) {
     const track = lane.tracks.at(-1)!;
     const pcm = yield* track.source
       .read(track.entry.bytes(), track.entry.complete(), track.entry.start?.() ?? 0)
@@ -485,7 +485,7 @@ export const openRenderer = Effect.gen(function* () {
   });
 
   // Frees the decoders of tracks whose output is complete, so that the first track plays now
-  const dropPlayedTracks = Effect.fn("dropPlayedTracks")(function* (lane: Lane) {
+  const dropPlayedTracks = Effect.fnUntraced(function* (lane: Lane) {
     while (lane.tracks.length > 1 && trackStart(lane, lane.tracks[1]!) <= lane.resampler.output) {
       yield* Scope.close(lane.tracks.shift()!.scope, Exit.void);
     }
@@ -541,7 +541,7 @@ export const openRenderer = Effect.gen(function* () {
   };
 
   // The current lane continues. Entries that play or wait after it must stay next.
-  const follow = Effect.fn("follow")(function* (lane: Lane, rest: ReadonlyArray<Entry>) {
+  const follow = Effect.fnUntraced(function* (lane: Lane, rest: ReadonlyArray<Entry>) {
     const joined = lane.tracks.slice(1).map((track) => track.entry);
     const later = laterEntries(lane);
     const matches = (entries: ReadonlyArray<Entry>, offset: number) =>
@@ -580,7 +580,7 @@ export const openRenderer = Effect.gen(function* () {
     queue = rest;
   });
 
-  const setQueue = Effect.fn("setQueue")(
+  const setQueue = Effect.fnUntraced(
     function* (entries: ReadonlyArray<Entry>) {
       const [first, ...rest] = entries;
       const lane = currentLane();
@@ -620,7 +620,7 @@ export const openRenderer = Effect.gen(function* () {
     (effect) => effect.pipe(Semaphore.withPermits(lock, 1)),
   );
 
-  const seek = Effect.fn("seek")(
+  const seek = Effect.fnUntraced(
     function* (position: number) {
       const target = Math.max(0, position);
       if (next !== undefined && next.at === undefined) {
@@ -678,7 +678,7 @@ export const openRenderer = Effect.gen(function* () {
       }
     }).pipe(Semaphore.withPermits(lock, 1));
 
-  const render = Effect.fn("render")(
+  const render = Effect.fnUntraced(
     function* (frames: number) {
       const samples = new Float32Array(frames * 2);
       const spans: Array<Span> = [];

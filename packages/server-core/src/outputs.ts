@@ -135,7 +135,7 @@ const makeOutputs = Effect.gen(function* () {
   };
 
   /** Keeps the outputs of `registration` up to date until the scope closes */
-  const follow = Effect.fn("follow")(function* (
+  const follow = Effect.fnUntraced(function* (
     registration: string,
     outputs: UrlOutputs | TimedOutputs,
   ) {
@@ -152,7 +152,7 @@ const makeOutputs = Effect.gen(function* () {
 
   // The last holder wins. The earlier holder closes without a stop, so that its last commands come
   // before ours.
-  const hold = Effect.fn("hold")(function* (
+  const hold = Effect.fnUntraced(function* (
     id: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
   ) {
@@ -184,7 +184,7 @@ const makeOutputs = Effect.gen(function* () {
   const kindError = new OutputError({ reason: "The output is of another kind" });
 
   /** Opens the URL output for a session until the scope closes */
-  const open = Effect.fn("open")(function* (
+  const open = Effect.fnUntraced(function* (
     id: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
   ) {
@@ -212,7 +212,7 @@ const makeOutputs = Effect.gen(function* () {
    * Makes the URL output play what `coordinator` plays, until the scope closes. The output belongs
    * to the session like after `open`.
    */
-  const join = Effect.fn("join")(function* (
+  const join = Effect.fnUntraced(function* (
     id: OutputId,
     coordinator: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
@@ -231,7 +231,7 @@ const makeOutputs = Effect.gen(function* () {
    * Opens the timed output, or the timed twin of a URL output, like `open`. A timed device reports
    * no volume, so the volume that the core set last applies again.
    */
-  const openTimed = Effect.fn("openTimed")(function* (
+  const openTimed = Effect.fnUntraced(function* (
     id: OutputId,
     holder: { readonly taken: Effect.Effect<void> },
   ) {
@@ -274,7 +274,7 @@ const makeOutputs = Effect.gen(function* () {
       () => Effect.sync(() => liveStreams.delete(id)),
     );
 
-  const setDelay = Effect.fn("setDelay")(function* (id: OutputId, delayMs: number) {
+  const setDelay = Effect.fnUntraced(function* (id: OutputId, delayMs: number) {
     yield* db
       .insert(outputSetting)
       .values({ outputId: id, delayMs })

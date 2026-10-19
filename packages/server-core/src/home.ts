@@ -109,7 +109,7 @@ const forYouLimit = 25;
 const forYouSearches = 8;
 const PersonalShelves = Schema.Array(SuggestionShelf);
 
-const forYouShelves = Effect.fn("forYouShelves")(function* (
+const forYouShelves = Effect.fnUntraced(function* (
   linked: ReadonlyArray<{
     readonly id: string;
     readonly recommender: Recommender;

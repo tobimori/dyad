@@ -138,7 +138,7 @@ const flag = (arg: string) => {
 const badIndex = invalid("Bad song index");
 
 // `START:END`, `START:` or one position, as the half-open range `[start, end)`
-const range = Effect.fn("range")(function* (arg: string, length: number) {
+const range = Effect.fnUntraced(function* (arg: string, length: number) {
   const [first = "", last] = arg.split(":");
   const start = yield* integer(first);
   const openEnd = last === "" ? length : start + 1;
@@ -147,14 +147,14 @@ const range = Effect.fn("range")(function* (arg: string, length: number) {
   return [start, end] as const;
 });
 
-const entryWithId = Effect.fn("entryWithId")(function* (current: View, arg: string) {
+const entryWithId = Effect.fnUntraced(function* (current: View, arg: string) {
   const id = yield* integer(arg);
   const entry = current.entries.find((entry) => entry.id === id);
   if (entry === undefined) return yield* commandAcks.entry_not_found;
   return entry;
 });
 
-const entryAt = Effect.fn("entryAt")(function* (current: View, arg: string) {
+const entryAt = Effect.fnUntraced(function* (current: View, arg: string) {
   const entry = current.entries[yield* integer(arg)];
   if (entry === undefined) return yield* badIndex;
   return entry;
@@ -195,7 +195,7 @@ const volumeOf = (current: View) =>
     onSome: (output) => (output.volume === null ? -1 : Math.round(output.volume * 100)),
   });
 
-const setVolume = Effect.fn("setVolume")(function* (volume: number) {
+const setVolume = Effect.fnUntraced(function* (volume: number) {
   const output = activeOutput(yield* view);
   if (Option.isNone(output) || output.value.volume === null) {
     return yield* new Ack({ code: ackCode.unknown, message: "No mixer" });
@@ -205,7 +205,7 @@ const setVolume = Effect.fn("setVolume")(function* (volume: number) {
 });
 
 // Moves the entries so that the first one is at `to` in the new order
-const move = Effect.fn("move")(function* (
+const move = Effect.fnUntraced(function* (
   current: View,
   entryIds: ReadonlyArray<EntryId>,
   to: number,
@@ -219,7 +219,7 @@ const move = Effect.fn("move")(function* (
 });
 
 // Adds the sources at `position`, or at the end when it is `null`
-const enqueue = Effect.fn("enqueue")(function* (
+const enqueue = Effect.fnUntraced(function* (
   sourceIds: ReadonlyArray<string>,
   position: number | null,
   context: typeof PlayContext.Type,
@@ -245,7 +245,7 @@ const enqueue = Effect.fn("enqueue")(function* (
   return entryIds;
 });
 
-const sourcesAt = Effect.fn("sourcesAt")(function* (uri: string, connection: Connection) {
+const sourcesAt = Effect.fnUntraced(function* (uri: string, connection: Connection) {
   const sourceId = sourceIdOf(uri);
   if (Option.isSome(sourceId)) return [sourceId.value];
 
@@ -257,7 +257,7 @@ const sourcesAt = Effect.fn("sourcesAt")(function* (uri: string, connection: Con
   return walk(tree, path).flatMap((entry) => (Predicate.isString(entry) ? [] : [entry.id]));
 });
 
-const findSongs = Effect.fn("findSongs")(function* (
+const findSongs = Effect.fnUntraced(function* (
   args: ReadonlyArray<string>,
   mode: "find" | "catalog",
   connection: Connection,
@@ -272,7 +272,7 @@ const findSongs = Effect.fn("findSongs")(function* (
   return found.map(mark).filter(filter.matches);
 });
 
-const findInQueue = Effect.fn("findInQueue")(function* (
+const findInQueue = Effect.fnUntraced(function* (
   args: ReadonlyArray<string>,
   mode: "find" | "search",
   connection: Connection,
@@ -312,7 +312,7 @@ const playlistsByName = Effect.gen(function* () {
   return named;
 });
 
-const playlistSongs = Effect.fn("playlistSongs")(function* (name: string) {
+const playlistSongs = Effect.fnUntraced(function* (name: string) {
   const id = (yield* playlistsByName).get(name);
   if (id === undefined) {
     return yield* new Ack({ code: ackCode.noExist, message: "No such playlist" });
@@ -329,11 +329,7 @@ const outputNumber = (server: Server, outputId: string) => {
   return number;
 };
 
-const outputWithNumber = Effect.fn("outputWithNumber")(function* (
-  current: View,
-  server: Server,
-  arg: string,
-) {
+const outputWithNumber = Effect.fnUntraced(function* (current: View, server: Server, arg: string) {
   const number = yield* integer(arg);
   const output = current.outputs.find((output) => outputNumber(server, output.id) === number);
   if (output === undefined) return yield* commandAcks.output_unavailable;
@@ -391,7 +387,7 @@ const artwork = (picture: boolean) =>
     }),
   );
 
-const skip = Effect.fn("skip")(function* (direction: 1 | -1) {
+const skip = Effect.fnUntraced(function* (direction: 1 | -1) {
   const { playback } = yield* view;
   if (playback.entryId === null || playback.state === "stopped") return yield* notPlaying;
   yield* control(Command.Skip.make({ fromEntryId: playback.entryId, direction }));
@@ -407,7 +403,7 @@ const resume = Effect.gen(function* () {
 const play = (entry: QueueEntry) =>
   Effect.as(control(Command.JumpTo.make({ entryId: entry.id, positionMs: 0 })), []);
 
-const seek = Effect.fn("seek")(function* (current: View, entry: QueueEntry, time: string) {
+const seek = Effect.fnUntraced(function* (current: View, entry: QueueEntry, time: string) {
   const positionMs = Math.max(0, (yield* decimal(time)) * 1000);
   const { entryId, state } = current.playback;
   // `Seek` keeps a pause, but it does not start a stopped entry
@@ -420,7 +416,7 @@ const seek = Effect.fn("seek")(function* (current: View, entry: QueueEntry, time
 });
 
 // Accepts the entries in `positions` that changed after the queue version `version`
-const changedSince = Effect.fn("changedSince")(function* (
+const changedSince = Effect.fnUntraced(function* (
   current: View,
   version: string,
   positions: string | undefined,

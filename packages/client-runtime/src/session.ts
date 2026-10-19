@@ -201,7 +201,7 @@ const sameNowPlaying = (left: NowPlaying | null, right: NowPlaying | null) => {
   );
 };
 
-const makeSessionClient = Effect.fn("makeSessionClient")(function* (options: {
+const makeSessionClient = Effect.fnUntraced(function* (options: {
   /** `null` for a client that only controls */
   readonly player: {
     readonly capabilities: PlaybackCapabilities;
@@ -321,7 +321,7 @@ const makeSessionClient = Effect.fn("makeSessionClient")(function* (options: {
    * A transport command shows in the view at once. A retry sends the same request ID, so that
    * the server applies the command once.
    */
-  const send = Effect.fn("send")(function* (command: Command) {
+  const send = Effect.fnUntraced(function* (command: Command) {
     const current = yield* SubscriptionRef.get(view);
     if (!current.connected) return yield* new SessionOffline();
 

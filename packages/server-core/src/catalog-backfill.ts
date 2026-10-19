@@ -28,7 +28,7 @@ const BackfillPayload = Schema.Struct({ after: Schema.NullOr(Schema.String) });
  * groups. This also runs a new title parser over old sources. Unchanged data writes nothing. Other
  * jobs run between batches.
  */
-const runBackfill = Effect.fn("runBackfill")(function* ({ after }: typeof BackfillPayload.Type) {
+const runBackfill = Effect.fnUntraced(function* ({ after }: typeof BackfillPayload.Type) {
   const db = yield* Database;
   const jobs = yield* Jobs;
   const identity = yield* ReplicaDatabase;
