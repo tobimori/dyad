@@ -232,10 +232,10 @@ export const appleMusicPlugin = new Plugin({
         (effect) => effect.pipe(Effect.mapError(toProviderError), Effect.provide(services)),
       );
 
-      // Apple throttles fast library reads. Search and playback do not wait for this queue.
+      // Apple throttles fast library calls. Search and playback do not wait for this queue.
       const libraryPace = yield* makePacer(1000);
 
-      const readLibrary =
+      const withLibrarySession =
         <A>(
           read: (
             session: AppleSession,
@@ -248,27 +248,29 @@ export const appleMusicPlugin = new Plugin({
           }).pipe(Effect.mapError(toLibraryError), Effect.provide(services));
 
       const library = new ProviderLibrary({
-        probe: readLibrary((session) => probeLibrary(libraryPace, session)),
-        songs: readLibrary((session) => readLibrarySongs(libraryPace, session)),
-        playlists: readLibrary((session) => readPlaylists(libraryPace, session)),
+        probe: withLibrarySession((session) => probeLibrary(libraryPace, session)),
+        songs: withLibrarySession((session) => readLibrarySongs(libraryPace, session)),
+        playlists: withLibrarySession((session) => readPlaylists(libraryPace, session)),
         playlistSongs: (credentials, remoteId) =>
-          readLibrary((session) => readPlaylistTracks(libraryPace, session, remoteId))(credentials),
+          withLibrarySession((session) => readPlaylistTracks(libraryPace, session, remoteId))(
+            credentials,
+          ),
       });
 
       const playlists = new ProviderPlaylists({
         create: (credentials, name) =>
-          readLibrary((session) => createPlaylist(libraryPace, session, name))(credentials),
+          withLibrarySession((session) => createPlaylist(libraryPace, session, name))(credentials),
         add: (credentials, remoteId, songs) =>
-          readLibrary((session) => addPlaylistSongs(libraryPace, session, remoteId, songs))(
+          withLibrarySession((session) => addPlaylistSongs(libraryPace, session, remoteId, songs))(
             credentials,
           ),
       });
 
       const marks = new ProviderMarks({
         save: (credentials, songs) =>
-          readLibrary((session) => saveSongs(libraryPace, session, songs))(credentials),
+          withLibrarySession((session) => saveSongs(libraryPace, session, songs))(credentials),
         favorite: (credentials, songs, favorite) =>
-          readLibrary((session) => setFavorites(libraryPace, session, songs, favorite))(
+          withLibrarySession((session) => setFavorites(libraryPace, session, songs, favorite))(
             credentials,
           ),
       });
