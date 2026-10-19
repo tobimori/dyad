@@ -99,6 +99,8 @@ export default defineConfig({
     target: "node26",
     format: ["esm"],
     plugins: [videoWorker],
+    // essentia.js 0.1.3: its UMD build reads `__dirname`, which ES modules do not have
+    shims: true,
     // Workspace packages export their sources under `development`; their `dist` builds can be stale
     inputOptions: { resolve: { conditionNames: ["development", "node", "import", "default"] } },
     ...(target === undefined
