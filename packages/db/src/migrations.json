@@ -1,0 +1,408 @@
+[
+  {
+    "name": "20260930180743_replica_identity",
+    "folderMillis": 1790791663000,
+    "hash": "192146e6de4c446e7a8e6d94b1fa5bc7ce5b0f7781a43ce7f22430c4a1f37e67",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `replica_identity` (\n\t`slot` integer PRIMARY KEY,\n\t`replica_id` text NOT NULL UNIQUE,\n\t`workspace_id` text NOT NULL,\n\t`created_at` integer NOT NULL\n);\n"
+    ]
+  },
+  {
+    "name": "20260930221930_catalog_schema",
+    "folderMillis": 1790806770000,
+    "hash": "1e19b19be4246a3cc777fd130613dadf112f6669f2851a90865896eb260db59d",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `catalog_assertion` (\n\t`id` text PRIMARY KEY,\n\t`workspace_id` text NOT NULL,\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`field` text NOT NULL,\n\t`value` text,\n\t`origin` text NOT NULL,\n\t`origin_ref` text NOT NULL,\n\t`origin_revision` text,\n\t`evidence` text,\n\t`confidence` real NOT NULL,\n\t`author_user_id` text NOT NULL,\n\t`author_replica_id` text NOT NULL,\n\t`hlc` text NOT NULL,\n\t`retracted` integer DEFAULT false NOT NULL,\n\t`schema_version` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `artist` (\n\t`id` text PRIMARY KEY,\n\t`local_key` text,\n\t`name` text,\n\t`sort_name` text,\n\t`kind` text,\n\t`country` text,\n\t`disambiguation` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `artist_credit` (\n\t`id` text PRIMARY KEY,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `artist_credit_name` (\n\t`artist_credit_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`artist_id` text NOT NULL,\n\t`credited_as` text NOT NULL,\n\t`join_phrase` text DEFAULT '' NOT NULL,\n\tCONSTRAINT `artist_credit_name_pk` PRIMARY KEY(`artist_credit_id`, `position`)\n);\n",
+      "\nCREATE TABLE `entity_merge` (\n\t`id` text PRIMARY KEY,\n\t`entity_type` text NOT NULL,\n\t`from_id` text NOT NULL,\n\t`into_id` text NOT NULL,\n\t`decision` text NOT NULL,\n\t`origin` text NOT NULL,\n\t`author_user_id` text NOT NULL,\n\t`hlc` text NOT NULL\n);\n",
+      "\nCREATE TABLE `identifier` (\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`scheme` text NOT NULL,\n\t`value` text NOT NULL,\n\tCONSTRAINT `identifier_pk` PRIMARY KEY(`entity_type`, `entity_id`, `scheme`, `value`)\n);\n",
+      "\nCREATE TABLE `medium` (\n\t`id` text PRIMARY KEY,\n\t`release_id` text,\n\t`position` integer,\n\t`format` text,\n\t`title` text,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `recording` (\n\t`id` text PRIMARY KEY,\n\t`title` text,\n\t`artist_credit_id` text,\n\t`duration_ms` integer,\n\t`disambiguation` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `release` (\n\t`id` text PRIMARY KEY,\n\t`release_group_id` text,\n\t`title` text,\n\t`artist_credit_id` text,\n\t`date` text,\n\t`country` text,\n\t`release_status` text,\n\t`label` text,\n\t`catalog_number` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `release_group` (\n\t`id` text PRIMARY KEY,\n\t`local_key` text,\n\t`title` text,\n\t`artist_credit_id` text,\n\t`primary_type` text,\n\t`classification_status` text DEFAULT 'uncertain' NOT NULL,\n\t`secondary_types` text DEFAULT '[]' NOT NULL,\n\t`first_release_date` text,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `track` (\n\t`id` text PRIMARY KEY,\n\t`medium_id` text,\n\t`position` integer,\n\t`number` text,\n\t`title` text,\n\t`artist_credit_id` text,\n\t`recording_id` text,\n\t`duration_ms` integer,\n\t`origin` text NOT NULL,\n\t`status` text DEFAULT 'active' NOT NULL,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `library_root` (\n\t`id` text PRIMARY KEY,\n\t`owner_id` text NOT NULL,\n\t`path` text NOT NULL UNIQUE,\n\t`created_at` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `local_file` (\n\t`id` text PRIMARY KEY,\n\t`source_id` text NOT NULL,\n\t`library_root_id` text NOT NULL,\n\t`path` text NOT NULL,\n\t`size` integer NOT NULL,\n\t`mtime` integer NOT NULL,\n\t`audio_hash` text NOT NULL,\n\t`tags` text NOT NULL,\n\t`fingerprint` text,\n\t`loudness_lufs` real,\n\t`true_peak` real,\n\t`track_gain` real,\n\t`album_gain` real,\n\t`scanned_at` integer NOT NULL,\n\tCONSTRAINT `fk_local_file_library_root_id_library_root_id_fk` FOREIGN KEY (`library_root_id`) REFERENCES `library_root`(`id`) ON DELETE CASCADE\n);\n",
+      "\nCREATE TABLE `source` (\n\t`id` text PRIMARY KEY,\n\t`provider` text NOT NULL,\n\t`external_id` text NOT NULL,\n\t`kind` text NOT NULL,\n\t`recording_id` text,\n\t`track_id` text,\n\t`raw_title` text,\n\t`raw_artist` text,\n\t`raw_album` text,\n\t`raw_duration_ms` integer,\n\t`availability` text DEFAULT 'available' NOT NULL,\n\t`checked_at` integer,\n\t`policy_version` integer NOT NULL,\n\t`revision` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `source_match` (\n\t`id` text PRIMARY KEY,\n\t`source_id` text NOT NULL,\n\t`recording_id` text,\n\t`track_id` text,\n\t`method` text NOT NULL,\n\t`confidence` real NOT NULL,\n\t`matched_at` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `source_variant` (\n\t`id` text PRIMARY KEY,\n\t`source_id` text NOT NULL,\n\t`codec` text NOT NULL,\n\t`container` text NOT NULL,\n\t`sample_rate` integer,\n\t`bit_depth` integer,\n\t`channels` integer,\n\t`bitrate` integer,\n\t`lossless` integer NOT NULL,\n\t`encrypted` integer NOT NULL\n);\n",
+      "\nCREATE INDEX `catalog_assertion_entity_idx` ON `catalog_assertion` (`entity_type`,`entity_id`,`field`);",
+      "\nCREATE INDEX `catalog_assertion_origin_idx` ON `catalog_assertion` (`origin_ref`);",
+      "\nCREATE INDEX `artist_local_key_idx` ON `artist` (`local_key`);",
+      "\nCREATE INDEX `artist_credit_name_artist_idx` ON `artist_credit_name` (`artist_id`);",
+      "\nCREATE INDEX `entity_merge_from_idx` ON `entity_merge` (`entity_type`,`from_id`);",
+      "\nCREATE INDEX `entity_merge_into_idx` ON `entity_merge` (`entity_type`,`into_id`);",
+      "\nCREATE INDEX `identifier_lookup_idx` ON `identifier` (`scheme`,`value`);",
+      "\nCREATE INDEX `medium_release_idx` ON `medium` (`release_id`,`position`);",
+      "\nCREATE INDEX `recording_artist_credit_idx` ON `recording` (`artist_credit_id`);",
+      "\nCREATE INDEX `release_release_group_idx` ON `release` (`release_group_id`);",
+      "\nCREATE INDEX `release_artist_credit_idx` ON `release` (`artist_credit_id`);",
+      "\nCREATE INDEX `release_group_artist_credit_idx` ON `release_group` (`artist_credit_id`);",
+      "\nCREATE INDEX `release_group_local_key_idx` ON `release_group` (`local_key`);",
+      "\nCREATE INDEX `track_medium_idx` ON `track` (`medium_id`,`position`);",
+      "\nCREATE INDEX `track_recording_idx` ON `track` (`recording_id`);",
+      "\nCREATE UNIQUE INDEX `local_file_path_idx` ON `local_file` (`library_root_id`,`path`);",
+      "\nCREATE INDEX `local_file_source_idx` ON `local_file` (`source_id`);",
+      "\nCREATE UNIQUE INDEX `source_provider_idx` ON `source` (`provider`,`external_id`);",
+      "\nCREATE INDEX `source_recording_idx` ON `source` (`recording_id`);",
+      "\nCREATE INDEX `source_track_idx` ON `source` (`track_id`);",
+      "\nCREATE INDEX `source_match_source_idx` ON `source_match` (`source_id`);",
+      "\nCREATE INDEX `source_match_recording_idx` ON `source_match` (`recording_id`);",
+      "\nCREATE INDEX `source_variant_source_idx` ON `source_variant` (`source_id`);"
+    ]
+  },
+  {
+    "name": "20261017130608_source_segment",
+    "folderMillis": 1792242368000,
+    "hash": "d4cc00699b2304e88e28eecb6ee3efdf4c7cd828662498ec53da71638efd6cd7",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `source_segment` (\n\t`source_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`track_id` text NOT NULL,\n\t`start_ms` integer NOT NULL,\n\t`end_ms` integer NOT NULL,\n\tCONSTRAINT `source_segment_pk` PRIMARY KEY(`source_id`, `position`)\n);\n",
+      "\nCREATE INDEX `source_segment_track_idx` ON `source_segment` (`track_id`);"
+    ]
+  },
+  {
+    "name": "20261017140022_link_segments_to_recordings",
+    "folderMillis": 1792245622000,
+    "hash": "8301fc7c1c8efd389da72a5187f048b64ed7692416775f2c34c88b04342e5898",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `source_segment` ADD `recording_id` text;",
+      "\nALTER TABLE `source_segment` ADD `raw_artist` text;",
+      "\nALTER TABLE `source_segment` ADD `raw_title` text;",
+      "\nPRAGMA foreign_keys=OFF;",
+      "\nCREATE TABLE `__new_source_segment` (\n\t`source_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`recording_id` text,\n\t`raw_artist` text,\n\t`raw_title` text,\n\t`start_ms` integer,\n\t`end_ms` integer,\n\tCONSTRAINT `source_segment_pk` PRIMARY KEY(`source_id`, `position`)\n);\n",
+      "\nINSERT INTO `__new_source_segment`(`source_id`, `position`, `start_ms`, `end_ms`) SELECT `source_id`, `position`, `start_ms`, `end_ms` FROM `source_segment`;",
+      "\nDROP TABLE `source_segment`;",
+      "\nALTER TABLE `__new_source_segment` RENAME TO `source_segment`;",
+      "\nPRAGMA foreign_keys=ON;",
+      "\nDROP INDEX IF EXISTS `source_segment_track_idx`;",
+      "\nCREATE INDEX `source_segment_recording_idx` ON `source_segment` (`recording_id`);"
+    ]
+  },
+  {
+    "name": "20261017141603_make_library_root_owner_optional",
+    "folderMillis": 1792246563000,
+    "hash": "72440a4712d7542547bee5dd102759bd466a33c27261dc18c92dfdd1924ad8bd",
+    "bps": true,
+    "sql": [
+      "PRAGMA foreign_keys=OFF;",
+      "\nCREATE TABLE `__new_library_root` (\n\t`id` text PRIMARY KEY,\n\t`owner_id` text,\n\t`path` text NOT NULL UNIQUE,\n\t`created_at` integer NOT NULL\n);\n",
+      "\nINSERT INTO `__new_library_root`(`id`, `owner_id`, `path`, `created_at`) SELECT `id`, `owner_id`, `path`, `created_at` FROM `library_root`;",
+      "\nDROP TABLE `library_root`;",
+      "\nALTER TABLE `__new_library_root` RENAME TO `library_root`;",
+      "\nPRAGMA foreign_keys=ON;"
+    ]
+  },
+  {
+    "name": "20261017162501_add_users_and_accounts",
+    "folderMillis": 1792254301000,
+    "hash": "8a7efc5736cbed97181a4b038a5e2e7fa29fe844ca2f53867752c82e93ca702c",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `credential` (\n\t`provider_account_id` text PRIMARY KEY,\n\t`values` text NOT NULL,\n\tCONSTRAINT `fk_credential_provider_account_id_provider_account_id_fk` FOREIGN KEY (`provider_account_id`) REFERENCES `provider_account`(`id`) ON DELETE CASCADE\n);\n",
+      "\nCREATE TABLE `provider_account` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`display_name` text NOT NULL,\n\t`created_at` integer NOT NULL,\n\tCONSTRAINT `fk_provider_account_user_id_user_id_fk` FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON DELETE CASCADE\n);\n",
+      "\nCREATE TABLE `device` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`name` text NOT NULL,\n\t`token_hash` text NOT NULL UNIQUE,\n\t`created_at` integer NOT NULL,\n\tCONSTRAINT `fk_device_user_id_user_id_fk` FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON DELETE CASCADE\n);\n",
+      "\nCREATE TABLE `user` (\n\t`id` text PRIMARY KEY,\n\t`username` text NOT NULL UNIQUE,\n\t`password_hash` text NOT NULL,\n\t`role` text NOT NULL,\n\t`created_at` integer NOT NULL\n);\n",
+      "\nCREATE UNIQUE INDEX `provider_account_user_idx` ON `provider_account` (`user_id`,`provider`);",
+      "\nCREATE INDEX `device_user_idx` ON `device` (`user_id`);"
+    ]
+  },
+  {
+    "name": "20261017172523_add_provider_cache",
+    "folderMillis": 1792257923000,
+    "hash": "9576274a247e2732bd35dfd2c55f358fa0c37421f21c816906f9b6c94625387e",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `provider_item` (\n\t`source_id` text PRIMARY KEY,\n\t`provider` text NOT NULL,\n\t`external_id` text NOT NULL,\n\t`isrc` text,\n\t`data` text NOT NULL,\n\t`fetched_at` integer NOT NULL\n);\n",
+      "\nCREATE UNIQUE INDEX `provider_item_external_idx` ON `provider_item` (`provider`,`external_id`);",
+      "\nCREATE INDEX `provider_item_isrc_idx` ON `provider_item` (`isrc`);"
+    ]
+  },
+  {
+    "name": "20261017180217_add_play_events",
+    "folderMillis": 1792260137000,
+    "hash": "f453b6aa88985f3eebb54acb6a1ad6811f0189908969e0529324ad0f91d14746",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `play_event` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`device_id` text NOT NULL,\n\t`source_id` text NOT NULL,\n\t`recording_id` text,\n\t`started_at` integer NOT NULL,\n\t`played_ms` integer NOT NULL,\n\t`completed` integer NOT NULL,\n\t`context` text NOT NULL,\n\t`scrobbled` integer DEFAULT false NOT NULL\n);\n",
+      "\nCREATE INDEX `play_event_user_started_idx` ON `play_event` (`user_id`,`started_at`);"
+    ]
+  },
+  {
+    "name": "20261017182149_add_recording_merges",
+    "folderMillis": 1792261309000,
+    "hash": "9d1a971eea71b1331bf4761ca99cf305a35a71a55963a1269d7fa0d30dd58da8",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `entity_merge` ADD `method` text NOT NULL;",
+      "\nALTER TABLE `entity_merge` ADD `confidence` real NOT NULL;",
+      "\nALTER TABLE `entity_merge` ADD `evidence` text;",
+      "\nALTER TABLE `recording` ADD `merged_into_id` text;",
+      "\nPRAGMA foreign_keys=OFF;",
+      "\nCREATE TABLE `__new_entity_merge` (\n\t`id` text PRIMARY KEY,\n\t`entity_type` text NOT NULL,\n\t`from_id` text NOT NULL,\n\t`into_id` text NOT NULL,\n\t`decision` text NOT NULL,\n\t`origin` text NOT NULL,\n\t`method` text NOT NULL,\n\t`confidence` real NOT NULL,\n\t`evidence` text,\n\t`author_user_id` text,\n\t`hlc` text NOT NULL\n);\n",
+      "\nINSERT INTO `__new_entity_merge`(`id`, `entity_type`, `from_id`, `into_id`, `decision`, `origin`, `author_user_id`, `hlc`) SELECT `id`, `entity_type`, `from_id`, `into_id`, `decision`, `origin`, `author_user_id`, `hlc` FROM `entity_merge`;",
+      "\nDROP TABLE `entity_merge`;",
+      "\nALTER TABLE `__new_entity_merge` RENAME TO `entity_merge`;",
+      "\nPRAGMA foreign_keys=ON;",
+      "\nDROP INDEX IF EXISTS `source_match_source_idx`;",
+      "\nDROP INDEX IF EXISTS `source_match_recording_idx`;",
+      "\nCREATE INDEX `entity_merge_from_idx` ON `entity_merge` (`entity_type`,`from_id`);",
+      "\nCREATE INDEX `entity_merge_into_idx` ON `entity_merge` (`entity_type`,`into_id`);",
+      "\nCREATE INDEX `recording_merged_into_idx` ON `recording` (`merged_into_id`);",
+      "\nDROP TABLE `source_match`;"
+    ]
+  },
+  {
+    "name": "20261017202112_add_job_queue",
+    "folderMillis": 1792268472000,
+    "hash": "c36bb18e9188aa0d33e5acf7312911277ceefffcaeb18680d7a811bea260cd74",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `job` (\n\t`kind` text NOT NULL,\n\t`key` text NOT NULL,\n\t`payload` text NOT NULL,\n\t`priority` integer NOT NULL,\n\t`next_run_at` integer NOT NULL,\n\t`attempts` integer NOT NULL,\n\t`last_error` text,\n\t`started_at` integer,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tCONSTRAINT `job_pk` PRIMARY KEY(`kind`, `key`)\n);\n",
+      "\nCREATE INDEX `job_next_run_idx` ON `job` (`next_run_at`);"
+    ]
+  },
+  {
+    "name": "20261017202441_add_local_file_library_keys",
+    "folderMillis": 1792268681000,
+    "hash": "a8c03a60754200e5c9f5b9420ab6fd4b003a69b734cdc7a9913839078ea763ca",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `local_file` ADD `album_artist_key` text;",
+      "\nALTER TABLE `local_file` ADD `artist_key` text;",
+      "\nALTER TABLE `local_file` ADD `album_key` text;",
+      "\nCREATE INDEX `local_file_album_idx` ON `local_file` (`album_artist_key`,`album_key`);",
+      "\nCREATE INDEX `local_file_artist_idx` ON `local_file` (`artist_key`);",
+      "\n-- The next library sync reads every file again once and sets the new keys\nUPDATE `local_file` SET `mtime` = -1;\n"
+    ]
+  },
+  {
+    "name": "20261017204328_add_library_items_and_playlists",
+    "folderMillis": 1792269808000,
+    "hash": "4b54d3583f53e5bfb3948a0857d9a316a0caeba0e40a71b2722096a1b26f638a",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `library_remote_playlist` (\n\t`user_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`remote_id` text NOT NULL,\n\t`playlist_id` text NOT NULL,\n\t`version` text,\n\t`last_complete_at` integer,\n\t`incomplete_reason` text,\n\tCONSTRAINT `library_remote_playlist_pk` PRIMARY KEY(`user_id`, `provider`, `remote_id`)\n);\n",
+      "\nCREATE TABLE `library_remote_track` (\n\t`user_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`recording_id` text NOT NULL,\n\t`remote_id` text NOT NULL,\n\t`catalog_id` text,\n\t`source_id` text,\n\t`raw_title` text NOT NULL,\n\t`raw_artist` text,\n\t`raw_album` text,\n\t`raw_duration_ms` integer,\n\t`seen_at` integer NOT NULL,\n\tCONSTRAINT `library_remote_track_pk` PRIMARY KEY(`user_id`, `provider`, `recording_id`)\n);\n",
+      "\nCREATE TABLE `library_sync_state` (\n\t`user_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`songs_version` text,\n\t`last_complete_at` integer,\n\t`last_full_read_at` integer,\n\t`last_attempt_at` integer,\n\t`status` text,\n\t`incomplete_reason` text,\n\t`error` text,\n\t`throttle_count` integer DEFAULT 0 NOT NULL,\n\tCONSTRAINT `library_sync_state_pk` PRIMARY KEY(`user_id`, `provider`)\n);\n",
+      "\nCREATE TABLE `library_item` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`origin` text NOT NULL,\n\t`added_at` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`deleted` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `playlist` (\n\t`id` text PRIMARY KEY,\n\t`owner_id` text NOT NULL,\n\t`name` text NOT NULL,\n\t`origin` text,\n\t`created_at` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`deleted` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `playlist_entry` (\n\t`id` text PRIMARY KEY,\n\t`playlist_id` text NOT NULL,\n\t`recording_id` text NOT NULL,\n\t`position` text NOT NULL,\n\t`added_at` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`deleted` integer NOT NULL\n);\n",
+      "\nCREATE INDEX `library_item_user_idx` ON `library_item` (`user_id`,`deleted`);",
+      "\nCREATE INDEX `library_item_entity_idx` ON `library_item` (`entity_id`);",
+      "\nCREATE INDEX `playlist_owner_idx` ON `playlist` (`owner_id`,`deleted`);",
+      "\nCREATE INDEX `playlist_entry_playlist_idx` ON `playlist_entry` (`playlist_id`,`deleted`);"
+    ]
+  },
+  {
+    "name": "20261017213009_add_recording_metadata",
+    "folderMillis": 1792272609000,
+    "hash": "863c393f2b17a4673266473bc09814a0fcb86fd16433b547c0d8b0569d857f70",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `isrc_lookup` (\n\t`isrc` text PRIMARY KEY,\n\t`recordings` text NOT NULL,\n\t`checked_at` integer NOT NULL\n);\n",
+      "\nALTER TABLE `recording` ADD `artist_name` text;",
+      "\nALTER TABLE `recording` ADD `album` text;",
+      "\nALTER TABLE `recording` ADD `artwork_url` text;",
+      "\nALTER TABLE `recording` ADD `explicit` integer;",
+      "\nPRAGMA foreign_keys=OFF;",
+      "\nCREATE TABLE `__new_catalog_assertion` (\n\t`id` text PRIMARY KEY,\n\t`workspace_id` text NOT NULL,\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`field` text NOT NULL,\n\t`value` text,\n\t`origin` text NOT NULL,\n\t`origin_ref` text NOT NULL,\n\t`origin_revision` text,\n\t`evidence` text,\n\t`confidence` real NOT NULL,\n\t`author_user_id` text,\n\t`author_replica_id` text NOT NULL,\n\t`hlc` text NOT NULL,\n\t`retracted` integer DEFAULT false NOT NULL,\n\t`schema_version` integer NOT NULL\n);\n",
+      "\nINSERT INTO `__new_catalog_assertion`(`id`, `workspace_id`, `entity_type`, `entity_id`, `field`, `value`, `origin`, `origin_ref`, `origin_revision`, `evidence`, `confidence`, `author_user_id`, `author_replica_id`, `hlc`, `retracted`, `schema_version`) SELECT `id`, `workspace_id`, `entity_type`, `entity_id`, `field`, `value`, `origin`, `origin_ref`, `origin_revision`, `evidence`, `confidence`, `author_user_id`, `author_replica_id`, `hlc`, `retracted`, `schema_version` FROM `catalog_assertion`;",
+      "\nDROP TABLE `catalog_assertion`;",
+      "\nALTER TABLE `__new_catalog_assertion` RENAME TO `catalog_assertion`;",
+      "\nPRAGMA foreign_keys=ON;",
+      "\nCREATE INDEX `catalog_assertion_entity_idx` ON `catalog_assertion` (`entity_type`,`entity_id`,`field`);",
+      "\nCREATE INDEX `catalog_assertion_origin_idx` ON `catalog_assertion` (`origin_ref`);"
+    ]
+  },
+  {
+    "name": "20261017235723_add_playback_session",
+    "folderMillis": 1792281443000,
+    "hash": "0ef7b3689b266f5f3428a042ab1e45010f05f851909b516075be042f39b71658",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `playback_session` (\n\t`user_id` text PRIMARY KEY,\n\t`entries` text NOT NULL,\n\t`next_entry_id` integer NOT NULL,\n\t`queue_version` integer NOT NULL,\n\t`revision` integer NOT NULL,\n\t`playback` text NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tCONSTRAINT `fk_playback_session_user_id_user_id_fk` FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON DELETE CASCADE\n);\n"
+    ]
+  },
+  {
+    "name": "20261018101523_add_audio_analysis",
+    "folderMillis": 1792318523000,
+    "hash": "9b97a75b0f7a05c45dff45173db8a42d8b35a65d34a57fff468cb09bc240ac0d",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `audio_analysis` (\n\t`variant_id` text PRIMARY KEY,\n\t`asset` text NOT NULL,\n\t`analyzer_version` integer NOT NULL,\n\t`loudness` real NOT NULL,\n\t`true_peak` real NOT NULL,\n\t`leading_silence_ms` integer NOT NULL,\n\t`trailing_silence_ms` integer NOT NULL,\n\t`analyzed_at` integer NOT NULL\n);\n",
+      "\nALTER TABLE `local_file` DROP COLUMN `loudness_lufs`;",
+      "\nALTER TABLE `local_file` DROP COLUMN `true_peak`;",
+      "\nALTER TABLE `local_file` DROP COLUMN `track_gain`;",
+      "\nALTER TABLE `local_file` DROP COLUMN `album_gain`;"
+    ]
+  },
+  {
+    "name": "20261018103712_add_device_download",
+    "folderMillis": 1792319832000,
+    "hash": "ecf2cc6b4ab4018cd125bbf16f5080e59c3399265de1e6aefb7ed31facbfa242",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `device_download` (\n\t`device_id` text NOT NULL,\n\t`source_id` text NOT NULL,\n\t`quality` text NOT NULL,\n\t`lease_expires_at` integer,\n\t`created_at` integer NOT NULL,\n\tCONSTRAINT `device_download_pk` PRIMARY KEY(`device_id`, `source_id`),\n\tCONSTRAINT `fk_device_download_device_id_device_id_fk` FOREIGN KEY (`device_id`) REFERENCES `device`(`id`) ON DELETE CASCADE\n);\n"
+    ]
+  },
+  {
+    "name": "20261018113948_add_sync_state",
+    "folderMillis": 1792323588000,
+    "hash": "8a6c297ec2b3f82568c98572947af487c4867063e10ca60d779bf0f68cca3ebc",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `replica` (\n\t`replica_id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`device_id` text NOT NULL,\n\t`last_mutation_id` integer DEFAULT 0 NOT NULL,\n\t`created_at` integer NOT NULL\n);\n",
+      "\nCREATE TABLE `sync_rejection` (\n\t`replica_id` text NOT NULL,\n\t`mutation_id` integer NOT NULL,\n\t`reason` text NOT NULL,\n\tCONSTRAINT `sync_rejection_pk` PRIMARY KEY(`replica_id`, `mutation_id`)\n);\n",
+      "\nALTER TABLE `play_event` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `library_item` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `playlist` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `playlist_entry` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `replica_identity` ADD `epoch` text NOT NULL DEFAULT '';",
+      "\nALTER TABLE `replica_identity` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nCREATE INDEX `recording_revision_idx` ON `recording` (`revision`);",
+      "\nCREATE INDEX `play_event_change_idx` ON `play_event` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `library_item_change_idx` ON `library_item` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `playlist_entry_change_idx` ON `playlist_entry` (`playlist_id`,`change_seq`);",
+      "\nUPDATE `play_event` SET `change_seq` = 1;",
+      "\nUPDATE `library_item` SET `change_seq` = 1;",
+      "\nUPDATE `playlist` SET `change_seq` = 1;",
+      "\nUPDATE `playlist_entry` SET `change_seq` = 1;",
+      "\nUPDATE `replica_identity` SET `change_seq` = 1, `epoch` = lower(\n\thex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-' ||\n\tsubstr('89ab', 1 + abs(random()) % 4, 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))\n);\n"
+    ]
+  },
+  {
+    "name": "20261018114748_add_dj_analysis",
+    "folderMillis": 1792324068000,
+    "hash": "703cd1999bb2c2aaee47b32a1da2c6ace8ab50adf5cbb52ac5686efaf3fdf3ff",
+    "bps": true,
+    "sql": ["ALTER TABLE `audio_analysis` ADD `beats` text;"]
+  },
+  {
+    "name": "20261018115000_add_provider_page",
+    "folderMillis": 1792324200000,
+    "hash": "9530a685d6ebb2502602bdc7129ede1c9291a97318ee88e3c271417d2ea089c7",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `provider_page` (\n\t`provider` text NOT NULL,\n\t`kind` text NOT NULL,\n\t`external_id` text NOT NULL,\n\t`data` text NOT NULL,\n\t`fetched_at` integer NOT NULL,\n\tCONSTRAINT `provider_page_pk` PRIMARY KEY(`provider`, `kind`, `external_id`)\n);\n"
+    ]
+  },
+  {
+    "name": "20261018120806_add_recording_versions",
+    "folderMillis": 1792325286000,
+    "hash": "c4535a3a7eb13f68633b3b4fa8e1036a7563865569ba051d8bbbec11e8e4f207",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `recording_derivative` (\n\t`recording_id` text NOT NULL,\n\t`original_id` text NOT NULL,\n\t`part` integer,\n\t`kind` text NOT NULL,\n\tCONSTRAINT `recording_derivative_pk` PRIMARY KEY(`recording_id`, `original_id`)\n);\n",
+      "\nCREATE TABLE `artist_lookup` (\n\t`name_key` text PRIMARY KEY,\n\t`artists` text NOT NULL,\n\t`checked_at` integer NOT NULL\n);\n",
+      "\nALTER TABLE `artist` ADD `name_key` text;",
+      "\nALTER TABLE `artist` ADD `merged_into_id` text;",
+      "\nPRAGMA foreign_keys=OFF;",
+      "\nCREATE TABLE `__new_artist_credit_name` (\n\t`artist_credit_id` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`artist_id` text,\n\t`credited_as` text NOT NULL,\n\t`join_phrase` text DEFAULT '' NOT NULL,\n\tCONSTRAINT `artist_credit_name_pk` PRIMARY KEY(`artist_credit_id`, `position`)\n);\n",
+      "\nINSERT INTO `__new_artist_credit_name`(`artist_credit_id`, `position`, `artist_id`, `credited_as`, `join_phrase`) SELECT `artist_credit_id`, `position`, `artist_id`, `credited_as`, `join_phrase` FROM `artist_credit_name`;",
+      "\nDROP TABLE `artist_credit_name`;",
+      "\nALTER TABLE `__new_artist_credit_name` RENAME TO `artist_credit_name`;",
+      "\nPRAGMA foreign_keys=ON;",
+      "\nCREATE INDEX `artist_credit_name_artist_idx` ON `artist_credit_name` (`artist_id`);",
+      "\nCREATE INDEX `artist_name_key_idx` ON `artist` (`name_key`);",
+      "\nCREATE INDEX `artist_merged_into_idx` ON `artist` (`merged_into_id`);",
+      "\nCREATE INDEX `recording_derivative_original_idx` ON `recording_derivative` (`original_id`);"
+    ]
+  },
+  {
+    "name": "20261018132443_add_playlist_field_clocks",
+    "folderMillis": 1792329883000,
+    "hash": "84dcb77943cdec69b1fdf6aff3924ce901f421df2ffed5c688ba1546b959c8ea",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `playlist` ADD `field_hlc` text;",
+      "\nALTER TABLE `playlist_entry` ADD `field_hlc` text;"
+    ]
+  },
+  {
+    "name": "20261018140340_link_provider_playlists",
+    "folderMillis": 1792332220000,
+    "hash": "4cea6fd0402e13f5d13ab2eac96072735f030c3093eeeffee5f8f8022eda1453",
+    "bps": true,
+    "sql": [
+      "ALTER TABLE `library_remote_playlist` ADD `snapshot` text;",
+      "\nALTER TABLE `library_remote_playlist` ADD `name` text;",
+      "\nALTER TABLE `playlist` ADD `link` text;",
+      "\nUPDATE `replica_identity` SET `change_seq` = `change_seq` + 1 WHERE `slot` = 1;",
+      "\nUPDATE `library_remote_playlist` SET\n  `name` = (SELECT `name` FROM `playlist` WHERE `playlist`.`id` = `library_remote_playlist`.`playlist_id`),\n  `snapshot` = (\n    SELECT json_group_array(`recording_id` ORDER BY `position`, `id`) FROM `playlist_entry`\n    WHERE `playlist_entry`.`playlist_id` = `library_remote_playlist`.`playlist_id` AND `deleted` = 0\n  );",
+      "\nUPDATE `playlist` SET\n  `link` = json_object(\n    'provider', substr(`origin`, 9),\n    'remoteId', (SELECT `remote_id` FROM `library_remote_playlist` WHERE `playlist_id` = `playlist`.`id`),\n    'direction', 'import'\n  ),\n  `hlc` = printf('%015d', max(\n    CAST(substr(`hlc`, 1, 15) AS INTEGER) + 1,\n    CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n  )) || '-0000-' || (SELECT `replica_id` FROM `replica_identity` WHERE `slot` = 1),\n  `field_hlc` = NULL,\n  `change_seq` = (SELECT `change_seq` FROM `replica_identity` WHERE `slot` = 1)\nWHERE `origin` LIKE 'account:%' AND `deleted` = 0\n  AND EXISTS (SELECT 1 FROM `library_remote_playlist` WHERE `playlist_id` = `playlist`.`id`);\n"
+    ]
+  },
+  {
+    "name": "20261018142248_add_playlist_link_state",
+    "folderMillis": 1792333368000,
+    "hash": "84d625a919ade8b1dd906b9a83f42b85871c2752a060876c2f7fe96925d79f36",
+    "bps": true,
+    "sql": ["ALTER TABLE `playlist` ADD `link_state` text;"]
+  },
+  {
+    "name": "20261018154456_add_output_setting",
+    "folderMillis": 1792338296000,
+    "hash": "4437569e4c3fbf6a58edd7701c92da8f71be4624d0967741c105d2950b7e2932",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `output_setting` (\n\t`output_id` text PRIMARY KEY,\n\t`delay_ms` integer NOT NULL\n);\n"
+    ]
+  },
+  {
+    "name": "20261018165343_add_server_replication",
+    "folderMillis": 1792342423000,
+    "hash": "83176d2fcfc947458b68c7f618bea4b5c5f7866127c5fe62decbba9c1f6bfb93",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `server_peer` (\n\t`replica_id` text PRIMARY KEY,\n\t`url` text,\n\t`token` text,\n\t`token_hash` text UNIQUE,\n\t`epoch` text,\n\t`pulled_seq` integer DEFAULT 0 NOT NULL,\n\t`pulled_row_key` text,\n\t`pushed_seq` integer DEFAULT 0 NOT NULL,\n\t`pushed_row_key` text,\n\t`created_at` integer NOT NULL,\n\t`synced_at` integer,\n\t`error` text\n);\n",
+      "\nALTER TABLE `catalog_assertion` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `entity_merge` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `source` ADD `hlc` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `source` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nALTER TABLE `source_variant` ADD `hlc` text DEFAULT '' NOT NULL;",
+      "\nALTER TABLE `source_variant` ADD `change_seq` integer DEFAULT 0 NOT NULL;",
+      "\nCREATE INDEX `catalog_assertion_change_idx` ON `catalog_assertion` (`change_seq`);",
+      "\nCREATE INDEX `entity_merge_change_idx` ON `entity_merge` (`change_seq`);",
+      "\nCREATE INDEX `play_event_seq_idx` ON `play_event` (`change_seq`);",
+      "\nCREATE INDEX `library_item_seq_idx` ON `library_item` (`change_seq`);",
+      "\nCREATE INDEX `playlist_seq_idx` ON `playlist` (`change_seq`);",
+      "\nCREATE INDEX `playlist_entry_seq_idx` ON `playlist_entry` (`change_seq`);",
+      "\nCREATE INDEX `source_change_idx` ON `source` (`change_seq`);",
+      "\nCREATE INDEX `source_variant_change_idx` ON `source_variant` (`change_seq`);",
+      "\nUPDATE `catalog_assertion` SET `change_seq` = 1;",
+      "\nUPDATE `entity_merge` SET `change_seq` = 1;",
+      "\nUPDATE `source` SET `change_seq` = 1;",
+      "\nUPDATE `source_variant` SET `change_seq` = 1;",
+      "\nUPDATE `replica_identity` SET `change_seq` = max(`change_seq`, 1);\n"
+    ]
+  },
+  {
+    "name": "20261018171839_add_source_preference",
+    "folderMillis": 1792343919000,
+    "hash": "439f4d6fe51d44b4d46bcee2364f02dfcc2a68be5999ad4c041386f237c3d02b",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `source_preference` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`scope` text NOT NULL,\n\t`provider_ranking` text NOT NULL,\n\t`hlc` text NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE INDEX `source_preference_change_idx` ON `source_preference` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `source_preference_seq_idx` ON `source_preference` (`change_seq`);"
+    ]
+  },
+  {
+    "name": "20261018211830_add_rating",
+    "folderMillis": 1792358310000,
+    "hash": "27931ed70e52456036311dcb422e7ea57d2665d698610271b33584a890799bf8",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `rating` (\n\t`id` text PRIMARY KEY,\n\t`user_id` text NOT NULL,\n\t`entity_type` text NOT NULL,\n\t`entity_id` text NOT NULL,\n\t`favorite` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE INDEX `rating_user_idx` ON `rating` (`user_id`,`favorite`);",
+      "\nCREATE INDEX `rating_change_idx` ON `rating` (`user_id`,`change_seq`);",
+      "\nCREATE INDEX `rating_seq_idx` ON `rating` (`change_seq`);"
+    ]
+  }
+]

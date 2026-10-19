@@ -42,7 +42,7 @@ const configuration = Effect.gen(function* () {
 type ServerConfigValues = Effect.Success<typeof configuration>;
 
 export class ServerConfig extends Context.Service<ServerConfig, ServerConfigValues>()(
-  "@dyad/server/ServerConfig",
+  "@dyad/host/ServerConfig",
 ) {
   static readonly layer = Layer.effect(ServerConfig, configuration);
 

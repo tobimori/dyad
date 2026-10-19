@@ -15,18 +15,33 @@ const run = Effect.fn(function* (command: string, args: ReadonlyArray<string>) {
   }
 });
 
-// The CLI executable and mobile apps cannot read a migrations folder, so the client migrations
-// also go into a JSON module in the format of Drizzle's `readMigrationFiles`
+const kinds = {
+  server: { config: "drizzle.config.ts", folder: "migrations", output: "src/migrations.json" },
+  client: {
+    config: "drizzle.client.config.ts",
+    folder: "migrations-client",
+    output: "src/client/migrations.json",
+  },
+};
+
+// Executables cannot read a migrations folder, so the migrations also go into a JSON module in the
+// format of Drizzle's `readMigrationFiles`. `--bundle` only writes the JSON module.
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const name = process.argv[2];
+  const [kindName, name] = process.argv.slice(2);
+  if (kindName !== "server" && kindName !== "client") {
+    return yield* new GenerateError({ message: "Give the kind: server or client" });
+  }
   if (name === undefined) return yield* new GenerateError({ message: "Give a migration name" });
+  const kind = kinds[kindName];
 
   const root = path.dirname(import.meta.dirname);
-  const folder = path.join(root, "migrations-client");
-  yield* run("drizzle-kit", ["generate", "--config", "drizzle.client.config.ts", "--name", name]);
+  const folder = path.join(root, kind.folder);
+  if (name !== "--bundle") {
+    yield* run("drizzle-kit", ["generate", "--config", kind.config, "--name", name]);
+  }
 
   const names = (yield* fs.readDirectory(folder)).toSorted();
   const migrations = yield* Effect.forEach(names, (migration) =>
@@ -46,7 +61,7 @@ const program = Effect.gen(function* () {
     }),
   );
 
-  const output = path.join(root, "src/client/migrations.json");
+  const output = path.join(root, kind.output);
   yield* fs.writeFileString(output, `${JSON.stringify(migrations, null, 2)}\n`);
   yield* run("vp", ["fmt", output]);
 });

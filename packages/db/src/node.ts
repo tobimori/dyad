@@ -2,10 +2,11 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { eq, sql } from "drizzle-orm";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import * as Drizzle from "drizzle-orm/effect-sqlite-node";
-import { migrate } from "drizzle-orm/effect-sqlite-node/migrator";
-import { Clock, Context, Crypto, Data, Effect, Layer, Path, Schema } from "effect";
+import { migrate } from "drizzle-orm/sqlite-core/effect/session";
+import { Clock, Context, Crypto, Data, Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/sql";
 
+import migrations from "./migrations.json" with { type: "json" };
 import { relations } from "./relations.ts";
 import { replicaIdentity } from "./schema/replica.ts";
 
@@ -21,9 +22,8 @@ export class ReplicaDatabase extends Context.Service<ReplicaDatabase, Identity>(
 
 const makeDatabase = Effect.gen(function* () {
   const db = yield* Drizzle.makeWithDefaults({ relations });
-  const path = yield* Path.Path;
-  const migrationsFolder = yield* path.fromFileUrl(new URL("../migrations/", import.meta.url));
-  yield* migrate(db, { migrationsFolder });
+  // From the bundle, so that an executable needs no migrations folder
+  yield* migrate(migrations, db._.session);
 
   // SQLite overwrites deleted rows with zeros, so that removed credentials leave no copy in the file
   yield* db.run(sql`PRAGMA secure_delete = ON`);

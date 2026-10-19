@@ -1,7 +1,7 @@
 import { Effect, Layer, Path, Predicate, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse, HttpStaticServer } from "effect/http";
 
-import { ServerConfig } from "./config.ts";
+import { ServerConfig } from "@dyad/host";
 
 class WebApplicationError extends Schema.TaggedError<WebApplicationError>()("WebApplicationError", {
   cause: Schema.Unknown,

@@ -25,8 +25,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "generate": "drizzle-kit generate --name",
-    "generate-client": "node scripts/generate-client-migration.ts"
+    "generate": "node scripts/generate-migration.ts server",
+    "generate-client": "node scripts/generate-migration.ts client"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "catalog:",

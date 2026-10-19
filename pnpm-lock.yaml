@@ -239,42 +239,9 @@ importers:
       '@dyad/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@dyad/plugin':
+      '@dyad/host':
         specifier: workspace:*
-        version: link:../../packages/plugin
-      '@dyad/plugin-airplay':
-        specifier: workspace:*
-        version: link:../../plugins/airplay
-      '@dyad/plugin-apple-music':
-        specifier: workspace:*
-        version: link:../../plugins/apple-music
-      '@dyad/plugin-bandcamp':
-        specifier: workspace:*
-        version: link:../../plugins/bandcamp
-      '@dyad/plugin-cast':
-        specifier: workspace:*
-        version: link:../../plugins/cast
-      '@dyad/plugin-deezer':
-        specifier: workspace:*
-        version: link:../../plugins/deezer
-      '@dyad/plugin-hypem':
-        specifier: workspace:*
-        version: link:../../plugins/hypem
-      '@dyad/plugin-local-files':
-        specifier: workspace:*
-        version: link:../../plugins/local-files
-      '@dyad/plugin-mixesdb':
-        specifier: workspace:*
-        version: link:../../plugins/mixesdb
-      '@dyad/plugin-musicbrainz':
-        specifier: workspace:*
-        version: link:../../plugins/musicbrainz
-      '@dyad/plugin-soundcloud':
-        specifier: workspace:*
-        version: link:../../plugins/soundcloud
-      '@dyad/plugin-youtube':
-        specifier: workspace:*
-        version: link:../../plugins/youtube
+        version: link:../../packages/host
       '@dyad/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
@@ -287,9 +254,6 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
-      env-paths:
-        specifier: 'catalog:'
-        version: 4.0.0
 
   apps/web:
     dependencies:
@@ -407,6 +371,63 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.5
+
+  packages/host:
+    dependencies:
+      '@dyad/db':
+        specifier: workspace:*
+        version: link:../db
+      '@dyad/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@dyad/plugin':
+        specifier: workspace:*
+        version: link:../plugin
+      '@dyad/plugin-airplay':
+        specifier: workspace:*
+        version: link:../../plugins/airplay
+      '@dyad/plugin-apple-music':
+        specifier: workspace:*
+        version: link:../../plugins/apple-music
+      '@dyad/plugin-bandcamp':
+        specifier: workspace:*
+        version: link:../../plugins/bandcamp
+      '@dyad/plugin-cast':
+        specifier: workspace:*
+        version: link:../../plugins/cast
+      '@dyad/plugin-deezer':
+        specifier: workspace:*
+        version: link:../../plugins/deezer
+      '@dyad/plugin-hypem':
+        specifier: workspace:*
+        version: link:../../plugins/hypem
+      '@dyad/plugin-local-files':
+        specifier: workspace:*
+        version: link:../../plugins/local-files
+      '@dyad/plugin-mixesdb':
+        specifier: workspace:*
+        version: link:../../plugins/mixesdb
+      '@dyad/plugin-musicbrainz':
+        specifier: workspace:*
+        version: link:../../plugins/musicbrainz
+      '@dyad/plugin-soundcloud':
+        specifier: workspace:*
+        version: link:../../plugins/soundcloud
+      '@dyad/plugin-youtube':
+        specifier: workspace:*
+        version: link:../../plugins/youtube
+      '@dyad/server-core':
+        specifier: workspace:*
+        version: link:../server-core
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+      env-paths:
+        specifier: 'catalog:'
+        version: 4.0.0
 
   packages/media:
     dependencies:

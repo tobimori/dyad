@@ -15,23 +15,11 @@
   "dependencies": {
     "@dyad/db": "workspace:*",
     "@dyad/domain": "workspace:*",
-    "@dyad/plugin": "workspace:*",
-    "@dyad/plugin-airplay": "workspace:*",
-    "@dyad/plugin-apple-music": "workspace:*",
-    "@dyad/plugin-bandcamp": "workspace:*",
-    "@dyad/plugin-cast": "workspace:*",
-    "@dyad/plugin-deezer": "workspace:*",
-    "@dyad/plugin-hypem": "workspace:*",
-    "@dyad/plugin-local-files": "workspace:*",
-    "@dyad/plugin-mixesdb": "workspace:*",
-    "@dyad/plugin-musicbrainz": "workspace:*",
-    "@dyad/plugin-soundcloud": "workspace:*",
-    "@dyad/plugin-youtube": "workspace:*",
+    "@dyad/host": "workspace:*",
     "@dyad/server-core": "workspace:*",
     "@dyad/web": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
-    "env-paths": "catalog:"
+    "effect": "catalog:"
   },
   "portless": {
     "name": "api.dyad",

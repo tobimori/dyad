@@ -1,13 +1,14 @@
 // First, because libuv reads the size when a module uses the pool for the first time
-import "./threadpool.ts";
+import "@dyad/host/threadpool";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import { ServerConfig } from "./config.ts";
-import { serverLayer } from "./server.ts";
+import { ServerConfig, replicaLayer } from "@dyad/host";
 
-serverLayer.pipe(
+import { webApplicationLayer } from "./web.ts";
+
+replicaLayer(webApplicationLayer).pipe(
   Layer.provide(ServerConfig.layer),
   Layer.provide(NodeServices.layer),
   Layer.launch,

@@ -5,7 +5,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Layer, Option, Path, Redacted } from "effect";
 import { Argument, Command, Prompt } from "effect/cli";
 
-import { ServerConfig } from "./config.ts";
+import { ServerConfig } from "@dyad/host";
 
 const failures = {
   has_users: "This server already has users. An admin pairs it with `dyad server pair`.",

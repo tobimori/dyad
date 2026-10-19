@@ -1,0 +1,34 @@
+{
+  "name": "@dyad/host",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./threadpool": "./src/threadpool.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dyad/db": "workspace:*",
+    "@dyad/domain": "workspace:*",
+    "@dyad/plugin": "workspace:*",
+    "@dyad/plugin-airplay": "workspace:*",
+    "@dyad/plugin-apple-music": "workspace:*",
+    "@dyad/plugin-bandcamp": "workspace:*",
+    "@dyad/plugin-cast": "workspace:*",
+    "@dyad/plugin-deezer": "workspace:*",
+    "@dyad/plugin-hypem": "workspace:*",
+    "@dyad/plugin-local-files": "workspace:*",
+    "@dyad/plugin-mixesdb": "workspace:*",
+    "@dyad/plugin-musicbrainz": "workspace:*",
+    "@dyad/plugin-soundcloud": "workspace:*",
+    "@dyad/plugin-youtube": "workspace:*",
+    "@dyad/server-core": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "env-paths": "catalog:"
+  }
+}
