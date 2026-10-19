@@ -69,7 +69,7 @@ const runBackfill = Effect.fn(function* ({ after }: typeof BackfillPayload.Type)
             entityType: "recording",
             entityId: boundId,
             field: "title",
-            origin: local ? "local" : "provider",
+            origin: local ? "local" : "plugin",
             originRef: local ? row.source.id : `${row.source.provider}:${row.source.externalId}`,
           });
           const [own] = yield* db

@@ -358,6 +358,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@dyad/sync':
+        specifier: workspace:*
+        version: link:../sync
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)

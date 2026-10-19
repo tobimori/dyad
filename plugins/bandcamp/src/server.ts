@@ -1,4 +1,4 @@
-import { Plugin, Provider } from "@dyad/plugin";
+import { FactRank, Plugin, Provider } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
@@ -26,7 +26,7 @@ export const bandcampPlugin = new Plugin({
           artist: (bandId) => readBand(bandId).pipe(Effect.provide(services)),
           album: (albumId) => readRelease(albumId).pipe(Effect.provide(services)),
           artistFromUrl: (url) => bandFromUrl(url).pipe(Effect.provide(services)),
-          metadataPriority: 20,
+          factRank: new FactRank({ metadata: 50, type: 10, label: 20 }),
           uploads: true,
           download: { leaseDays: 30 },
           account: {

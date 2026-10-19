@@ -7,6 +7,7 @@ import {
   editionTrack,
   entityMerge,
   job,
+  policyVersion,
   recording,
 } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
@@ -23,7 +24,7 @@ import { effectiveTarget, followEdges, writeSystemMerge } from "./matching.ts";
 import { Jobs } from "./jobs.ts";
 // `pages.ts` imports this module, so use its exports only inside functions
 import { fetchProviderPage } from "./pages.ts";
-import { Providers, usableProviders } from "./providers.ts";
+import { FactRanks, Providers, usableProviders } from "./providers.ts";
 
 const EditionTrack = Schema.Struct({
   disc: Schema.Int,
@@ -88,7 +89,7 @@ const resolveGroups = Effect.fn(function* (
 
   yield* db
     .insert(table)
-    .values(ids.map((id) => ({ id, origin: "provider" as const, policyVersion: 1, revision: 0 })))
+    .values(ids.map((id) => ({ id, origin: "provider" as const, policyVersion, revision: 0 })))
     .onConflictDoNothing();
   const current = yield* db
     .select({ id: table.id, mergedIntoId: table.mergedIntoId })
@@ -256,13 +257,13 @@ export const albumPageRefs = Effect.fn("albumPageRefs")(function* (
  */
 const projectAlbums = Effect.fn(function* (albumIds: Iterable<string>) {
   const db = yield* Database;
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   const ids = [...new Set(albumIds)];
   if (ids.length === 0) return;
 
   yield* db
     .insert(album)
-    .values(ids.map((id) => ({ id, origin: "provider" as const, policyVersion: 1, revision: 0 })))
+    .values(ids.map((id) => ({ id, origin: "provider" as const, policyVersion, revision: 0 })))
     .onConflictDoNothing();
   const known = yield* db
     .select({ id: album.id, root: album.mergedIntoId })
@@ -336,7 +337,7 @@ const projectAlbums = Effect.fn(function* (albumIds: Iterable<string>) {
         const original = own.toSorted(originalFirst)[0];
         const editionIds = new Set(own.map((row) => row.id));
         const type = resolveField(
-          providers,
+          ranks,
           assertions.filter(
             (assertion) =>
               assertion.field === "album_type" &&
@@ -345,7 +346,7 @@ const projectAlbums = Effect.fn(function* (albumIds: Iterable<string>) {
           "album_type",
           AlbumType,
         );
-        const names = yield* creditNames(providers, credits.get(original?.id ?? "") ?? []);
+        const names = yield* creditNames(ranks, credits.get(original?.id ?? "") ?? []);
         if (!sameNames(existing[id] ?? [], names)) {
           yield* db.delete(albumArtist).where(eq(albumArtist.albumId, id));
           if (names.length > 0) {
@@ -382,13 +383,13 @@ const projectAlbums = Effect.fn(function* (albumIds: Iterable<string>) {
  */
 const projectEditions = Effect.fn(function* (editionIds: Iterable<string>) {
   const db = yield* Database;
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   const ids = [...new Set(editionIds)];
   if (ids.length === 0) return [];
 
   yield* db
     .insert(edition)
-    .values(ids.map((id) => ({ id, origin: "provider" as const, policyVersion: 1, revision: 0 })))
+    .values(ids.map((id) => ({ id, origin: "provider" as const, policyVersion, revision: 0 })))
     .onConflictDoNothing();
   const rows = yield* db.select().from(edition).where(inArray(edition.id, ids));
   const merged = yield* db
@@ -417,12 +418,7 @@ const projectEditions = Effect.fn(function* (editionIds: Iterable<string>) {
         ]);
         const own = assertions.filter((assertion) => members.has(assertion.entityId));
         const field = <F extends keyof typeof editionFields>(name: F) =>
-          resolveField<(typeof editionFields)[F]["Type"]>(
-            providers,
-            own,
-            name,
-            editionFields[name],
-          );
+          resolveField<(typeof editionFields)[F]["Type"]>(ranks, own, name, editionFields[name]);
         const title = field("title");
         const credit = field("artist_credit");
         const values = {
@@ -627,7 +623,7 @@ export const assertEdition = Effect.fn("assertEdition")(function* (
       const changed = yield* assertFields(
         "edition",
         id,
-        "provider",
+        "plugin",
         `${provider}:${release.externalId}`,
         {
           title: release.title,

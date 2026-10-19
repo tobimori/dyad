@@ -1,4 +1,4 @@
-import { catalogAssertion, recording, source, sourceSegment } from "@dyad/db";
+import { catalogAssertion, policyVersion, recording, source, sourceSegment } from "@dyad/db";
 import { Database, ReplicaDatabase } from "@dyad/db/node";
 import { RecordingId, SourceSegment, TracklistEditFailed } from "@dyad/domain";
 import { TracklistEntry } from "@dyad/plugin";
@@ -24,7 +24,7 @@ import {
   waitForMusicBrainz,
 } from "./matching.ts";
 import { normalizeArtist, normalizeText } from "./normalize.ts";
-import { Providers, usableProviders } from "./providers.ts";
+import { FactRanks, Providers, usableProviders } from "./providers.ts";
 import { playableSources, sourceSummary } from "./sources.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 
@@ -67,7 +67,7 @@ const publish = Effect.fn(function* (sourceId: string) {
 const writeAssertion = Effect.fn(function* (
   target: { readonly entityType: string; readonly entityId: string; readonly field: string },
   assertion: {
-    readonly origin: "provider" | "admin" | "match";
+    readonly origin: "plugin" | "admin" | "match";
     readonly originRef: string;
     readonly value: unknown;
     readonly confidence: number;
@@ -112,7 +112,7 @@ const writeAssertion = Effect.fn(function* (
 const assertTracklist = (
   sourceId: string,
   assertion: {
-    readonly origin: "provider" | "admin";
+    readonly origin: "plugin" | "admin";
     readonly originRef: string;
     readonly value: typeof Entries.Encoded | null;
     readonly confidence: number;
@@ -169,7 +169,7 @@ const assertProviderTracklists = Effect.fn(function* (
 ) {
   const written = yield* Effect.forEach(tracklists, (tracklist) =>
     assertTracklist(sourceId, {
-      origin: "provider",
+      origin: "plugin",
       originRef: `${prefix}${tracklist.part}`,
       value: Schema.encodeSync(Entries)(tracklist.entries),
       confidence: tracklist.confidence,
@@ -177,7 +177,7 @@ const assertProviderTracklists = Effect.fn(function* (
   );
   const lost = (yield* tracklistAssertions(sourceId)).filter(
     (assertion) =>
-      assertion.origin === "provider" &&
+      assertion.origin === "plugin" &&
       assertion.originRef.startsWith(prefix) &&
       !written.includes(assertion.id),
   );
@@ -330,10 +330,10 @@ const deriveSegments = Effect.fn(function* (sourceId: string) {
               eq(catalogAssertion.retracted, false),
             ),
           );
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   const matchOf = (entry: TracklistEntry) =>
     resolveField(
-      providers,
+      ranks,
       matches.filter((match) => match.entityId === targets.get(entryKey(entry))),
       "recording",
       Schema.String,
@@ -586,7 +586,7 @@ const writeMatch = Effect.fn(function* (
   const id = yield* assertMusicBrainzRecording(candidate);
   yield* db
     .insert(recording)
-    .values({ id, origin: "musicbrainz", policyVersion: 1, revision: 0 })
+    .values({ id, origin: "musicbrainz", policyVersion, revision: 0 })
     .onConflictDoNothing();
   yield* assertMatch(text, id);
   yield* projectRecordings([id]);

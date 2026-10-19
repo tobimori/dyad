@@ -1,4 +1,12 @@
-import { artist, entityMerge, isrcLookup, job, recording, songArtist } from "@dyad/db";
+import {
+  artist,
+  entityMerge,
+  isrcLookup,
+  job,
+  policyVersion,
+  recording,
+  songArtist,
+} from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { MergeFailed } from "@dyad/domain";
 import type { MusicBrainzLookup, MusicBrainzRecording } from "@dyad/plugin";
@@ -11,7 +19,13 @@ import { alias } from "drizzle-orm/sqlite-core";
 import { matchAlbumsOf } from "./albums.ts";
 import { artistLinksKind } from "./artist-links.ts";
 import { matchArtistsOf } from "./artist-matching.ts";
-import { assertRecording, fields, projectRecordings, resolvedValues } from "./assertions.ts";
+import {
+  assertRecording,
+  fields,
+  musicbrainzRef,
+  projectRecordings,
+  resolvedValues,
+} from "./assertions.ts";
 import { isrcRecordingId, mergeId, musicbrainzRecordingId } from "./ids.ts";
 import { simplifyText, withoutGuests } from "./normalize.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
@@ -100,7 +114,7 @@ const writeEdge = Effect.fn(function* (edge: Edge) {
   if (changed && edge.decision === "merge") {
     yield* db
       .insert(recording)
-      .values({ id: edge.intoId, origin: intoOrigin, policyVersion: 1, revision: 0 })
+      .values({ id: edge.intoId, origin: intoOrigin, policyVersion, revision: 0 })
       .onConflictDoNothing();
   }
   return changed;
@@ -639,7 +653,7 @@ export const assertMusicBrainzRecording = Effect.fn("assertMusicBrainzRecording"
   item: MusicBrainzRecording,
 ) {
   const id = yield* musicbrainzRecordingId(item.mbid);
-  yield* assertRecording(id, "musicbrainz", item.mbid, {
+  yield* assertRecording(id, "plugin", musicbrainzRef(item.mbid), {
     title: item.title,
     artist_credit:
       item.artist === null

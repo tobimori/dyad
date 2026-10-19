@@ -2,11 +2,17 @@ import { artist, catalogAssertion, entityMerge, identifier, recording, songArtis
 import { Database } from "@dyad/db/node";
 import type { CatalogInputRow } from "@dyad/domain";
 import { artistNameKey } from "@dyad/plugin/tracklist";
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, like, ne, notLike, or, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Option, Schema } from "effect";
 
 import { artistIdOf, mbidScheme, projectArtistRows, touchArtistGroups } from "./artists.ts";
-import { ArtistLinkEvidence, fields, projectRecordings, providerOf } from "./assertions.ts";
+import {
+  ArtistLinkEvidence,
+  fields,
+  mbidOfRef,
+  projectRecordings,
+  providerOf,
+} from "./assertions.ts";
 import {
   effectiveTarget,
   followEdges,
@@ -165,7 +171,7 @@ export const decideArtists = Effect.fn("decideArtists")(function* (artistIds: It
           json_array_length(a.value, '$.artists') AS count, json_extract(j.value, '$.name') AS name
         FROM ${catalogAssertion} AS a, json_each(a.value, '$.artists') AS j
         WHERE a.entity_type = 'recording' AND a.field = 'artist_credit' AND a.retracted = 0
-          AND a.origin = 'provider'
+          AND a.origin = 'plugin' AND a.origin_ref NOT LIKE 'musicbrainz:%'
           AND json_extract(j.value, '$.id') IN (${sql.join(
             chunk.map((id) => sql`${id}`),
             sql`, `,
@@ -208,7 +214,8 @@ export const decideArtists = Effect.fn("decideArtists")(function* (artistIds: It
           eq(catalogAssertion.entityType, "recording"),
           inArray(catalogAssertion.entityId, chunk),
           eq(catalogAssertion.field, "artist_credit"),
-          eq(catalogAssertion.origin, "musicbrainz"),
+          eq(catalogAssertion.origin, "plugin"),
+          like(catalogAssertion.originRef, "musicbrainz:%"),
           eq(catalogAssertion.retracted, false),
         ),
       ),
@@ -432,7 +439,8 @@ export const matchArtistsOf = Effect.fn("matchArtistsOf")(function* (
             eq(catalogAssertion.entityType, "recording"),
             inArray(catalogAssertion.entityId, chunk),
             eq(catalogAssertion.field, "artist_credit"),
-            eq(catalogAssertion.origin, "provider"),
+            eq(catalogAssertion.origin, "plugin"),
+            notLike(catalogAssertion.originRef, "musicbrainz:%"),
             eq(catalogAssertion.retracted, false),
           ),
         ),
@@ -469,7 +477,9 @@ export const deriveArtists = Effect.fn("deriveArtists")(function* (
         );
       }
       if (row.table !== "catalog_assertion" || row.entityType !== "artist") return [];
-      if (row.field === "links") return [{ scheme: mbidScheme, externalId: row.originRef }];
+      if (row.field === "links") {
+        return [{ scheme: mbidScheme, externalId: mbidOfRef(row.originRef) }];
+      }
       return Option.toArray(Schema.decodeUnknownOption(ArtistLinkEvidence)(row.evidence)).map(
         (link) => ({
           scheme: link.provider,

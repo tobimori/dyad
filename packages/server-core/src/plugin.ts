@@ -10,7 +10,7 @@ import type { Jobs } from "./jobs.ts";
 import { syncLibraryRoot } from "./library.ts";
 import { MusicBrainzLookups, musicbrainzLookupKey } from "./matching.ts";
 import { Outputs } from "./outputs.ts";
-import { Popularities, Providers } from "./providers.ts";
+import { FactRanks, Popularities, Providers } from "./providers.ts";
 import { Recommenders } from "./recommenders.ts";
 import { Tracklists } from "./tracklists.ts";
 
@@ -79,6 +79,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
       const providers = yield* Providers;
+      const factRanks = yield* FactRanks;
       const popularities = yield* Popularities;
       const recommenders = yield* Recommenders;
       const musicbrainzLookups = yield* MusicBrainzLookups;
@@ -91,6 +92,7 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
         | Jobs
         | MusicBrainzLookups
         | Providers
+        | FactRanks
         | Crypto.Crypto
         | FileSystem.FileSystem
         | Path.Path
@@ -116,7 +118,13 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
           add: (id, provider) =>
             reservedProviderIds.has(id)
               ? Effect.die(new Error(`"${id}" is a reserved provider ID`))
-              : register(providers, id, provider),
+              : register(providers, id, provider).pipe(
+                  Effect.andThen(
+                    provider.factRank === undefined
+                      ? Effect.void
+                      : register(factRanks, id, provider.factRank),
+                  ),
+                ),
         },
         popularity: {
           add: (name, popularity) => register(popularities, name, popularity),
@@ -125,7 +133,10 @@ export const pluginLayer = (plugins: ReadonlyArray<Plugin>, version: string) =>
           add: (id, recommender) => register(recommenders, id, recommender),
         },
         musicbrainz: {
-          add: (lookup) => register(musicbrainzLookups, musicbrainzLookupKey, lookup),
+          add: (lookup) =>
+            register(musicbrainzLookups, musicbrainzLookupKey, lookup).pipe(
+              Effect.andThen(register(factRanks, musicbrainzLookupKey, lookup.factRank)),
+            ),
         },
         tracklists: {
           add: (id, lookup) => register(tracklists.sites, id, lookup),

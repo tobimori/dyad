@@ -585,7 +585,7 @@ export const fetchProviderPage = Effect.fn("fetchProviderPage")(function* <A, E,
 });
 
 /** The cached page at once, then the fetched page when the cache is older than a day */
-export const providerPageStream = <A, E, Page, R>(
+export const providerPageStream = <A, E, Page, R, FactsR = never>(
   kind: "artist" | "album" | "home",
   parts: { readonly provider: string; readonly externalId: string },
   schema: Schema.Codec<A, E>,
@@ -597,7 +597,7 @@ export const providerPageStream = <A, E, Page, R>(
       | undefined;
     readonly tracks: (data: A) => ReadonlyArray<ProviderTrack>;
     /** Writes the facts of a fetched page */
-    readonly facts?: (data: A) => Effect.Effect<void, never, R>;
+    readonly facts?: (data: A) => Effect.Effect<void, never, FactsR>;
     readonly build: (page: PageInput<A>) => Effect.Effect<Page, never, R>;
   },
 ) =>
@@ -767,8 +767,8 @@ const groupPage = (group: ArtistGroup) =>
     Effect.gen(function* () {
       const usable = yield* usableProviders;
       const providers = yield* Providers;
-      // The provider with the highest metadata priority first
-      const priority = (provider: string) => providers.get(provider)?.metadataPriority ?? 0;
+      // The provider with the highest fact rank first
+      const priority = (provider: string) => providers.get(provider)?.factRank?.metadata ?? 0;
       const hasPage = (provider: string) => usable.get(provider)?.provider.artist !== undefined;
       const pages = group.members
         .filter((member) => hasPage(member.provider))
@@ -1170,7 +1170,7 @@ const mixedArtistPage = Effect.fn(function* (
     else group.tracks.push(row.track);
   }
   const byProvider = compareSources(yield* providerOrder);
-  // The owner's provider order, then the provider with the higher metadata priority
+  // The owner's provider order, then the provider with the higher fact rank
   const compare = (a: PageTrack, b: PageTrack) =>
     byProvider(
       { provider: a.source.provider, lossless: false },

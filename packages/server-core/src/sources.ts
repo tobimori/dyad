@@ -1,4 +1,4 @@
-import { localFile, providerItem, recording, source, sourceVariant } from "@dyad/db";
+import { localFile, policyVersion, providerItem, recording, source, sourceVariant } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
@@ -25,7 +25,7 @@ import { parsedCredit, parserRevision, versionedTitle } from "./version-titles.t
 import type { ParsedTitle } from "./version-titles.ts";
 
 // Projection columns before replication assigns revisions
-const projection = { policyVersion: 1, revision: 0 };
+const projection = { policyVersion, revision: 0 };
 
 // An upsert changes a row only when a value of `set` differs, so that later replication sees only
 // real changes
@@ -206,7 +206,7 @@ export const writeSource = Effect.fn("writeSource")(function* (
       };
       yield* assertRecording(
         recordingId,
-        local ? "local" : "provider",
+        local ? "local" : "plugin",
         local ? id : `${item.provider}:${item.externalId}`,
         uploads ? { ...metadata, uploader: item.uploader } : metadata,
       );

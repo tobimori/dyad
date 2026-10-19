@@ -27,6 +27,7 @@
     "generate": "node scripts/generate-migration.ts"
   },
   "dependencies": {
+    "@dyad/sync": "workspace:*",
     "@effect/sql-sqlite-node": "catalog:",
     "drizzle-orm": "catalog:",
     "effect": "catalog:"

@@ -1,6 +1,13 @@
-import { artist, catalogAssertion, identifier, recording, songArtist } from "@dyad/db";
+import {
+  artist,
+  catalogAssertion,
+  identifier,
+  policyVersion,
+  recording,
+  songArtist,
+} from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import type { Provider } from "@dyad/plugin";
+import type { FactRank } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Option, Schema } from "effect";
@@ -10,7 +17,7 @@ import { resolveArtistRoots } from "./artist-matching.ts";
 import { compareAssertions, fields, providerOf, resolveAssertion } from "./assertions.ts";
 import type { Assertion } from "./assertions.ts";
 import { musicbrainzArtistId, uuidV5 } from "./ids.ts";
-import { Providers } from "./providers.ts";
+import { FactRanks } from "./providers.ts";
 import { touchGroups } from "./sync-counter.ts";
 
 // Below the SQLite limit of 32766 parameters
@@ -25,12 +32,12 @@ export const artistIdOf = (scheme: string, externalId: string) =>
     ? musicbrainzArtistId(externalId)
     : uuidV5(`${scheme}:artist:${externalId}`);
 
-// The artist IDs of a credit are MBIDs in a `musicbrainz` assertion and provider IDs in a
-// `provider` or `parse` one. Other origins give no IDs.
+// The artist IDs of a credit are MBIDs in a MusicBrainz assertion and provider IDs in another
+// `plugin` or `parse` one. Other origins give no IDs.
 const schemeOf = (assertion: Assertion) => {
-  if (assertion.origin === "musicbrainz") return mbidScheme;
-  if (assertion.origin === "provider" || assertion.origin === "parse") return providerOf(assertion);
-  return null;
+  if (assertion.origin !== "plugin" && assertion.origin !== "parse") return null;
+  const source = providerOf(assertion);
+  return source === "musicbrainz" ? mbidScheme : source;
 };
 
 /** Each credit with IDs names artists, also when another origin wins the credit */
@@ -60,7 +67,7 @@ const uploaderArtists = (own: ReadonlyArray<Assertion>) => {
   return own
     .flatMap((assertion) =>
       assertion.field === "uploader" &&
-      assertion.origin === "provider" &&
+      assertion.origin === "plugin" &&
       artistRefs.has(assertion.originRef)
         ? Option.toArray(Schema.decodeUnknownOption(fields.uploader)(assertion.value)).map(
             (uploader) => ({
@@ -95,10 +102,10 @@ const joinPhrases = (text: string, names: ReadonlyArray<string>) => {
  * uploader with the same name that the parse calls the artist.
  */
 export const creditNames = Effect.fn("creditNames")(function* (
-  providers: ReadonlyMap<string, Provider>,
+  ranks: ReadonlyMap<string, FactRank>,
   own: ReadonlyArray<Assertion>,
 ) {
-  const resolved = resolveAssertion(providers, own, "artist_credit", fields.artist_credit);
+  const resolved = resolveAssertion(ranks, own, "artist_credit", fields.artist_credit);
   if (resolved === null) return [];
 
   const scheme = schemeOf(resolved.assertion);
@@ -178,7 +185,7 @@ const mentionsOf = Effect.fn(function* (externalIds: ReadonlyArray<string>) {
             json_extract(a.value, '$.name') AS name
           FROM ${catalogAssertion} AS a
           WHERE a.entity_type = 'recording' AND a.field = 'uploader' AND a.retracted = 0
-            AND a.origin = 'provider' AND json_extract(a.value, '$.id') IN (${list})
+            AND a.origin = 'plugin' AND json_extract(a.value, '$.id') IN (${list})
         `);
       const decode = Schema.decodeUnknownEffect(Schema.Array(NameMention));
       return {
@@ -218,7 +225,7 @@ export const projectArtistRows = Effect.fn("projectArtistRows")(function* (
   keys: ReadonlyArray<{ readonly scheme: string; readonly externalId: string }>,
 ) {
   const db = yield* Database;
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   const unique = [...new Map(keys.map((key) => [`${key.scheme}:${key.externalId}`, key])).values()];
   if (unique.length === 0) return;
 
@@ -240,7 +247,7 @@ export const projectArtistRows = Effect.fn("projectArtistRows")(function* (
   }
 
   const mentions = yield* mentionsOf([...new Set(rows.map((row) => row.externalId))]);
-  const compare = compareAssertions(providers);
+  const compare = compareAssertions(ranks);
   const nameOf = (row: (typeof rows)[number]) => {
     const matching = (list: typeof mentions.credits) =>
       list
@@ -265,7 +272,7 @@ export const projectArtistRows = Effect.fn("projectArtistRows")(function* (
           id: row.id,
           origin: row.scheme === mbidScheme ? "musicbrainz" : "provider",
           ...values,
-          policyVersion: 1,
+          policyVersion,
           revision: 0,
         })
         .onConflictDoUpdate({
@@ -307,7 +314,7 @@ export const projectArtists = Effect.fn("projectArtists")(function* (
   recordings: ReadonlyArray<{ readonly id: string; readonly own: ReadonlyArray<Assertion> }>,
 ) {
   const db = yield* Database;
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   yield* projectArtistRows(
     recordings.flatMap((row) => [...creditedArtists(row.own), ...uploaderArtists(row.own)]),
   );
@@ -329,7 +336,7 @@ export const projectArtists = Effect.fn("projectArtists")(function* (
   );
   const changed = yield* Effect.forEach(recordings, (row) =>
     Effect.gen(function* () {
-      const names = yield* creditNames(providers, row.own);
+      const names = yield* creditNames(ranks, row.own);
       if (sameNames(existing[row.id] ?? [], names)) return [];
 
       yield* db.delete(songArtist).where(eq(songArtist.recordingId, row.id));

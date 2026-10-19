@@ -1,4 +1,4 @@
-import { MusicBrainzError, MusicBrainzLookup, Plugin } from "@dyad/plugin";
+import { FactRank, MusicBrainzError, MusicBrainzLookup, Plugin } from "@dyad/plugin";
 import type { MusicBrainzRecording } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
@@ -52,6 +52,8 @@ export const musicbrainzPlugin = new Plugin({
 
       yield* context.musicbrainz.add(
         new MusicBrainzLookup({
+          // Titles are in the original script, where providers give the localized name
+          factRank: new FactRank({ metadata: 10, type: 50, label: 40 }),
           recordingsByIsrc: (isrcs) =>
             lookupIsrcs(isrcs).pipe(Effect.mapError(toMusicBrainzError), Effect.provide(services)),
           recordingsByText: (items) =>

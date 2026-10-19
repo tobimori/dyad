@@ -1,7 +1,7 @@
 import { album, catalogAssertion, edition, editionTrack, recording } from "@dyad/db";
 import { Database, ReplicaDatabase } from "@dyad/db/node";
 import { CreditedArtist } from "@dyad/plugin";
-import type { Provider } from "@dyad/plugin";
+import type { FactRank } from "@dyad/plugin";
 import { HlcClock } from "@dyad/sync";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
@@ -11,7 +11,7 @@ import type { editionFields } from "./albums.ts";
 import { AlbumType, ArtistCredit, ReleaseDate } from "./editions.ts";
 import { projectArtists } from "./artists.ts";
 import { assertionId } from "./ids.ts";
-import { Providers } from "./providers.ts";
+import { FactRanks } from "./providers.ts";
 import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 import { MashupPart, ParsedTitle, TitleSeries, TitleVersion } from "./version-titles.ts";
 
@@ -59,7 +59,7 @@ const parseVersion = (revision: string | null) => Number(revision?.replace("pars
 export const assertFields = Effect.fn("assertFields")(function* (
   entityType: "recording" | "artist" | "edition",
   entityId: string,
-  origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
+  origin: "local" | "plugin" | "match" | "parse",
   originRef: string,
   values:
     | { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null }
@@ -166,7 +166,7 @@ export const assertFields = Effect.fn("assertFields")(function* (
  */
 export const assertRecording = (
   recordingId: string,
-  origin: "local" | "musicbrainz" | "provider" | "match" | "parse",
+  origin: "local" | "plugin" | "match" | "parse",
   originRef: string,
   values: { readonly [F in keyof typeof fields]?: (typeof fields)[F]["Type"] | null },
   details: {
@@ -182,28 +182,57 @@ export const assertRecording = (
  */
 export const assertArtist = (
   artistId: string,
-  originRef: string,
+  mbid: string,
   values: { readonly links?: ReadonlyArray<string>; readonly mbid?: string | null },
   evidence: ArtistLinkEvidence | null,
-) => assertFields("artist", artistId, "musicbrainz", originRef, values, { evidence });
+) => assertFields("artist", artistId, "plugin", musicbrainzRef(mbid), values, { evidence });
 
-// Resolution policy v1. Users curate local tags. MusicBrainz titles are in the original script, where
-// providers localize. `match` and `parse` are guesses, so they only fill fields that others leave.
-const originRank = ["admin", "local", "provider", "musicbrainz", "match", "parse"];
+// Resolution policy v2. Users curate local tags. `match` and `parse` are guesses, so they only fill
+// fields that others leave.
+const originRank = ["admin", "local", "plugin", "match", "parse"];
+
+const rankGroup = (field: string) => {
+  if (field === "album_type") return "type";
+  if (field === "label") return "label";
+  return "metadata";
+};
+
+// A later date is often the date of a reissue
+const earliestFields = new Set(["date", "release_date"]);
 
 export type Assertion = typeof catalogAssertion.$inferSelect;
 
+/** The fact source of a `plugin` assertion: a provider ID, or `musicbrainz` */
 export const providerOf = (assertion: Assertion) => assertion.originRef.split(":")[0] ?? "";
 
-// Ties go to the lower provider ID, so that all replicas select the same assertion
+const musicbrainzPrefix = "musicbrainz:";
+
+/** The origin ref of a MusicBrainz fact */
+export const musicbrainzRef = (mbid: string) => `${musicbrainzPrefix}${mbid}`;
+
+/** The MBID of the origin ref of a MusicBrainz fact */
+export const mbidOfRef = (originRef: string) => originRef.slice(musicbrainzPrefix.length);
+
+// Ties go to the lower plugin ID, so that all replicas select the same assertion
 export const compareAssertions =
-  (providers: ReadonlyMap<string, Provider>) => (a: Assertion, b: Assertion) => {
-    const priority = (assertion: Assertion) =>
-      providers.get(providerOf(assertion))?.metadataPriority ?? 0;
+  (ranks: ReadonlyMap<string, FactRank>) => (a: Assertion, b: Assertion) => {
+    const rank = (assertion: Assertion) =>
+      ranks.get(providerOf(assertion))?.[rankGroup(assertion.field)] ?? 0;
+    const guess = (assertion: Assertion) =>
+      assertion.origin === "match" || assertion.origin === "parse";
+    const earliest =
+      earliestFields.has(a.field) &&
+      a.origin !== "admin" &&
+      b.origin !== "admin" &&
+      !guess(a) &&
+      !guess(b)
+        ? String(a.value).localeCompare(String(b.value))
+        : 0;
     return (
+      earliest ||
       originRank.indexOf(a.origin) - originRank.indexOf(b.origin) ||
-      (a.origin === "provider" && b.origin === "provider"
-        ? priority(b) - priority(a) || providerOf(a).localeCompare(providerOf(b))
+      (a.origin === "plugin" && b.origin === "plugin"
+        ? rank(b) - rank(a) || providerOf(a).localeCompare(providerOf(b))
         : 0) ||
       b.confidence - a.confidence ||
       b.hlc.localeCompare(a.hlc) ||
@@ -216,7 +245,7 @@ export const compareAssertions =
  * apply. Only the owner can clear a field.
  */
 export const resolveAssertion = <A>(
-  providers: ReadonlyMap<string, Provider>,
+  ranks: ReadonlyMap<string, FactRank>,
   assertions: ReadonlyArray<Assertion>,
   field: string,
   schema: Schema.Decoder<A>,
@@ -224,7 +253,7 @@ export const resolveAssertion = <A>(
   const candidates = assertions
     .filter((assertion) => assertion.field === field)
     .filter((assertion) => assertion.value !== null || assertion.origin === "admin")
-    .toSorted(compareAssertions(providers));
+    .toSorted(compareAssertions(ranks));
 
   for (const assertion of candidates) {
     if (assertion.value === null) return null;
@@ -236,11 +265,11 @@ export const resolveAssertion = <A>(
 };
 
 export const resolveField = <A>(
-  providers: ReadonlyMap<string, Provider>,
+  ranks: ReadonlyMap<string, FactRank>,
   assertions: ReadonlyArray<Assertion>,
   field: string,
   schema: Schema.Decoder<A>,
-) => resolveAssertion(providers, assertions, field, schema)?.value ?? null;
+) => resolveAssertion(ranks, assertions, field, schema)?.value ?? null;
 
 /** The value of `field` of each recording from its own assertions, without its merged recordings */
 export const resolvedValues = Effect.fn("resolvedValues")(function* <F extends keyof typeof fields>(
@@ -249,7 +278,7 @@ export const resolvedValues = Effect.fn("resolvedValues")(function* <F extends k
   schema: Schema.Decoder<(typeof fields)[F]["Type"]>,
 ) {
   const db = yield* Database;
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   const assertions = yield* db
     .select()
     .from(catalogAssertion)
@@ -265,7 +294,7 @@ export const resolvedValues = Effect.fn("resolvedValues")(function* <F extends k
   const values = new Map<string, (typeof fields)[F]["Type"]>();
   for (const id of recordingIds) {
     const value = resolveField(
-      providers,
+      ranks,
       assertions.filter((assertion) => assertion.entityId === id),
       field,
       schema,
@@ -293,7 +322,7 @@ export const projectRecordings = Effect.fn("projectRecordings")(function* (
   recordingIds: Iterable<string>,
 ) {
   const db = yield* Database;
-  const providers = yield* Providers;
+  const ranks = yield* FactRanks;
   const ids = [...new Set(recordingIds)];
   if (ids.length === 0) return;
 
@@ -347,14 +376,13 @@ export const projectRecordings = Effect.fn("projectRecordings")(function* (
           a.albumId.localeCompare(b.albumId),
       );
     const resolved = {
-      title: resolveField(providers, own, "title", fields.title),
-      artistName: resolveField(providers, own, "artist_credit", fields.artist_credit)?.name ?? null,
-      album: shown?.title ?? resolveField(providers, own, "album", fields.album),
+      title: resolveField(ranks, own, "title", fields.title),
+      artistName: resolveField(ranks, own, "artist_credit", fields.artist_credit)?.name ?? null,
+      album: shown?.title ?? resolveField(ranks, own, "album", fields.album),
       albumId: shown?.albumId ?? null,
-      durationMs: resolveField(providers, own, "duration_ms", fields.duration_ms),
-      artworkUrl:
-        shown?.artworkUrl ?? resolveField(providers, own, "artwork_url", fields.artwork_url),
-      explicit: resolveField(providers, own, "explicit", fields.explicit),
+      durationMs: resolveField(ranks, own, "duration_ms", fields.duration_ms),
+      artworkUrl: shown?.artworkUrl ?? resolveField(ranks, own, "artwork_url", fields.artwork_url),
+      explicit: resolveField(ranks, own, "explicit", fields.explicit),
     };
 
     const unchanged =

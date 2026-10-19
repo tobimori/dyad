@@ -126,7 +126,7 @@ export const replicaLayer = <E, R>(routes: Layer.Layer<never, E, R>) =>
       );
       return Layer.mergeAll(
         // The first library imports, ISRC lookups, tracklist reads and scrobbles need what the plugins
-        // add. Rows from peers need the providers too: their metadata priority ranks assertions.
+        // add. Rows from peers need the providers too: their fact ranks rank assertions.
         Layer.mergeAll(
           librarySyncLayer,
           catalogLayer,

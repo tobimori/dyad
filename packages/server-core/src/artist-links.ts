@@ -5,7 +5,7 @@ import { Clock, Effect, Layer, Schema } from "effect";
 
 import { decideArtists } from "./artist-matching.ts";
 import { artistIdOf, mbidScheme, projectArtistRows } from "./artists.ts";
-import { ArtistLinkEvidence, assertArtist } from "./assertions.ts";
+import { ArtistLinkEvidence, assertArtist, musicbrainzRef } from "./assertions.ts";
 import { Jobs, RetryLater } from "./jobs.ts";
 import { MusicBrainzLookups, musicbrainzLookupKey, waitForMusicBrainz } from "./matching.ts";
 import { Providers } from "./providers.ts";
@@ -141,8 +141,8 @@ const readLinks = Effect.fn(function* (mbid: string) {
           and(
             eq(catalogAssertion.entityType, "artist"),
             eq(catalogAssertion.field, "mbid"),
-            eq(catalogAssertion.origin, "musicbrainz"),
-            eq(catalogAssertion.originRef, mbid),
+            eq(catalogAssertion.origin, "plugin"),
+            eq(catalogAssertion.originRef, musicbrainzRef(mbid)),
             eq(catalogAssertion.retracted, false),
             isNotNull(catalogAssertion.value),
           ),

@@ -381,8 +381,8 @@ export class Provider extends Data.Class<{
   readonly playlists?: ProviderPlaylists;
   /** Only for providers with `library`, whose import reads the marks back */
   readonly marks?: ProviderMarks;
-  /** Higher wins when providers share a recording. Curated catalogs rank above uploads */
-  readonly metadataPriority?: number;
+  /** Which of its facts win over the facts of other plugins */
+  readonly factRank?: FactRank;
   /**
    * Uploaders type the titles and artists as free text, so the core parses them and does not use
    * them as credits. `ProviderSource.uploader` names the account.
@@ -499,7 +499,17 @@ export class MusicBrainzError extends Data.TaggedError("MusicBrainzError")<{
 }> {}
 
 /** The plugin paces its requests within the MusicBrainz limit */
+/** The rank of a plugin's facts against the facts of other plugins. Higher wins; a missing rank is 0. */
+export class FactRank extends Data.Class<{
+  /** Fields without their own rank: titles, artists, artwork, durations */
+  readonly metadata?: number;
+  readonly type?: number;
+  /** Also the catalog number */
+  readonly label?: number;
+}> {}
+
 export class MusicBrainzLookup extends Data.Class<{
+  readonly factRank: FactRank;
   /** The recordings that have each ISRC now. The result has an entry for each valid ISRC. */
   readonly recordingsByIsrc: (
     isrcs: ReadonlyArray<string>,

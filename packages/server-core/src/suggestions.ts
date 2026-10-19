@@ -36,7 +36,7 @@ const searchOfUser = Effect.gen(function* () {
     ([a, first], [b, second]) =>
       Number(second.provider.search !== undefined) - Number(first.provider.search !== undefined) ||
       (plays.get(b) ?? 0) - (plays.get(a) ?? 0) ||
-      (second.provider.metadataPriority ?? 0) - (first.provider.metadataPriority ?? 0),
+      (second.provider.factRank?.metadata ?? 0) - (first.provider.factRank?.metadata ?? 0),
   );
   const search = chosen?.[1].provider.search;
   if (chosen === undefined || search === undefined) return undefined;

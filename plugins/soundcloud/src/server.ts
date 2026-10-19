@@ -1,4 +1,4 @@
-import { Plugin, Provider } from "@dyad/plugin";
+import { FactRank, Plugin, Provider } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
@@ -31,7 +31,7 @@ export const soundcloudPlugin = new Plugin({
           home: () => readTrending(withClientId).pipe(Effect.provide(services)),
           tracklists: (externalId) =>
             trackTracklists(withClientId, externalId).pipe(Effect.provide(services)),
-          metadataPriority: 10,
+          factRank: new FactRank({ metadata: 30 }),
           uploads: true,
           download: { leaseDays: 30 },
         }),

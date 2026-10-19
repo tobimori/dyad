@@ -6,6 +6,7 @@ import {
   playEvent,
   playlist,
   playlistEntry,
+  policyVersion,
   providerAccount,
   recording,
   source,
@@ -181,7 +182,7 @@ const deriveCatalog = Effect.fn(function* (rows: ReadonlyArray<CatalogInputRow>)
   const ensure = (id: string, origin: "local" | "provider" | "isrc" | "musicbrainz") =>
     db
       .insert(recording)
-      .values({ id, origin, policyVersion: 1, revision: 0 })
+      .values({ id, origin, policyVersion, revision: 0 })
       .onConflictDoNothing()
       .returning({ id: recording.id })
       .pipe(Effect.map((inserted) => created.push(...inserted.map((row) => row.id))));
@@ -320,7 +321,7 @@ export const mergePeerRows = Effect.fn("mergePeerRows")(function* (rows: Readonl
         librarySongs.map((id) => ({
           id,
           origin: "provider" as const,
-          policyVersion: 1,
+          policyVersion,
           revision: 0,
         })),
       )

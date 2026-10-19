@@ -28,7 +28,12 @@ import { outputsLayer } from "./outputs.ts";
 import { copyAttemptsLayer, preparePlayback, streamKeyLayer, streamRoute } from "./playback.ts";
 import { receiversLayer } from "./receivers.ts";
 import { providerCacheSweepLayer } from "./provider-cache.ts";
-import { popularitiesLayer, providerSearchesLayer, providersLayer } from "./providers.ts";
+import {
+  factRanksLayer,
+  popularitiesLayer,
+  providerSearchesLayer,
+  providersLayer,
+} from "./providers.ts";
 import { recommendersLayer } from "./recommenders.ts";
 import { radio } from "./radio.ts";
 import { search, searchCatalog } from "./search.ts";
@@ -73,6 +78,7 @@ export const coreServicesLayer = Layer.mergeAll(sessionsLayer, audioAnalysisLaye
   Layer.provideMerge(
     Layer.mergeAll(
       providersLayer,
+      factRanksLayer,
       popularitiesLayer,
       recommendersLayer,
       streamKeyLayer,

@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 14;
+export const syncProtocolVersion = 15;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -195,7 +195,7 @@ export class CatalogAssertionRow extends Schema.Class<CatalogAssertionRow>("Cata
   field: Schema.String,
   /** JSON. Null states that the origin has no value. */
   value: Schema.Unknown,
-  origin: Schema.Literals(["admin", "musicbrainz", "provider", "local", "match", "parse"]),
+  origin: Schema.Literals(["admin", "local", "plugin", "match", "parse"]),
   originRef: Schema.String,
   originRevision: Schema.NullOr(Schema.String),
   evidence: Schema.Unknown,

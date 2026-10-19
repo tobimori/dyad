@@ -455,7 +455,7 @@ export const searchCopy = Effect.fn("searchCopy")(function* (
   const providers = searchable.toSorted(
     (a, b) =>
       compare({ provider: a.id, lossless: false }, { provider: b.id, lossless: false }) ||
-      (b.usable.provider.metadataPriority ?? 0) - (a.usable.provider.metadataPriority ?? 0),
+      (b.usable.provider.factRank?.metadata ?? 0) - (a.usable.provider.factRank?.metadata ?? 0),
   );
 
   for (const { id: provider, search, usable } of providers) {

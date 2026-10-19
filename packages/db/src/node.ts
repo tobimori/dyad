@@ -3,11 +3,13 @@ import { eq, sql } from "drizzle-orm";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import * as Drizzle from "drizzle-orm/effect-sqlite-node";
 import { migrate } from "drizzle-orm/sqlite-core/effect/session";
+import { uuidV5 } from "@dyad/sync";
 import { Clock, Context, Crypto, Data, Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/sql";
 
 import migrations from "./migrations.json" with { type: "json" };
 import { relations } from "./relations.ts";
+import { policyVersion } from "./schema/projection.ts";
 import { replicaIdentity } from "./schema/replica.ts";
 
 export class Identity extends Schema.Class<Identity>("Identity")({
@@ -20,10 +22,60 @@ export class ReplicaDatabase extends Context.Service<ReplicaDatabase, Identity>(
   "@dyad/db/ReplicaDatabase",
 ) {}
 
+// Resolution policy v2 has one `plugin` origin for `provider` and `musicbrainz`. The assertion ID
+// contains the origin, and SQLite has no SHA-1, so this step is not a SQL migration.
+const upgradeAssertionOrigins = Effect.fn(function* (
+  db: Effect.Success<ReturnType<typeof Drizzle.makeWithDefaults<typeof relations>>>,
+) {
+  const rows = yield* db.all<{
+    id: string;
+    entity_type: string;
+    entity_id: string;
+    field: string;
+    origin: string;
+    origin_ref: string;
+  }>(sql`
+    SELECT id, entity_type, entity_id, field, origin, origin_ref FROM catalog_assertion
+    WHERE origin IN ('provider', 'musicbrainz')
+  `);
+  if (rows.length === 0) return;
+
+  yield* db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            const originRef =
+              row.origin === "musicbrainz" ? `musicbrainz:${row.origin_ref}` : row.origin_ref;
+            const id = yield* uuidV5(
+              `assertion:${row.entity_type}:${row.entity_id}:${row.field}:plugin:${originRef}`,
+            );
+            yield* tx.run(sql`
+              UPDATE catalog_assertion SET id = ${id}, origin = 'plugin', origin_ref = ${originRef}
+              WHERE id = ${row.id}
+            `);
+          }),
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        ["artist", "recording", "album", "edition", "source"],
+        (table) =>
+          tx.run(sql`UPDATE ${sql.identifier(table)} SET policy_version = ${policyVersion}`),
+        { discard: true },
+      );
+    }),
+  );
+  yield* Effect.logInfo("Assertion origins upgraded").pipe(
+    Effect.annotateLogs("assertions", rows.length),
+  );
+});
+
 const makeDatabase = Effect.gen(function* () {
   const db = yield* Drizzle.makeWithDefaults({ relations });
   // From the bundle, so that an executable needs no migrations folder
   yield* migrate(migrations, db._.session);
+  yield* upgradeAssertionOrigins(db);
 
   // SQLite overwrites deleted rows with zeros, so that removed credentials leave no copy in the file
   yield* db.run(sql`PRAGMA secure_delete = ON`);

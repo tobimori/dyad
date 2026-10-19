@@ -1,6 +1,6 @@
 import { credential, providerAccount } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import type { Credentials, PopularityHit, Provider, ProviderError } from "@dyad/plugin";
+import type { Credentials, FactRank, PopularityHit, Provider, ProviderError } from "@dyad/plugin";
 import { eq } from "drizzle-orm";
 import { Clock, Context, Data, Duration, Effect, Layer, Option, Redacted } from "effect";
 
@@ -18,6 +18,13 @@ export class Popularities extends Context.Service<
 >()("@dyad/server-core/Popularities") {}
 
 export const popularitiesLayer = Layer.sync(Popularities, () => new Map());
+
+/** The fact rank of each fact source: provider IDs, and `musicbrainz` */
+export class FactRanks extends Context.Service<FactRanks, Map<string, FactRank>>()(
+  "@dyad/server-core/FactRanks",
+) {}
+
+export const factRanksLayer = Layer.sync(FactRanks, () => new Map());
 
 /** When each provider was last searched for each subject, by `<subject>:<provider>` */
 export class ProviderSearches extends Context.Service<ProviderSearches, Map<string, number>>()(

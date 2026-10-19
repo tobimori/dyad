@@ -15,4 +15,5 @@ export * from "./schema/replica.ts";
 export * from "./schema/session.ts";
 export * from "./schema/source.ts";
 export * from "./schema/sync.ts";
+export { policyVersion } from "./schema/projection.ts";
 export { relations, schema } from "./relations.ts";

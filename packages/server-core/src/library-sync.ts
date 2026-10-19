@@ -6,8 +6,9 @@ import {
   libraryRemoteTrack,
   librarySyncState,
   playlistEntry,
-  providerItem,
+  policyVersion,
   providerAccount,
+  providerItem,
   recording,
   source,
 } from "@dyad/db";
@@ -159,7 +160,7 @@ const writeSongs = Effect.fn(function* (account: LinkedAccount, songs: ReadonlyA
       if (sourceId === null) {
         yield* db
           .insert(recording)
-          .values({ id: recordingId, origin: "provider", policyVersion: 1, revision: 0 })
+          .values({ id: recordingId, origin: "provider", policyVersion, revision: 0 })
           .onConflictDoNothing();
       }
 
