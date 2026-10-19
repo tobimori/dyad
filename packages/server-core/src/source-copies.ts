@@ -1,5 +1,5 @@
 import { artist, providerItem, recording, source, sourceVariant } from "@dyad/db";
-import { Database } from "@dyad/db/node";
+import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   RecordingId,
   SourceCopies,
@@ -14,6 +14,7 @@ import { Clock, Context, Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { artistIdOf } from "./artists.ts";
 import { isrcRecordingId } from "./ids.ts";
+import { Jobs } from "./jobs.ts";
 import { fitsDuration, rootRank, songCandidates, songFacts, songTitleKey } from "./matching.ts";
 import { MediaCache } from "./media-cache.ts";
 import { normalizeArtist, normalizeTitle } from "./normalize.ts";
@@ -266,18 +267,86 @@ const songText = (sourceId: string) =>
     });
   });
 
-// The usable providers with search that were not searched for the song in the last day
-const discoveryTargets = (sourceId: string) =>
+// The usable providers with search that were not searched for the song in the last day. In the
+// background, only providers that allow requests without a user action.
+const discoveryTargets = (sourceId: string, background: boolean) =>
   Effect.gen(function* () {
     const discoveries = yield* CopyDiscoveries;
     const now = yield* Clock.currentTimeMillis;
     return [...(yield* usableProviders)].flatMap(([id, usable]) => {
-      const { search } = usable.provider;
+      const { search, userRequestsOnly } = usable.provider;
       const at = discoveries.get(`${sourceId}:${id}`);
       if (search === undefined || (at !== undefined && now - at < searchLifetimeMs)) return [];
+      if (background && userRequestsOnly === true) return [];
       return [{ id, search, credentials: usable.credentials }];
     });
   });
+
+// Searches each target for the song and keeps the results in the provider cache
+const discover = (
+  sourceId: string,
+  query: string,
+  targets: Effect.Success<ReturnType<typeof discoveryTargets>>,
+) =>
+  Effect.gen(function* () {
+    const discoveries = yield* CopyDiscoveries;
+    const now = yield* Clock.currentTimeMillis;
+    yield* Effect.forEach(
+      targets,
+      ({ id, search, credentials }) =>
+        search(query, credentials).pipe(
+          Effect.timeout(searchTimeout),
+          Effect.flatMap((results) => cacheProviderSources(id, results)),
+          Effect.tap(() => Effect.sync(() => discoveries.set(`${sourceId}:${id}`, now))),
+          Effect.catchTags({
+            ProviderError: (error) =>
+              Effect.logWarning("Copy discovery failed", error.reason).pipe(Effect.as([])),
+            TimeoutError: () => Effect.logWarning("Copy discovery timed out").pipe(Effect.as([])),
+          }),
+          Effect.catchDefect((defect) =>
+            Effect.logError("Copy discovery crashed", defect).pipe(Effect.as([])),
+          ),
+          Effect.annotateLogs("provider", id),
+        ),
+      { concurrency: "unbounded", discard: true },
+    );
+  });
+
+const songQuery = (
+  text: { readonly title: string | null; readonly artist: string | null } | null,
+) =>
+  text?.title == null ? null : [text.artist, text.title].filter((part) => part != null).join(" ");
+
+const discoveryKind = "copies.discover";
+const DiscoveryPayload = Schema.Struct({ sourceId: Schema.String });
+
+/** Finds the copies of the songs on the providers in the background, for example of the next songs */
+export const queueCopyDiscovery = (sourceIds: Iterable<string>) =>
+  Effect.gen(function* () {
+    const jobs = yield* Jobs;
+    yield* Effect.forEach(
+      new Set(sourceIds),
+      (sourceId) => jobs.enqueue(discoveryKind, sourceId, { sourceId }, { priority: -2 }),
+      { discard: true },
+    );
+  });
+
+export const copyDiscoveryLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const jobs = yield* Jobs;
+    yield* jobs.register(
+      discoveryKind,
+      DiscoveryPayload,
+      ({ sourceId }) =>
+        Effect.gen(function* () {
+          const targets = yield* discoveryTargets(sourceId, true);
+          const query = targets.length === 0 ? null : songQuery(yield* songText(sourceId));
+          if (query !== null) yield* discover(sourceId, query, targets);
+        }).pipe(orDieOnDatabaseError("copyDiscovery")),
+      { homeOnly: true },
+    );
+  }),
+);
 
 /**
  * All copies of the song: the known copies first, then, after a search of each provider for the
@@ -286,38 +355,18 @@ const discoveryTargets = (sourceId: string) =>
 export const sourceCopiesStream = (sourceId: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const targets = yield* discoveryTargets(sourceId);
-      const text = targets.length === 0 ? null : yield* songText(sourceId);
-      const query = [text?.artist, text?.title].filter((part) => part != null).join(" ");
-      const searching = targets.length > 0 && text?.title != null;
-      const first = new SourceCopies({ copies: yield* sourceCopies(sourceId), searching });
-      if (!searching) return Stream.succeed(first);
+      const targets = yield* discoveryTargets(sourceId, false);
+      const query = targets.length === 0 ? null : songQuery(yield* songText(sourceId));
+      const first = new SourceCopies({
+        copies: yield* sourceCopies(sourceId),
+        searching: query !== null,
+      });
+      if (query === null) return Stream.succeed(first);
 
-      const discoveries = yield* CopyDiscoveries;
-      const now = yield* Clock.currentTimeMillis;
-      const discover = Effect.forEach(
-        targets,
-        ({ id, search, credentials }) =>
-          search(query, credentials).pipe(
-            Effect.timeout(searchTimeout),
-            Effect.flatMap((results) => cacheProviderSources(id, results)),
-            Effect.tap(() => Effect.sync(() => discoveries.set(`${sourceId}:${id}`, now))),
-            Effect.catchTags({
-              ProviderError: (error) =>
-                Effect.logWarning("Copy discovery failed", error.reason).pipe(Effect.as([])),
-              TimeoutError: () => Effect.logWarning("Copy discovery timed out").pipe(Effect.as([])),
-            }),
-            Effect.catchDefect((defect) =>
-              Effect.logError("Copy discovery crashed", defect).pipe(Effect.as([])),
-            ),
-            Effect.annotateLogs("provider", id),
-          ),
-        { concurrency: "unbounded", discard: true },
-      );
       return Stream.concat(
         Stream.succeed(first),
         Stream.fromEffect(
-          discover.pipe(
+          discover(sourceId, query, targets).pipe(
             Effect.andThen(sourceCopies(sourceId)),
             Effect.map((copies) => new SourceCopies({ copies, searching: false })),
           ),

@@ -45,6 +45,7 @@ import {
 import { insertPlay } from "./history.ts";
 import { Outputs } from "./outputs.ts";
 import { hintPrefetch } from "./playback.ts";
+import { queueCopyDiscovery } from "./source-copies.ts";
 import { Receivers, deviceOutput } from "./receivers.ts";
 import { usableProviders } from "./providers.ts";
 import { SessionState, loadSession, saveSession } from "./session-store.ts";
@@ -1312,7 +1313,14 @@ const makeSessions = Effect.gen(function* () {
   const db = yield* Database;
   const services =
     yield* Effect.context<
-      Effect.Services<ReturnType<typeof makeSession | typeof hintPrefetch | typeof continueRadio>>
+      Effect.Services<
+        ReturnType<
+          | typeof makeSession
+          | typeof hintPrefetch
+          | typeof continueRadio
+          | typeof queueCopyDiscovery
+        >
+      >
     >();
 
   // In order, so that the last hint wins
@@ -1321,6 +1329,8 @@ const makeSessions = Effect.gen(function* () {
     Effect.forever(
       Effect.flatMap(Queue.take(prefetches), (sourceIds) =>
         hintPrefetch("session", sourceIds).pipe(
+          // The copies of the next songs, so that a fallback and "Play from…" are ready
+          Effect.andThen(queueCopyDiscovery(sourceIds)),
           orDieOnDatabaseError("hintPrefetch"),
           Effect.catchCause((cause) => Effect.logError("Cannot prefetch for the session", cause)),
         ),

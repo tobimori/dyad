@@ -358,6 +358,11 @@ export class Provider extends Data.Class<{
    */
   readonly uploads?: true;
   /**
+   * The core asks the provider only for what the user opens, never in the background, because
+   * background requests risk a block of the account or the address
+   */
+  readonly userRequestsOnly?: true;
+  /**
    * The provider has no audio of its own: `resolve` gives a `ProviderLink`. The core plays the other
    * sources of the same recording first.
    */

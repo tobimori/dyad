@@ -73,6 +73,7 @@ export const youtubePlugin = new Plugin({
           search: (query) => searchMusic(query).pipe(Effect.provide(services)),
           tracklists: (externalId) => videoTracklists(externalId).pipe(Effect.provide(services)),
           uploads: true,
+          userRequestsOnly: true,
           download: { leaseDays: 30 },
           webUrl: (id) => `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,
           artistFromUrl: (url) => Effect.succeed(channelFromUrl(url)),

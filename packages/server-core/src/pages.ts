@@ -43,7 +43,13 @@ import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { Clock, Data, Effect, Option, Ref, Schema, Stream } from "effect";
 
-import { albumEditions, albumPageRefs, assertEdition, splitEdition } from "./albums.ts";
+import {
+  albumEditions,
+  albumPageRefs,
+  assertEdition,
+  queueEditions,
+  splitEdition,
+} from "./albums.ts";
 import { linkFoundArtists } from "./artist-matching.ts";
 import { artistIdOf } from "./artists.ts";
 import { uuidV5 } from "./ids.ts";
@@ -726,6 +732,22 @@ const groupPage = (group: ArtistGroup) =>
       );
       const latest = pages.length === 0 ? Stream.succeed([]) : Stream.zipLatestAll(...pages);
       return latest.pipe(
+        // All editions and tracks of the discography, from providers that allow it in the background
+        Stream.tap((found) =>
+          Effect.forEach(
+            found,
+            (page) =>
+              usable.get(page.provider)?.provider.userRequestsOnly === true
+                ? Effect.void
+                : queueEditions(
+                    page.provider,
+                    [...(page.data?.releases ?? []), ...(page.data?.appearsOn ?? [])].map(
+                      (release) => release.externalId,
+                    ),
+                  ).pipe(orDieOnDatabaseError("queueEditions")),
+            { discard: true },
+          ),
+        ),
         Stream.mapEffect((found) =>
           mixedArtistPage(group.ref, group.root, catalog, found, uploads, priority).pipe(
             orDieOnDatabaseError("artistPage"),

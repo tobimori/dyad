@@ -13,6 +13,7 @@ import { assertionId, boundRecordingId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { matchingLayer, resolveRoots } from "./matching.ts";
 import { editionsLayer } from "./albums.ts";
+import { copyDiscoveryLayer } from "./source-copies.ts";
 import { Tags, tagIdentifiers, writeProviderSource, writeSource } from "./sources.ts";
 import { assertSegmentMatches } from "./tracklists.ts";
 
@@ -147,6 +148,7 @@ const runBackfill = ({ after }: typeof BackfillPayload.Type) =>
  */
 export const catalogLayer = Layer.mergeAll(
   matchingLayer,
+  copyDiscoveryLayer,
   editionsLayer,
   artistLinksLayer,
   Layer.effectDiscard(

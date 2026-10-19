@@ -5,17 +5,19 @@ import { PopularityHit, ProviderSource } from "@dyad/plugin";
 import type { Credentials, Provider, ProviderError } from "@dyad/plugin";
 import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import type { Column, SQL } from "drizzle-orm";
-import { Array as Arr, Clock, Data, Effect, Option, Schema, Stream } from "effect";
+import { Array as Arr, Clock, Data, Effect, Option, Ref, Schema, Stream } from "effect";
 
 import { normalizeIsrc } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
 import { Popularities, Providers, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { withSeries } from "./sets.ts";
+import { queueCopyDiscovery } from "./source-copies.ts";
 import { providerOrder } from "./source-preference.ts";
 import { playableSources, sourceSummary, tagIdentifiers } from "./sources.ts";
 
 const localResultLimit = 50;
+const discoveredResults = 5;
 
 // One limit for the full answer of a provider search or a popularity source, with the token
 // refreshes and retries of the plugin
@@ -281,6 +283,7 @@ export const search = (query: string) =>
         ),
       );
 
+      const last = yield* Ref.make<ReadonlyArray<string>>([]);
       return Stream.fromIterable([...providerAnswers, ...popularityAnswers]).pipe(
         Stream.flatMap(Stream.fromEffect, { concurrency: "unbounded" }),
         Stream.scan(
@@ -293,6 +296,14 @@ export const search = (query: string) =>
             }),
         ),
         Stream.mapEffect((all) => rankAnswers(query, all)),
+        Stream.tap((results) =>
+          Ref.set(
+            last,
+            results.sources.slice(0, discoveredResults).map((summary) => summary.id),
+          ),
+        ),
+        // The copies of the top results, so that the next search shows them as one song
+        Stream.onEnd(Effect.flatMap(Ref.get(last), queueCopyDiscovery)),
       );
     }),
   );
