@@ -1,4 +1,15 @@
-import { album, localFile, providerPage, recording, songArtist } from "@dyad/db";
+import {
+  album,
+  albumArtist,
+  artist,
+  edition,
+  editionTrack,
+  identifier,
+  localFile,
+  providerPage,
+  recording,
+  songArtist,
+} from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AlbumCard,
@@ -13,6 +24,8 @@ import {
   PageTrack,
   SourceSummary,
   TrackSection,
+  catalogArtistRef,
+  compareSources,
 } from "@dyad/domain";
 import { AlbumRef } from "@dyad/domain";
 import { ProviderAlbum, ProviderArtist } from "@dyad/plugin";
@@ -23,18 +36,21 @@ import type {
   ProviderRelease,
   ProviderTrack,
 } from "@dyad/plugin";
-import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
-import { albumEditions, albumPageRefs, assertEdition } from "./albums.ts";
-import { artistPageRef } from "./artists.ts";
+import { albumEditions, albumPageRefs, assertEdition, splitEdition } from "./albums.ts";
+import { artistIdOf } from "./artists.ts";
+import { uuidV5 } from "./ids.ts";
+import { normV1, simplifyText } from "./normalize.ts";
 import { albumTypeOf, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
 import { Providers, linkedProviders, usableProviders } from "./providers.ts";
 import {
+  catalogArtistId,
   libraryAlbumKeys,
   libraryArtistKey,
   libraryArtistRef,
@@ -43,7 +59,9 @@ import {
   providerRefParts,
 } from "./refs.ts";
 import { Tags, playableSources, position, sourceSummary } from "./sources.ts";
-import { listLibrary } from "./user-library.ts";
+import { sameNamedSong } from "./ranking.ts";
+import { providerOrder } from "./source-preference.ts";
+import { listLibrary, songEntries } from "./user-library.ts";
 
 // Library pages come from the tags of the files on this replica. Binding will replace them with
 // catalog pages that resolve the same `library:` refs through `local_key`.
@@ -601,76 +619,367 @@ export const providerPageStream = <A, E, Page, R>(
     }).pipe(orDieOnDatabaseError(`${kind}Page`)),
   );
 
-/** A library ref gives one emission. A catalog ref shows the page of one provider artist. */
+/**
+ * The Dyad artist page: the catalog albums and songs of the artist and the provider pages of all
+ * provider artists in its merge group, as one discography and one song list. A library ref gives
+ * the page of the local files.
+ */
 export const artistPage = (ref: ArtistRef) =>
-  Stream.unwrap(
-    artistPageRef(ref).pipe(Effect.map(refArtistPage), orDieOnDatabaseError("artistPage")),
-  );
+  Option.isSome(libraryArtistKey(ref))
+    ? Stream.fromEffect(localArtistPage(ref).pipe(orDieOnDatabaseError("artistPage")))
+    : Stream.unwrap(
+        Effect.gen(function* () {
+          const db = yield* Database;
+          const usable = yield* usableProviders;
+          const parts = Option.getOrNull(providerRefParts(ref));
+          const requested =
+            parts === null
+              ? Option.getOrNull(catalogArtistId(ref))
+              : yield* artistIdOf(parts.provider, parts.externalId);
+          if (requested === null) return Stream.fail(new PageNotFound());
 
-const refArtistPage = (ref: ArtistRef) =>
-  Option.match(providerRefParts(ref), {
-    onNone: () => Stream.fromEffect(localArtistPage(ref).pipe(orDieOnDatabaseError("artistPage"))),
-    onSome: (parts) =>
-      providerPageStream("artist", parts, ProviderArtist, {
-        fetch: (plugin) => plugin.artist,
-        tracks: (data) => [...data.topTracks, ...data.tracks],
-        build: (page) =>
-          Effect.gen(function* () {
-            const data = page.data;
-            const saved = page.library.filter((item) => item.summary.artistRef === ref);
-            const inLibrary = (yield* libraryAlbumCards(saved).pipe(
-              orDieOnDatabaseError("artistPage"),
-            )).toSorted(newestFirst);
-            const topTracks = yield* providerTracks(
-              page.provider,
-              page.providerName,
-              data?.topTracks ?? [],
+          const [row] = yield* db
+            .select({ mergedIntoId: artist.mergedIntoId })
+            .from(artist)
+            .where(eq(artist.id, requested));
+          if (row === undefined && parts === null) return Stream.fail(new PageNotFound());
+          const root = row?.mergedIntoId ?? requested;
+          const members = yield* db
+            .select({ provider: identifier.scheme, externalId: identifier.value })
+            .from(artist)
+            .innerJoin(
+              identifier,
+              and(eq(identifier.entityType, "artist"), eq(identifier.entityId, artist.id)),
+            )
+            .where(sql`coalesce(${artist.mergedIntoId}, ${artist.id}) = ${root}`);
+
+          // The provider with the highest metadata priority first
+          const providers = yield* Providers;
+          const priority = (provider: string) => providers.get(provider)?.metadataPriority ?? 0;
+          const pages = [
+            ...new Map(
+              [...(parts === null ? [] : [parts]), ...members].flatMap((member) =>
+                usable.get(member.provider)?.provider.artist === undefined
+                  ? []
+                  : [[`${member.provider}:${member.externalId}`, member] as const],
+              ),
+            ).values(),
+          ]
+            .toSorted(
+              (a, b) =>
+                priority(b.provider) - priority(a.provider) ||
+                a.provider.localeCompare(b.provider) ||
+                a.externalId.localeCompare(b.externalId),
+            )
+            .map((member) =>
+              providerPageStream("artist", member, ProviderArtist, {
+                fetch: (plugin) => plugin.artist,
+                tracks: (data) => [...data.topTracks, ...data.tracks],
+                build: Effect.succeed,
+              }),
             );
-            const tracks = yield* providerTracks(
-              page.provider,
-              page.providerName,
-              data?.tracks ?? [],
+
+          const catalog = yield* catalogArtist(root);
+          const uploads = new Set(
+            [...usable].flatMap(([id, entry]) => (entry.provider.uploads === true ? [id] : [])),
+          );
+          const latest = pages.length === 0 ? Stream.succeed([]) : Stream.zipLatestAll(...pages);
+          return latest.pipe(
+            Stream.mapEffect((found) =>
+              mixedArtistPage(
+                // A provider artist without a catalog row keeps its own ref
+                row === undefined ? ref : catalogArtistRef(root),
+                root,
+                catalog,
+                found,
+                uploads,
+                priority,
+              ).pipe(orDieOnDatabaseError("artistPage")),
+            ),
+          );
+        }).pipe(orDieOnDatabaseError("artistPage")),
+      );
+
+// The albums with the artist as first album artist, and the songs that credit the artist
+const catalogArtist = (root: string) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+    const [named] = yield* db.select({ name: artist.name }).from(artist).where(eq(artist.id, root));
+
+    const credited = alias(artist, "credited");
+    const albums = yield* db
+      .select({ album })
+      .from(album)
+      .innerJoin(albumArtist, and(eq(albumArtist.albumId, album.id), eq(albumArtist.position, 0)))
+      .leftJoin(credited, eq(credited.id, albumArtist.artistId))
+      .where(
+        and(
+          isNull(album.mergedIntoId),
+          isNotNull(album.title),
+          sql`coalesce(${credited.mergedIntoId}, ${albumArtist.artistId}) = ${root}`,
+        ),
+      );
+    const albumIds = albums.map((row) => row.album.id);
+    const refs = yield* albumPageRefs(albumIds);
+
+    // The songs of each album, for the track count and the single rule
+    const tracks =
+      albumIds.length === 0
+        ? []
+        : yield* db
+            .selectDistinct({
+              album: sql<string>`coalesce(${album.mergedIntoId}, ${album.id})`,
+              song: sql<string>`coalesce(${recording.mergedIntoId}, ${editionTrack.recordingId})`,
+            })
+            .from(editionTrack)
+            .innerJoin(edition, eq(edition.id, editionTrack.editionId))
+            .innerJoin(album, eq(album.id, edition.albumId))
+            .leftJoin(recording, eq(recording.id, editionTrack.recordingId))
+            .where(
+              and(
+                isNull(edition.mergedIntoId),
+                sql`coalesce(${album.mergedIntoId}, ${album.id}) in ${albumIds}`,
+              ),
             );
-            const releases = (data?.releases ?? []).map((release) =>
-              releaseCard(page.provider, release),
-            );
-            const appearsOn = (data?.appearsOn ?? [])
-              .map((release) => releaseCard(page.provider, release))
-              .toSorted(newestFirst);
-            const similar = (data?.similar ?? []).map(
-              (artist) =>
+    const songsOf = new Map<string, Set<string>>();
+    for (const track of tracks) {
+      songsOf.set(track.album, (songsOf.get(track.album) ?? new Set()).add(track.song));
+    }
+
+    const cards = albums.flatMap(({ album: row }) => {
+      const ref = refs.get(row.id);
+      if (ref === undefined || row.title === null) return [];
+      const card = new AlbumCard({
+        ref: AlbumRef.make(ref),
+        title: row.title,
+        artist: row.artistName,
+        artistRef: catalogArtistRef(root),
+        releaseDate: row.year === null ? null : String(row.year),
+        ...cardTypes(row.type),
+        explicit: false,
+        trackCount: songsOf.get(row.id)?.size ?? null,
+        artworkUrl: row.artworkUrl,
+      });
+      return [{ id: row.id, card, songs: songsOf.get(row.id) ?? new Set<string>() }];
+    });
+    // A single is hidden when all its songs are on an album of the artist
+    const onAlbums = new Set(
+      cards.flatMap((entry) => (entry.card.primaryType === "single" ? [] : [...entry.songs])),
+    );
+    const shown = cards.filter(
+      (entry) =>
+        entry.card.primaryType !== "single" ||
+        entry.songs.size === 0 ||
+        [...entry.songs].some((song) => !onAlbums.has(song)),
+    );
+
+    const credits = yield* db
+      .selectDistinct({ id: sql<string>`coalesce(${recording.mergedIntoId}, ${recording.id})` })
+      .from(songArtist)
+      .innerJoin(recording, eq(recording.id, songArtist.recordingId))
+      .leftJoin(credited, eq(credited.id, songArtist.artistId))
+      .where(sql`coalesce(${credited.mergedIntoId}, ${songArtist.artistId}) = ${root}`);
+    const songs = (yield* songEntries(credits.map((row) => row.id))).flatMap((entry) =>
+      entry.source === null
+        ? []
+        : [new PageTrack({ source: entry.source, disc: null, number: null, playable: true })],
+    );
+
+    return {
+      name: named?.name ?? null,
+      albums: shown.map((entry) => ({ id: entry.id, card: entry.card })),
+      songs,
+    };
+  });
+
+// Releases of two providers are one card when they are editions of one album, else when they have
+// the same title and no other stated type. The title is without edition words, guests and an
+// `EP` or `Single` suffix, so that `Say It (feat. Tove Lo) [Remixes]` is `Say It (Remixes)`.
+const releaseTitle = (card: AlbumCard) =>
+  simplifyText(
+    splitEdition(card.title)
+      .base.replaceAll(/[([]\s*(?:feat|ft|featuring)\.?\s[^)\]]*[)\]]/giu, "")
+      .replace(/\s(?:feat|ft|featuring)\.?\s[^([]*/iu, " "),
+  ).replace(/\s(?:ep|single)$/u, "");
+const releaseType = (card: AlbumCard) =>
+  card.primaryType === null ? null : `${card.primaryType}|${card.secondaryTypes.join()}`;
+
+// Fetching while one page fetches, else fresh when one page is fresh, else the first failure
+const combinedState = (states: ReadonlyArray<PageState>) =>
+  states.find((state) => state.status === "fetching") ??
+  states.find((state) => state.status === "fresh") ??
+  states[0] ??
+  new PageState({ status: "fresh", fetchedAt: null, reason: null });
+
+const mixedArtistPage = (
+  pageRef: ArtistRef,
+  root: string,
+  catalog: Effect.Success<ReturnType<typeof catalogArtist>>,
+  pages: ReadonlyArray<PageInput<ProviderArtist>>,
+  uploads: ReadonlySet<string>,
+  priority: (provider: string) => number,
+) =>
+  Effect.gen(function* () {
+    const db = yield* Database;
+
+    // The album of each provider release that has an edition
+    const releases = pages.flatMap((page) =>
+      (page.data?.releases ?? []).map((release) => ({ page, release })),
+    );
+    const appearances = pages.flatMap((page) =>
+      (page.data?.appearsOn ?? []).map((release) => ({ page, release })),
+    );
+    const editionIds = new Map(
+      yield* Effect.forEach([...releases, ...appearances], ({ page, release }) =>
+        uuidV5(`${page.provider}:edition:${release.externalId}`).pipe(
+          Effect.map((id) => [`${page.provider}:${release.externalId}`, id] as const),
+        ),
+      ),
+    );
+    const albumOfEdition = new Map(
+      editionIds.size === 0
+        ? []
+        : (yield* db
+            .select({
+              id: edition.id,
+              album: sql<string>`coalesce(${album.mergedIntoId}, ${album.id})`,
+            })
+            .from(edition)
+            .innerJoin(album, eq(album.id, edition.albumId))
+            .where(inArray(edition.id, [...editionIds.values()]))).map((row) => [
+            row.id,
+            row.album,
+          ]),
+    );
+
+    // Catalog albums first, then the releases of each provider in priority order
+    const cards = new Map<string, AlbumCard>();
+    const sameTitle = (card: AlbumCard) =>
+      [...cards].find(([, other]) => {
+        const [a, b] = [releaseType(card), releaseType(other)];
+        return releaseTitle(other) === releaseTitle(card) && (a === null || b === null || a === b);
+      })?.[0];
+    for (const { id, card } of catalog.albums) cards.set(`album:${id}`, card);
+    const keyOf = (provider: string, card: AlbumCard, externalId: string) => {
+      const albumId = albumOfEdition.get(editionIds.get(`${provider}:${externalId}`) ?? "");
+      if (albumId !== undefined && cards.has(`album:${albumId}`)) return `album:${albumId}`;
+      return sameTitle(card) ?? `${provider}:${externalId}`;
+    };
+    for (const { page, release } of releases) {
+      const card = releaseCard(page.provider, release);
+      const key = keyOf(page.provider, card, release.externalId);
+      if (!cards.has(key)) cards.set(key, card);
+    }
+    const appearsOn = new Map<string, AlbumCard>();
+    for (const { page, release } of appearances) {
+      const card = releaseCard(page.provider, release);
+      const key = keyOf(page.provider, card, release.externalId);
+      if (!cards.has(key) && !appearsOn.has(key)) appearsOn.set(key, card);
+    }
+
+    // One row per song. The top tracks come from the first page that has them.
+    const top = pages.find((page) => (page.data?.topTracks.length ?? 0) > 0);
+    const rows = [
+      ...(top === undefined
+        ? []
+        : (yield* providerTracks(top.provider, top.providerName, top.data?.topTracks ?? [])).map(
+            (track) => ({ track, top: true }),
+          )),
+      ...(yield* Effect.forEach(pages, (page) =>
+        providerTracks(page.provider, page.providerName, page.data?.tracks ?? []),
+      )).flatMap((list) => list.map((track) => ({ track, top: false }))),
+      ...catalog.songs.map((track) => ({ track, top: false })),
+    ];
+    const bound = [...new Set(rows.flatMap((row) => row.track.source.recordingId ?? []))];
+    const roots = new Map(
+      bound.length === 0
+        ? []
+        : (yield* db
+            .select({ id: recording.id, root: recording.mergedIntoId })
+            .from(recording)
+            .where(inArray(recording.id, bound))).map((row) => [row.id, row.root ?? row.id]),
+    );
+    const songOf = (track: PageTrack) => {
+      const id = track.source.recordingId;
+      return id === null ? null : (roots.get(id) ?? id);
+    };
+    const asNamed = (track: PageTrack) => ({
+      summary: track.source,
+      upload: uploads.has(track.source.provider),
+    });
+    // A row joins the group of the same recording, else the group whose rows all have its name
+    const groups: Array<{ top: boolean; tracks: Array<PageTrack> }> = [];
+    for (const row of rows) {
+      const song = songOf(row.track);
+      const group =
+        groups.find((members) =>
+          members.tracks.some((member) => song !== null && songOf(member) === song),
+        ) ??
+        groups.find((members) =>
+          members.tracks.every((member) => sameNamedSong(asNamed(member), asNamed(row.track))),
+        );
+      if (group === undefined) groups.push({ top: row.top, tracks: [row.track] });
+      else group.tracks.push(row.track);
+    }
+    const byProvider = compareSources(yield* providerOrder);
+    // The owner's provider order, then the provider with the higher metadata priority
+    const compare = (a: PageTrack, b: PageTrack) =>
+      byProvider(
+        { provider: a.source.provider, lossless: false },
+        { provider: b.source.provider, lossless: false },
+      ) || priority(b.source.provider) - priority(a.source.provider);
+    const best = (tracks: ReadonlyArray<PageTrack>) =>
+      tracks.reduce((current, next) => (compare(next, current) < 0 ? next : current));
+    const shownTop = groups.flatMap((group) => (group.top ? [best(group.tracks)] : []));
+    const shownTracks = groups.flatMap((group) => (group.top ? [] : [best(group.tracks)]));
+
+    const similar = [
+      ...new Map(
+        pages
+          .flatMap((page) =>
+            (page.data?.similar ?? []).map(
+              (other) =>
                 new ArtistCard({
-                  ref: providerArtistRef(page.provider, artist.externalId),
-                  name: artist.name,
-                  artworkUrl: artist.artworkUrl,
+                  ref: providerArtistRef(page.provider, other.externalId),
+                  name: other.name,
+                  artworkUrl: other.artworkUrl,
                 }),
-            );
+            ),
+          )
+          .map((card) => [normV1(card.name), card]),
+      ).values(),
+    ];
 
-            return new ArtistPage({
-              ref,
-              providerName: page.providerName,
-              name: data?.artist.name ?? libraryArtistCards(saved)[0]?.name ?? null,
-              artworkUrl: data?.artist.artworkUrl ?? null,
-              sections: [
-                ...(topTracks.length === 0
-                  ? []
-                  : [new TrackSection({ kind: "top_tracks", tracks: topTracks })]),
-                ...(inLibrary.length === 0
-                  ? []
-                  : [new AlbumSection({ kind: "in_library", albums: inLibrary })]),
-                ...releaseSections(releases),
-                ...(appearsOn.length === 0
-                  ? []
-                  : [new AlbumSection({ kind: "appears_on", albums: appearsOn })]),
-                ...(tracks.length === 0 ? [] : [new TrackSection({ kind: "tracks", tracks })]),
-                ...(similar.length === 0
-                  ? []
-                  : [new ArtistSection({ kind: "similar_artists", artists: similar })]),
-              ],
-              state: page.state,
-            });
-          }),
-      }),
+    const discography = [...cards.values()];
+    const named = pages.find((page) => page.data !== null)?.data?.artist;
+    return new ArtistPage({
+      ref: pageRef,
+      providerName: null,
+      name: catalog.name ?? named?.name ?? null,
+      artworkUrl:
+        pages.find((page) => page.data?.artist.artworkUrl != null)?.data?.artist.artworkUrl ?? null,
+      sections: [
+        ...(shownTop.length === 0
+          ? []
+          : [new TrackSection({ kind: "top_tracks", tracks: shownTop })]),
+        ...releaseSections(discography),
+        ...(appearsOn.size === 0
+          ? []
+          : [
+              new AlbumSection({
+                kind: "appears_on",
+                albums: [...appearsOn.values()].toSorted(newestFirst),
+              }),
+            ]),
+        ...(shownTracks.length === 0
+          ? []
+          : [new TrackSection({ kind: "tracks", tracks: shownTracks })]),
+        ...(similar.length === 0
+          ? []
+          : [new ArtistSection({ kind: "similar_artists", artists: similar })]),
+      ],
+      state: combinedState(pages.map((page) => page.state)),
+    });
   });
 
 // All tracks of the album: the tracks of the original edition, then the tracks of the other

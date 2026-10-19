@@ -196,11 +196,14 @@ const scoreCandidate = (
   return new Score({ ...parts, total });
 };
 
-// Same ISRC, else same title and artist with durations within 5 % where both are known, or an
-// upload up to 30 s longer. A new release can give the recording a new ISRC.
-const sameRecording = (a: Candidate, b: Candidate) => {
-  if (a.isrc !== null && a.isrc === b.isrc) return true;
-
+/**
+ * Same title and artist, with durations within 5 % where both are known, or an upload up to 30 s
+ * longer. Only for display: a stored link needs evidence.
+ */
+export const sameNamedSong = (
+  a: { readonly summary: SourceSummary; readonly upload: boolean },
+  b: { readonly summary: SourceSummary; readonly upload: boolean },
+) => {
   const key = recordingKey(a.summary.title, a.summary.artist);
   if (key === null || key !== recordingKey(b.summary.title, b.summary.artist)) return false;
 
@@ -213,6 +216,10 @@ const sameRecording = (a: Candidate, b: Candidate) => {
   const longer = durationA < durationB ? b : a;
   return longer.upload && Math.abs(durationA - durationB) <= 30_000;
 };
+
+// A new release can give the recording a new ISRC
+const sameRecording = (a: Candidate, b: Candidate) =>
+  (a.isrc !== null && a.isrc === b.isrc) || sameNamedSong(a, b);
 
 /**
  * One result per recording, best first. A group shows and plays its best source: the user's

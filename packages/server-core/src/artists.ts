@@ -1,7 +1,5 @@
 import { artist, catalogAssertion, identifier, recording, songArtist } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { PageNotFound } from "@dyad/domain";
-import type { ArtistRef } from "@dyad/domain";
 import type { Provider } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
@@ -12,8 +10,7 @@ import { resolveArtistRoots } from "./artist-matching.ts";
 import { compareAssertions, fields, providerOf, resolveAssertion } from "./assertions.ts";
 import type { Assertion } from "./assertions.ts";
 import { musicbrainzArtistId, uuidV5 } from "./ids.ts";
-import { Providers, usableProviders } from "./providers.ts";
-import { catalogArtistId, providerArtistRef } from "./refs.ts";
+import { Providers } from "./providers.ts";
 import { touchGroups } from "./sync-counter.ts";
 
 // Below the SQLite limit of 32766 parameters
@@ -352,39 +349,6 @@ export const projectArtists = (
       }),
     );
     return changed.flat();
-  });
-
-/**
- * The page ref of an artist ref. A catalog ref gives the page of the provider artist in its merge
- * group that the user can open, the provider with the highest metadata priority first.
- */
-export const artistPageRef = (ref: ArtistRef) =>
-  Effect.gen(function* () {
-    const id = catalogArtistId(ref);
-    if (Option.isNone(id)) return ref;
-
-    const db = yield* Database;
-    const usable = yield* usableProviders;
-    const members = yield* db
-      .select({ provider: identifier.scheme, externalId: identifier.value })
-      .from(artist)
-      .innerJoin(
-        identifier,
-        and(eq(identifier.entityType, "artist"), eq(identifier.entityId, artist.id)),
-      )
-      .where(sql`coalesce(${artist.mergedIntoId}, ${artist.id}) = ${id.value}`);
-
-    const priority = (provider: string) => usable.get(provider)?.provider.metadataPriority ?? 0;
-    const [best] = members
-      .filter((member) => usable.get(member.provider)?.provider.artist !== undefined)
-      .toSorted(
-        (a, b) =>
-          priority(b.provider) - priority(a.provider) ||
-          a.provider.localeCompare(b.provider) ||
-          a.externalId.localeCompare(b.externalId),
-      );
-    if (best === undefined) return yield* new PageNotFound();
-    return providerArtistRef(best.provider, best.externalId);
   });
 
 /** Recordings with a credit assertion and no projected credit, for example from before artists */

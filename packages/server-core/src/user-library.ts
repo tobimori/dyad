@@ -365,6 +365,16 @@ export const listPlaylistEntries = (playlistId: string) =>
     );
   });
 
+/** Each song with its best copy, for a page that lists songs */
+export const songEntries = (recordingIds: ReadonlyArray<string>) =>
+  recordingIds.length === 0
+    ? Effect.succeed([])
+    : loadLibraryView(recordingIds).pipe(
+        Effect.map((view) =>
+          view.libraryEntries(recordingIds.map((entityId) => ({ entityId, addedAt: 0 }))),
+        ),
+      );
+
 /** The saved songs */
 export const listLibrary = Effect.gen(function* () {
   const db = yield* Database;
