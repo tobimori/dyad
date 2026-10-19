@@ -1038,6 +1038,7 @@ const catalogArtist = Effect.fn(function* (
   return {
     name: named?.name ?? cachedName ?? null,
     albums: shown.map((entry) => ({ id: entry.id, card: entry.card })),
+    hidden: new Set(cards.flatMap((entry) => (shown.includes(entry) ? [] : [entry.id]))),
     songs: [...songs, ...cachedSongs],
   };
 });
@@ -1108,21 +1109,23 @@ const mixedArtistPage = Effect.fn(function* (
   const sameTitle = (card: AlbumCard) =>
     [...cards].find(([, other]) => sameRelease(card, other))?.[0];
   for (const { id, card } of catalog.albums) cards.set(`album:${id}`, card);
+  // `null` for the release of a single that the catalog hides
   const keyOf = (provider: string, card: AlbumCard, externalId: string) => {
     const albumId = albumOfEdition.get(editionIds.get(`${provider}:${externalId}`) ?? "");
+    if (albumId !== undefined && catalog.hidden.has(albumId)) return null;
     if (albumId !== undefined && cards.has(`album:${albumId}`)) return `album:${albumId}`;
     return sameTitle(card) ?? `${provider}:${externalId}`;
   };
   for (const { page, release } of releases) {
     const card = releaseCard(page.provider, release);
     const key = keyOf(page.provider, card, release.externalId);
-    if (!cards.has(key)) cards.set(key, card);
+    if (key !== null && !cards.has(key)) cards.set(key, card);
   }
   const appearsOn = new Map<string, AlbumCard>();
   for (const { page, release } of appearances) {
     const card = releaseCard(page.provider, release);
     const key = keyOf(page.provider, card, release.externalId);
-    if (!cards.has(key) && !appearsOn.has(key)) appearsOn.set(key, card);
+    if (key !== null && !cards.has(key) && !appearsOn.has(key)) appearsOn.set(key, card);
   }
 
   // One row per song. The top tracks come from the first page that has them.
