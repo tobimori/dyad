@@ -1,12 +1,4 @@
-import {
-  album,
-  libraryItem,
-  localFile,
-  providerItem,
-  providerPage,
-  recording,
-  source,
-} from "@dyad/db";
+import { album, localFile, providerPage, recording, songArtist } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import {
   AlbumCard,
@@ -23,7 +15,7 @@ import {
   TrackSection,
 } from "@dyad/domain";
 import { AlbumRef } from "@dyad/domain";
-import { ProviderAlbum, ProviderArtist, ProviderSource } from "@dyad/plugin";
+import { ProviderAlbum, ProviderArtist } from "@dyad/plugin";
 import type {
   Credentials,
   Provider,
@@ -36,7 +28,7 @@ import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { Clock, Data, Effect, Option, Schema, Stream } from "effect";
 
-import { albumEditions, assertEdition } from "./albums.ts";
+import { albumEditions, albumPageRefs, assertEdition } from "./albums.ts";
 import { artistPageRef } from "./artists.ts";
 import { albumTypeOf, tagReleaseDate, tagReleaseTypes } from "./editions.ts";
 import { albumArtistOf } from "./library.ts";
@@ -51,6 +43,7 @@ import {
   providerRefParts,
 } from "./refs.ts";
 import { Tags, playableSources, position, sourceSummary } from "./sources.ts";
+import { listLibrary } from "./user-library.ts";
 
 // Library pages come from the tags of the files on this replica. Binding will replace them with
 // catalog pages that resolve the same `library:` refs through `local_key`.
@@ -162,38 +155,46 @@ const pageTracks = (files: ReadonlyArray<LibraryFile>) =>
 
 class LibrarySource extends Data.Class<{
   readonly summary: SourceSummary;
-  readonly source: ProviderSource;
+  readonly artistName: string | null;
 }> {}
 
-// The provider sources that the user saved in a provider library. Each source of a saved item binds
-// to the item's recording, so other sources of a merged recording are not part of it.
+// The saved songs with a copy of a linked provider, one copy each. It reads only replicated rows,
+// because a device has no provider cache. Local files have their own cards.
 const librarySources = Effect.gen(function* () {
   const db = yield* Database;
   const providers = yield* linkedProviders;
+  const summaries = (yield* listLibrary).flatMap((entry) =>
+    entry.source !== null &&
+    entry.source.provider !== "local" &&
+    providers.has(entry.source.provider)
+      ? [entry.source]
+      : [],
+  );
 
-  const rows = yield* db
-    .select({
-      sourceId: providerItem.sourceId,
-      provider: providerItem.provider,
-      data: providerItem.data,
-    })
-    .from(libraryItem)
-    .innerJoin(source, eq(source.recordingId, libraryItem.entityId))
-    .innerJoin(providerItem, eq(providerItem.sourceId, source.id))
-    .where(
-      and(eq(libraryItem.deleted, false), inArray(providerItem.provider, [...providers.keys()])),
-    )
-    .groupBy(source.id);
-
-  return yield* Effect.forEach(rows, (row) =>
-    Effect.gen(function* () {
-      const decoded = yield* Schema.decodeUnknownEffect(ProviderSource)(row.data).pipe(
-        Effect.orDie,
-      );
-      const item = yield* toCachedSource(row.provider, decoded);
-      const name = providers.get(row.provider)?.name ?? row.provider;
-      return new LibrarySource({ summary: cachedSummary(item, name), source: decoded });
-    }),
+  // The first credited name, as the artist card shows it
+  const ids = [...new Set(summaries.flatMap((summary) => summary.recordingId ?? []))];
+  const bound = alias(recording, "bound");
+  const names = new Map(
+    ids.length === 0
+      ? []
+      : (yield* db
+          .select({ id: bound.id, name: songArtist.name })
+          .from(bound)
+          .innerJoin(
+            songArtist,
+            and(
+              eq(songArtist.recordingId, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`),
+              eq(songArtist.position, 0),
+            ),
+          )
+          .where(inArray(bound.id, ids))).map((row) => [row.id, row.name]),
+  );
+  return summaries.map(
+    (summary) =>
+      new LibrarySource({
+        summary,
+        artistName: names.get(summary.recordingId ?? "") ?? summary.artist,
+      }),
   );
 });
 
@@ -202,9 +203,7 @@ const libraryArtistCards = (sources: ReadonlyArray<LibrarySource>) =>
     ([ref, group]) =>
       new ArtistCard({
         ref,
-        name:
-          mostCommon(group.map((item) => (item.source.artists[0] ?? item.source.uploader)?.name)) ??
-          "",
+        name: mostCommon(group.map((item) => item.artistName ?? undefined)) ?? "",
         artworkUrl: null,
       }),
   );
@@ -254,11 +253,15 @@ export const libraryAlbumCards = (sources: ReadonlyArray<Pick<LibrarySource, "su
       const found = albumOf(item);
       return found === undefined ? item.summary.albumRef : `album:${found.id}`;
     });
+    // A device has no provider cache, so its tracks have no album ref
+    const pageRefs = yield* albumPageRefs([...new Set([...albums.values()].map((row) => row.id))]);
     return [...groups.values()].flatMap((group) => {
-      const ref = mostCommon(group.map((item) => item.summary.albumRef ?? undefined));
-      if (ref === null) return [];
       const [first] = group;
       const found = first === undefined ? undefined : albumOf(first);
+      const ref =
+        mostCommon(group.map((item) => item.summary.albumRef ?? undefined)) ??
+        (found === undefined ? null : (pageRefs.get(found.id) ?? null));
+      if (ref === null) return [];
       const artistRef = mostCommon(group.map((item) => item.summary.artistRef ?? undefined));
       const artworkUrl =
         group.find((item) => item.summary.artworkUrl !== null)?.summary.artworkUrl ?? null;

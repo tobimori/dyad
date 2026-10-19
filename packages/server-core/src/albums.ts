@@ -12,6 +12,7 @@ import {
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import { ProviderAlbum } from "@dyad/plugin";
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { Array as Arr, Effect, Layer, Schema } from "effect";
 
 import { creditNames, creditedArtists, projectArtistRows, sameNames } from "./artists.ts";
@@ -196,6 +197,42 @@ export const albumEditions = (provider: string, externalId: string) =>
         // `<plugin>:<album ID>`
         albums: lists.flatMap((list) => (list.root === row.id ? [list.originRef] : [])),
       }));
+  });
+
+/**
+ * A provider album ref of each root album, for a replica without the provider cache: the album of
+ * the original edition that has a track list
+ */
+export const albumPageRefs = (albumIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    if (albumIds.length === 0) return new Map<string, string>();
+    const db = yield* Database;
+    const root = alias(edition, "root_edition");
+    const rows = yield* db
+      .select({
+        album: sql<string>`coalesce(${album.mergedIntoId}, ${album.id})`,
+        edition: root,
+        originRef: catalogAssertion.originRef,
+      })
+      .from(catalogAssertion)
+      .innerJoin(edition, eq(edition.id, catalogAssertion.entityId))
+      .innerJoin(root, eq(root.id, sql`coalesce(${edition.mergedIntoId}, ${edition.id})`))
+      .innerJoin(album, eq(album.id, root.albumId))
+      .where(
+        and(
+          eq(catalogAssertion.entityType, "edition"),
+          eq(catalogAssertion.field, "tracks"),
+          eq(catalogAssertion.retracted, false),
+          sql`coalesce(${album.mergedIntoId}, ${album.id}) in ${albumIds}`,
+        ),
+      );
+    const refs = new Map<string, string>();
+    for (const row of rows.toSorted(
+      (a, b) => originalFirst(a.edition, b.edition) || a.originRef.localeCompare(b.originRef),
+    )) {
+      if (!refs.has(row.album)) refs.set(row.album, row.originRef);
+    }
+    return refs;
   });
 
 /**
