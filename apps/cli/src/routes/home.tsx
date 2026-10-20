@@ -25,15 +25,16 @@ const shelfRows = (key: string, shelf: HomeShelf) => [
   ...shelf.albums.map((album) => new AlbumRow({ key: `${key}:${album.ref}`, album })),
 ];
 
-// By intent: the suggestions, the user's own plays, then the charts of all providers under one
-// heading with the provider as a detail. A provider group without shelves shows its state alone.
+// By intent: the owner's own plays, the suggestions, the new releases, then the charts of all
+// providers under one heading with the provider as a detail. A provider group without shelves
+// shows its state alone.
 const homeRows = (page: HomePage) => {
   const own = page.groups.filter((group) => group.providerName === null);
   const local = own.filter((group) => group.state.status === "local").flatMap(shelvesOf);
   const suggested = own.filter((group) => group.state.status !== "local").flatMap(shelvesOf);
   const shelves = [
-    ...suggested.filter((shelf) => shelf.tracks.length > 0),
     ...local,
+    ...suggested.filter((shelf) => shelf.tracks.length > 0),
     ...suggested.filter((shelf) => shelf.tracks.length === 0),
   ];
   // Two recommenders can give shelves with the same title

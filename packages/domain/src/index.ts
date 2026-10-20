@@ -223,7 +223,7 @@ export class AlbumPage extends Schema.Class<AlbumPage>("AlbumPage")({
 export class PageNotFound extends Schema.TaggedError<PageNotFound>()("PageNotFound", {}) {}
 
 export class HomeShelf extends Schema.Class<HomeShelf>("HomeShelf")({
-  /** Safe to show, for example `Recent albums` or a chart name of a provider */
+  /** Safe to show, for example `Jump back in` or a chart name of a provider */
   title: Schema.String,
   tracks: Schema.Array(PageTrack),
   albums: Schema.Array(AlbumCard),

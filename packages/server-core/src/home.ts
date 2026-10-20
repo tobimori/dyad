@@ -1,13 +1,12 @@
 import { playEvent, providerPage, source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
-import { AlbumCard, HomeGroup, HomePage, HomeShelf, PageState, PageTrack } from "@dyad/domain";
+import { AlbumCard, HomeGroup, HomePage, HomeShelf, PageState } from "@dyad/domain";
 import type { AlbumRef } from "@dyad/domain";
 import { ProviderShelf, SuggestionShelf } from "@dyad/plugin";
 import type { Credentials, Recommender } from "@dyad/plugin";
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { Clock, Effect, Option, Schema, Stream } from "effect";
 
-import { listRecentPlays } from "./history.ts";
 import { libraryAlbumCards, providerPageStream, providerTracks, releaseCard } from "./pages.ts";
 import { callProvider, usableProviders } from "./providers.ts";
 import { playHistoryMs, playValue } from "./ranking.ts";
@@ -61,19 +60,13 @@ const recentAlbums = Effect.gen(function* () {
     });
 });
 
+// The single plays are in the Recently played section
 const localGroup = Effect.gen(function* () {
   const albums = yield* recentAlbums;
-  const recent = yield* listRecentPlays;
-  const tracks = recent
-    .slice(0, shelfLimit)
-    .map((summary) => new PageTrack({ source: summary, disc: null, number: null, playable: true }));
-
   return new HomeGroup({
     providerName: null,
-    shelves: [
-      new HomeShelf({ title: "Recent albums", tracks: [], albums }),
-      new HomeShelf({ title: "Recently played", tracks, albums: [] }),
-    ].filter((shelf) => shelf.tracks.length > 0 || shelf.albums.length > 0),
+    shelves:
+      albums.length === 0 ? [] : [new HomeShelf({ title: "Jump back in", tracks: [], albums })],
     state: new PageState({ status: "local", fetchedAt: null, reason: null }),
   });
 });
