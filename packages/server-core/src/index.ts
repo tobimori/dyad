@@ -13,6 +13,8 @@ import {
   pairingCodesLayer,
   removeDevice,
 } from "./auth.ts";
+import { decideArtistLink } from "./artist-matching.ts";
+import { artistProfiles } from "./artists.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
 import { listRecentPlays } from "./history.ts";
@@ -202,6 +204,10 @@ export const serverRoutes = Layer.unwrap(
           (home) => home.unlinkAccount({ provider }),
           unlinkAccount(provider).pipe(orDieOnDatabaseError("unlinkAccount")),
         ),
+      artistProfiles: ({ artistId }) =>
+        artistProfiles(artistId).pipe(orDieOnDatabaseError("artistProfiles")),
+      decideArtistLink: ({ decision, ...pair }) =>
+        decideArtistLink(pair, decision).pipe(orDieOnDatabaseError("decideArtistLink")),
       unmergeRecording: (pair) =>
         decideMerge(pair, "reject").pipe(orDieOnDatabaseError("unmergeRecording")),
       mergeRecordings: (pair) =>

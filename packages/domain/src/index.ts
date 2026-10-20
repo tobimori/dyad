@@ -302,7 +302,17 @@ export class PlaylistNotFound extends Schema.TaggedError<PlaylistNotFound>()(
 ) {}
 
 export class MergeFailed extends Schema.TaggedError<MergeFailed>()("MergeFailed", {
-  reason: Schema.Literals(["recording_not_found", "same_recording"]),
+  reason: Schema.Literals(["not_found", "same_entity"]),
+}) {}
+
+/** A provider profile in the group of an artist. `linked` is `false` after the owner unlinked it. */
+export class ArtistProfile extends Schema.Class<ArtistProfile>("ArtistProfile")({
+  artistId: Schema.String,
+  /** The provider ID, or `mbid` for MusicBrainz */
+  scheme: Schema.String,
+  externalId: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  linked: Schema.Boolean,
 }) {}
 
 /** One entry of the tracklist of a DJ set, in the time of its source */
@@ -1091,6 +1101,21 @@ const OwnerRpc = RpcGroup.make(
   // Admin only. Merges `fromId` into `intoId`, also against the matcher.
   Rpc.make("mergeRecordings", {
     payload: { fromId: RecordingId, intoId: RecordingId },
+    error: MergeFailed,
+  }),
+  // The provider profiles of the group of the artist, also the profiles that the owner unlinked
+  Rpc.make("artistProfiles", {
+    payload: { artistId: Schema.String },
+    success: Schema.Array(ArtistProfile),
+  }),
+  // Admin only. `unlink` takes `fromId` out of the group of `intoId`, and the matcher does not link
+  // it again. `link` undoes it.
+  Rpc.make("decideArtistLink", {
+    payload: {
+      fromId: Schema.String,
+      intoId: Schema.String,
+      decision: Schema.Literals(["link", "unlink"]),
+    },
     error: MergeFailed,
   }),
   // The tracklist of a DJ set source, again after each change, for example when matching finds

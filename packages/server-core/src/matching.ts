@@ -614,18 +614,23 @@ export const decideMerge = Effect.fn("decideMerge")(function* (
   const db = yield* Database;
   const clock = yield* HlcClock;
 
-  if (pair.fromId === pair.intoId) return yield* new MergeFailed({ reason: "same_recording" });
+  if (pair.fromId === pair.intoId) return yield* new MergeFailed({ reason: "same_entity" });
 
   const found = yield* db
-    .select({ id: recording.id })
+    .select({ id: recording.id, mergedIntoId: recording.mergedIntoId })
     .from(recording)
     .where(inArray(recording.id, [pair.fromId, pair.intoId]));
-  if (found.length < 2) return yield* new MergeFailed({ reason: "recording_not_found" });
+  if (found.length < 2) return yield* new MergeFailed({ reason: "not_found" });
+  // The root of a group cannot leave it, so the other recording leaves
+  const fromRoot = found.find((row) => row.id === pair.fromId)?.mergedIntoId === null;
+  const { fromId, intoId } =
+    decision === "reject" && fromRoot ? { fromId: pair.intoId, intoId: pair.fromId } : pair;
 
   const values = {
-    id: yield* mergeId({ entityType: "recording", ...pair, origin: "admin" }),
+    id: yield* mergeId({ entityType: "recording", fromId, intoId, origin: "admin" }),
     entityType: "recording" as const,
-    ...pair,
+    fromId,
+    intoId,
     decision,
     origin: "admin" as const,
     method: "manual" as const,
@@ -640,7 +645,7 @@ export const decideMerge = Effect.fn("decideMerge")(function* (
         .insert(entityMerge)
         .values(row)
         .onConflictDoUpdate({ target: entityMerge.id, set: row });
-      const affected = yield* resolveRoots([pair.fromId]);
+      const affected = yield* resolveRoots([fromId]);
       yield* projectRecordings(affected);
       yield* matchArtistsOf(affected);
       yield* matchAlbumsOf(affected);

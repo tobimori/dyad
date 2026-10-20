@@ -1,15 +1,17 @@
 import {
   artist,
   catalogAssertion,
+  entityMerge,
   identifier,
   policyVersion,
   recording,
   songArtist,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
+import { ArtistProfile } from "@dyad/domain";
 import type { FactRank } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Option, Schema } from "effect";
 
 import { resolveArtistRoots } from "./artist-matching.ts";
@@ -368,4 +370,53 @@ export const uncreditedRecordings = Effect.gen(function* () {
       ),
     );
   return rows.map((row) => row.id);
+});
+
+/** The provider profiles of the group of the artist, and the profiles that the owner unlinked */
+export const artistProfiles = Effect.fn("artistProfiles")(function* (artistId: string) {
+  const db = yield* Database;
+  const [own] = yield* db
+    .select({ mergedIntoId: artist.mergedIntoId })
+    .from(artist)
+    .where(eq(artist.id, artistId));
+  if (own === undefined) return [];
+  const root = own.mergedIntoId ?? artistId;
+
+  const members = yield* db
+    .select({ id: artist.id })
+    .from(artist)
+    .where(or(eq(artist.id, root), eq(artist.mergedIntoId, root)));
+  const linked = new Set(members.map((row) => row.id));
+  const unlinked = yield* db
+    .select({ id: entityMerge.fromId })
+    .from(entityMerge)
+    .where(
+      and(
+        eq(entityMerge.entityType, "artist"),
+        eq(entityMerge.origin, "admin"),
+        eq(entityMerge.decision, "reject"),
+        inArray(entityMerge.intoId, [...linked]),
+      ),
+    );
+  const ids = [...new Set([...linked, ...unlinked.map((row) => row.id)])];
+  const names = new Map(
+    (yield* db
+      .select({ id: artist.id, name: artist.name })
+      .from(artist)
+      .where(inArray(artist.id, ids))).map((row) => [row.id, row.name]),
+  );
+  const profiles = yield* db
+    .select({ id: identifier.entityId, scheme: identifier.scheme, value: identifier.value })
+    .from(identifier)
+    .where(and(eq(identifier.entityType, "artist"), inArray(identifier.entityId, ids)));
+  return profiles.map(
+    (row) =>
+      new ArtistProfile({
+        artistId: row.id,
+        scheme: row.scheme,
+        externalId: row.value,
+        name: names.get(row.id) ?? null,
+        linked: linked.has(row.id),
+      }),
+  );
 });

@@ -1,7 +1,9 @@
 import { artist, catalogAssertion, entityMerge, identifier, recording, songArtist } from "@dyad/db";
 import { Database } from "@dyad/db/node";
+import { MergeFailed } from "@dyad/domain";
 import type { CatalogInputRow } from "@dyad/domain";
 import { artistNameKey } from "@dyad/plugin/tracklist";
+import { HlcClock } from "@dyad/sync";
 import { and, eq, inArray, like, ne, notLike, or, sql } from "drizzle-orm";
 import { Array as Arr, Effect, Option, Schema } from "effect";
 
@@ -20,6 +22,8 @@ import {
   resolveRoots,
   writeSystemMerge,
 } from "./matching.ts";
+import { mergeId } from "./ids.ts";
+import { nextChangeSeq } from "./sync-counter.ts";
 
 // Below the SQLite limit of 32766 parameters
 const chunkSize = 500;
@@ -495,5 +499,46 @@ export const deriveArtists = Effect.fn("deriveArtists")(function* (
     rows.flatMap((row) =>
       row.table === "entity_merge" && row.entityType === "artist" ? [row.fromId] : [],
     ),
+  );
+});
+
+/**
+ * Writes the `admin` row of an artist pair, like `decideMerge` for recordings. It freezes the
+ * `system` rows of `fromId`, so an unlink takes it out of the group and the matcher does not link
+ * it again.
+ */
+export const decideArtistLink = Effect.fn("decideArtistLink")(function* (
+  pair: { readonly fromId: string; readonly intoId: string },
+  decision: "link" | "unlink",
+) {
+  const db = yield* Database;
+  const clock = yield* HlcClock;
+  if (pair.fromId === pair.intoId) return yield* new MergeFailed({ reason: "same_entity" });
+  const found = yield* db
+    .select({ id: artist.id })
+    .from(artist)
+    .where(inArray(artist.id, [pair.fromId, pair.intoId]));
+  if (found.length < 2) return yield* new MergeFailed({ reason: "not_found" });
+
+  const values = {
+    id: yield* mergeId({ entityType: "artist", ...pair, origin: "admin" }),
+    entityType: "artist" as const,
+    ...pair,
+    decision: decision === "link" ? ("merge" as const) : ("reject" as const),
+    origin: "admin" as const,
+    method: "manual" as const,
+    confidence: 1,
+    evidence: null,
+    hlc: yield* clock.next,
+  };
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      const row = { ...values, changeSeq: yield* nextChangeSeq };
+      yield* db
+        .insert(entityMerge)
+        .values(row)
+        .onConflictDoUpdate({ target: entityMerge.id, set: row });
+      yield* resolveArtistRoots([pair.fromId]);
+    }),
   );
 });
