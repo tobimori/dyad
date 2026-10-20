@@ -5,10 +5,18 @@ import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo } from "react";
 
 import { accountHint, useLibraryStatus } from "./library/library-notice.tsx";
-import { useListScreen } from "../component/list-screen.tsx";
-import { RowList, albumStrip, headed, selectableRows, trackRows } from "../component/row-list.tsx";
+import { pageStep, useListScreen } from "../component/list-screen.tsx";
+import {
+  RowList,
+  albumStrip,
+  headed,
+  selectableRows,
+  trackRows,
+  useStripNavigation,
+} from "../component/row-list.tsx";
 import type { Row, SelectableRow } from "../component/row-list.tsx";
 import { ListTitle } from "../component/track-list.tsx";
+import { commands } from "../context/keymap.ts";
 import { Section, SectionView } from "../context/routes.ts";
 import { useReload } from "../context/screen-app.ts";
 import type { ScreenApp } from "../context/screen-app.ts";
@@ -77,7 +85,25 @@ function HomeScreen(props: {
   readonly empty: string;
 }) {
   const theme = useTheme();
-  const list = useListScreen(props.app, { title, items: props.items });
+  const { router } = props.app;
+  const selected =
+    props.items.find((item) => item.key === router.selected())?.key ?? props.items[0]?.key ?? null;
+  const navigation = useStripNavigation(props.rows, selected);
+  const go = (key: string | undefined) => {
+    if (key !== undefined) router.select(key);
+  };
+  const list = useListScreen(props.app, {
+    title,
+    items: props.items,
+    keys: [
+      [commands.up, () => go(navigation.vertical(-1))],
+      [commands.down, () => go(navigation.vertical(1))],
+      [commands.pageUp, () => go(navigation.vertical(-pageStep))],
+      [commands.pageDown, () => go(navigation.vertical(pageStep))],
+      [commands.left, () => go(navigation.horizontal(-1))],
+      [commands.right, () => go(navigation.horizontal(1))],
+    ],
+  });
   return (
     <>
       <ListTitle title={title} detail="" />
@@ -93,6 +119,7 @@ function HomeScreen(props: {
         empty={props.empty}
         onSelect={list.selectRow}
         onActivate={list.activateRow}
+        navigation={navigation}
       />
     </>
   );

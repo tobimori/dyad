@@ -80,6 +80,8 @@ export const commands = {
   previousSection: command("browse.previousSection", "Previous section", "Browse", ["shift+tab"]),
   up: command("list.up", "Move up", "Browse", ["up", "k"]),
   down: command("list.down", "Move down", "Browse", ["down", "j"]),
+  left: command("list.left", "Move left in a row of albums", "Browse", ["left"]),
+  right: command("list.right", "Move right in a row of albums", "Browse", ["right"]),
   pageUp: command("list.pageUp", "Page up", "Browse", ["pageup"]),
   pageDown: command("list.pageDown", "Page down", "Browse", ["pagedown"]),
   first: command("list.first", "First", "Browse", ["g", "home"]),

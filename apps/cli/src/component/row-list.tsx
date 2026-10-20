@@ -319,6 +319,42 @@ function RowCells(props: {
   );
 }
 
+/**
+ * `up` and `down` move by rows and enter a strip at the album that it had last; `left` and
+ * `right` move inside a strip
+ */
+export function useStripNavigation(rows: ReadonlyArray<Row>, selected: string | null) {
+  const lastAlbum = useRef(new Map<string, string>());
+  const lines = rows.flatMap((row) => (row instanceof HeadingRow ? [] : [row]));
+  const lineAt = lines.findIndex(
+    (line) =>
+      line.key === selected ||
+      (line instanceof AlbumStripRow && line.albums.some((album) => album.key === selected)),
+  );
+  const line = lines[lineAt];
+  if (line instanceof AlbumStripRow && selected !== null) {
+    lastAlbum.current.set(line.key, selected);
+  }
+
+  const entry = (target: AlbumStripRow | SelectableRow) =>
+    target instanceof AlbumStripRow
+      ? (lastAlbum.current.get(target.key) ?? target.albums[0]?.key)
+      : target.key;
+  return {
+    /** The key `by` rows away */
+    vertical: (by: number) => {
+      const target = lines[Math.max(0, Math.min(lines.length - 1, lineAt + by))];
+      return target === undefined ? undefined : entry(target);
+    },
+    /** The key `by` albums away in the strip of the selection */
+    horizontal: (by: number) => {
+      if (!(line instanceof AlbumStripRow)) return undefined;
+      const at = line.albums.findIndex((album) => album.key === selected);
+      return line.albums[Math.max(0, Math.min(line.albums.length - 1, at + by))]?.key;
+    },
+  };
+}
+
 // A cover of 16 by 8 cells is about square
 const tileWidth = 16;
 const coverHeight = 8;
@@ -377,10 +413,14 @@ export function RowList(props: {
   readonly empty: string;
   readonly onSelect: (row: SelectableRow) => void;
   readonly onActivate: (row: SelectableRow) => void;
+  /** For a list with strips, so that the wheel moves by rows */
+  readonly navigation?: ReturnType<typeof useStripNavigation> | undefined;
 }) {
   const theme = useTheme();
   const [size, setSize] = useState({ width: 0, height: 0 });
   const offset = useRef(0);
+  // The first album that each strip shows. It moves only to show the selected album.
+  const stripStarts = useRef(new Map<string, number>());
 
   const rowAt = (index: number) => {
     const row = props.rows[index];
@@ -446,7 +486,11 @@ export function RowList(props: {
   const scroll = (delta: number) => {
     const selectable = selectableRows(props.rows);
     const position = selectable.findIndex((row) => row.key === props.selected);
-    const next = selectable[Math.max(0, Math.min(selectable.length - 1, position + delta))];
+    const key = props.navigation?.vertical(delta);
+    const next =
+      key === undefined
+        ? selectable[Math.max(0, Math.min(selectable.length - 1, position + delta))]
+        : selectable.find((row) => row.key === key);
     if (next !== undefined) props.onSelect(next);
   };
 
@@ -483,7 +527,11 @@ export function RowList(props: {
         if (row instanceof AlbumStripRow) {
           // The strip scrolls sideways so that the selected album shows
           const at = row.albums.findIndex((album) => album.key === props.selected);
-          const start = Math.max(0, Math.min(at - tilesShown + 1, row.albums.length - tilesShown));
+          const previous = stripStarts.current.get(row.key) ?? 0;
+          const wanted =
+            at === -1 ? previous : Math.min(at, Math.max(previous, at - tilesShown + 1));
+          const start = Math.max(0, Math.min(wanted, row.albums.length - tilesShown));
+          stripStarts.current.set(row.key, start);
           return (
             <box key={row.key} height={stripHeight} flexDirection="row" gap={tileGap} paddingX={1}>
               {row.albums.slice(start, start + tilesShown).map((album) => (
