@@ -227,10 +227,12 @@ export const rankedEntities = Effect.fn("rankedEntities")(function* (
   }
 
   const albums = new Map<string, Found<AlbumCard>>();
-  const albumKey = (card: AlbumCard) =>
-    `${simplifyText(card.title)}|${simplifyText(card.artist ?? "")}`;
+  // The songs of a compilation name their own artists, so a ref that is known keeps its entry
+  const keysByRef = new Map<string, string>();
   const addAlbum = (card: AlbumCard, weight: number) => {
-    const key = albumKey(card);
+    const key =
+      keysByRef.get(card.ref) ?? `${simplifyText(card.title)}|${simplifyText(card.artist ?? "")}`;
+    keysByRef.set(card.ref, key);
     const earlier = albums.get(key);
     if (earlier !== undefined) {
       const artworkUrl = earlier.card.artworkUrl ?? card.artworkUrl;

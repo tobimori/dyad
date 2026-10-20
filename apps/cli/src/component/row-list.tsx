@@ -9,7 +9,7 @@ import type {
   SourceSummary,
 } from "@dyad/domain";
 import { TextAttributes } from "@opentui/core";
-import { Data, Option } from "effect";
+import { Array as Arr, Data, Option } from "effect";
 import { useRef, useState } from "react";
 
 import { useTheme } from "../theme/theme.ts";
@@ -83,15 +83,22 @@ export const yearOf = (album: AlbumCard) => album.releaseDate?.slice(0, 4) ?? ""
 export const counted = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 export const artistRows = (artists: ReadonlyArray<ArtistCard>) =>
-  artists.map((artist) => new ArtistRow({ key: artist.ref, artist }));
+  Arr.dedupeWith(artists, (a, b) => a.ref === b.ref).map(
+    (artist) => new ArtistRow({ key: artist.ref, artist }),
+  );
 
+// The ref is the row key, which must be unique
 export const albumRows = (albums: ReadonlyArray<AlbumCard>) =>
-  albums.map((album) => new AlbumRow({ key: album.ref, album }));
+  Arr.dedupeWith(albums, (a, b) => a.ref === b.ref).map(
+    (album) => new AlbumRow({ key: album.ref, album }),
+  );
 
 export const albumStrip = (key: string, albums: ReadonlyArray<AlbumCard>) =>
   new AlbumStripRow({
     key: `strip:${key}`,
-    albums: albums.map((album) => new AlbumRow({ key: `${key}:${album.ref}`, album })),
+    albums: Arr.dedupeWith(albums, (a, b) => a.ref === b.ref).map(
+      (album) => new AlbumRow({ key: `${key}:${album.ref}`, album }),
+    ),
   });
 
 export const trackRows = (
