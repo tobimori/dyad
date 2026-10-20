@@ -90,7 +90,7 @@ const navigationActions = (app: ActionApp) => {
           new Action({
             command: commands.goToAlbum,
             label: `Go to album: ${album ?? "Unknown album"}`,
-            run: () => app.openAlbum(albumRef, album, artistRef),
+            run: () => app.openAlbum(albumRef, album, artistRef, artist),
           }),
         );
       }
@@ -136,7 +136,7 @@ const navigationActions = (app: ActionApp) => {
         new Action({
           command: commands.goToAlbum,
           label: `Go to album: ${album ?? "Unknown album"}`,
-          run: () => app.openAlbum(albumRef, album, artistRef),
+          run: () => app.openAlbum(albumRef, album, artistRef, artist),
         }),
       );
     }
@@ -151,7 +151,9 @@ const navigationActions = (app: ActionApp) => {
                 (card) =>
                   sameName(card.title, album) && (artist === null || sameName(card.artist, artist)),
               );
-              if (found !== undefined) app.openAlbum(found.ref, found.title, found.artistRef);
+              if (found !== undefined) {
+                app.openAlbum(found.ref, found.title, found.artistRef, found.artist);
+              }
               return found !== undefined;
             }),
         }),

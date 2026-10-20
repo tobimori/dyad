@@ -50,7 +50,12 @@ export class ScreenApp extends Data.Class<{
   /** Goes up at each reload */
   readonly reloads: number;
   readonly openArtist: (ref: ArtistRef, name: string | null) => void;
-  readonly openAlbum: (ref: AlbumRef, title: string | null, artistRef: ArtistRef | null) => void;
+  readonly openAlbum: (
+    ref: AlbumRef,
+    title: string | null,
+    artistRef: ArtistRef | null,
+    artist: string | null,
+  ) => void;
   readonly openPlaylist: (id: string, name: string) => void;
   readonly watchVideo: (item: SongItem) => void;
 }> {}

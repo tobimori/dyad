@@ -154,7 +154,7 @@ export function useListScreen(
     }
     if (item instanceof TrackRow) playRow(item);
     if (item instanceof AlbumRow) {
-      app.openAlbum(item.album.ref, item.album.title, item.album.artistRef);
+      app.openAlbum(item.album.ref, item.album.title, item.album.artistRef, item.album.artist);
     }
     if (item instanceof ArtistRow) app.openArtist(item.artist.ref, item.artist.name);
     if (item instanceof PlaylistRow) app.openPlaylist(item.playlist.id, item.playlist.name);

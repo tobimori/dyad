@@ -176,8 +176,13 @@ export function App(props: {
   const openArtist = (ref: ArtistRef, name: string | null) =>
     routes.push(Route.cases.Artist.make({ ref, hint: name ?? "Unknown artist" }));
 
-  const openAlbum = (ref: AlbumRef, title: string | null, artistRef: ArtistRef | null) =>
-    routes.push(Route.cases.Album.make({ ref, hint: title ?? "Unknown album", artistRef }));
+  const openAlbum = (
+    ref: AlbumRef,
+    title: string | null,
+    artistRef: ArtistRef | null,
+    artist: string | null,
+  ) =>
+    routes.push(Route.cases.Album.make({ ref, hint: title ?? "Unknown album", artistRef, artist }));
 
   const openPlaylist = (id: string, name: string) =>
     routes.push(Route.cases.Playlist.make({ id, hint: name }));

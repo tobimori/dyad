@@ -1,13 +1,18 @@
 import { AlbumRef, ArtistRef } from "@dyad/domain";
-import { Array as Arr, Data, Schema } from "effect";
+import { Array as Arr, Data, Effect, Schema } from "effect";
 import { useRef, useState } from "react";
 
 /** A screen of the app. `hint` names the page until it loads. */
 export const Route = Schema.TaggedUnion({
   Section: { id: Schema.String },
   Artist: { ref: ArtistRef, hint: Schema.String },
-  /** `artistRef` puts the album under the page of its artist */
-  Album: { ref: AlbumRef, hint: Schema.String, artistRef: Schema.NullOr(ArtistRef) },
+  /** The page of `artistRef` is the parent of the album; `artist` names it */
+  Album: {
+    ref: AlbumRef,
+    hint: Schema.String,
+    artistRef: Schema.NullOr(ArtistRef),
+    artist: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  },
   Playlist: { id: Schema.String, hint: Schema.String },
   NowPlaying: {},
 });
@@ -35,7 +40,8 @@ const routeKey = (route: Route) =>
 export const sectionPlace = (id: string) =>
   new Place({ section: id, trail: [Route.cases.Section.make({ id })] });
 
-// Going deeper adds a level; moving sideways, for example to another artist, replaces the trail
+// Going deeper adds a level; moving sideways, for example to another artist, replaces the trail.
+// An album always has its artist as parent, also when it opens from search.
 const placeOf = (from: Place, route: Route) => {
   const root = Route.cases.Section.make({ id: from.section });
   const trail = from.trail;
@@ -53,7 +59,12 @@ const placeOf = (from: Place, route: Route) => {
       if (Route.guards.Album(last) && isArtist(trail.at(-2), album.artistRef)) {
         return Arr.append(Arr.initNonEmpty(trail), album);
       }
-      return Arr.make<[Route, Route]>(root, album);
+      if (album.artistRef === null) return Arr.make<[Route, Route]>(root, album);
+      const artist = Route.cases.Artist.make({
+        ref: album.artistRef,
+        hint: album.artist ?? "Unknown artist",
+      });
+      return Arr.make<[Route, Route, Route]>(root, artist, album);
     },
   });
   const first = next[0];

@@ -61,7 +61,12 @@ export class ActionApp extends Data.Class<{
   readonly downloads: typeof Downloads.Service | null;
   readonly downloadQuality: typeof DownloadQuality.Type;
   readonly openArtist: (ref: ArtistRef, name: string | null) => void;
-  readonly openAlbum: (ref: AlbumRef, title: string | null, artistRef: ArtistRef | null) => void;
+  readonly openAlbum: (
+    ref: AlbumRef,
+    title: string | null,
+    artistRef: ArtistRef | null,
+    artist: string | null,
+  ) => void;
   readonly searchFor: (query: string) => void;
   readonly watchVideo: (item: SongItem) => void;
 }> {}
