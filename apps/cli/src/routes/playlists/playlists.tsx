@@ -47,6 +47,7 @@ export const playlists = new Section({
   id: "playlists",
   title,
   order: 40,
+  group: "Library",
   command: null,
   useView: (app) => {
     const result = useAtomValue(app.atoms.playlists);

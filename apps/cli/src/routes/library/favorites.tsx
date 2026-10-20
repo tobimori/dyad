@@ -36,6 +36,7 @@ export const favorites = new Section({
   id: "favorites",
   title,
   order: 44,
+  group: "Library",
   command: null,
   useView: (app) => {
     const library = useAtomValue(app.atoms.library);

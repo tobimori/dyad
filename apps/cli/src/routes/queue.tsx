@@ -63,6 +63,7 @@ export const queue = new Section({
   id: "queue",
   title,
   order: 60,
+  group: null,
   command: commands.queue,
   useView: (app) => {
     const items = app.player.entries.map(

@@ -45,6 +45,7 @@ export const sets = new Section({
   id: "sets",
   title,
   order: 42,
+  group: "Library",
   command: null,
   useView: (app) => {
     const result = useAtomValue(app.atoms.sets);

@@ -35,6 +35,7 @@ export const recent = new Section({
   id: "history",
   title,
   order: 50,
+  group: null,
   command: null,
   useView: (app) => {
     const result = useAtomValue(app.atoms.recentPlays);

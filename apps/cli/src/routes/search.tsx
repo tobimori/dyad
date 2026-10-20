@@ -143,6 +143,7 @@ export const search = new Section({
   id: "search",
   title,
   order: 10,
+  group: null,
   command: commands.search,
   useView: (app) => {
     const input = useRef<InputRenderable | null>(null);

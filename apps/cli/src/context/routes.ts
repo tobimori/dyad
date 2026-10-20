@@ -18,6 +18,8 @@ export class Section extends Data.Class<{
   readonly id: string;
   readonly title: string;
   readonly order: number;
+  /** The sidebar shows the sections of a group under its name */
+  readonly group: "Library" | null;
   /** The key that opens the section from anywhere */
   readonly command: Command | null;
   /** A hook. The shell calls it for each section on each render, for the counts in the sidebar. */

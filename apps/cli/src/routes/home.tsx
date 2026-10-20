@@ -101,6 +101,7 @@ export const home = new Section({
   id: "home",
   title,
   order: 0,
+  group: null,
   command: null,
   useView: (app) => {
     const result = useAtomValue(app.atoms.homePage);
