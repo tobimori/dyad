@@ -6,7 +6,7 @@ import { useEffect, useMemo } from "react";
 
 import { accountHint, useLibraryStatus } from "./library/library-notice.tsx";
 import { useListScreen } from "../component/list-screen.tsx";
-import { AlbumRow, RowList, headed, selectableRows, trackRows } from "../component/row-list.tsx";
+import { RowList, albumStrip, headed, selectableRows, trackRows } from "../component/row-list.tsx";
 import type { Row, SelectableRow } from "../component/row-list.tsx";
 import { ListTitle } from "../component/track-list.tsx";
 import { Section, SectionView } from "../context/routes.ts";
@@ -22,7 +22,7 @@ const shelvesOf = (group: HomeGroup) =>
 
 const shelfRows = (key: string, shelf: HomeShelf) => [
   ...trackRows(key, shelf.tracks, "home"),
-  ...shelf.albums.map((album) => new AlbumRow({ key: `${key}:${album.ref}`, album })),
+  ...(shelf.albums.length === 0 ? [] : [albumStrip(key, shelf.albums)]),
 ];
 
 // By intent: the owner's own plays, the suggestions, the new releases, then the charts of all

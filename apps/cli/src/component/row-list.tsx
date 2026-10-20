@@ -15,7 +15,9 @@ import { useRef, useState } from "react";
 import { useTheme } from "../theme/theme.ts";
 import { fit } from "../ui/format.ts";
 import { markerOf, useMarks } from "../context/marks.tsx";
+import { Cover } from "./cover.tsx";
 import { scrollOffset, useRowClick, videoMark } from "./track-list.tsx";
+import { useArtwork } from "./use-artwork.ts";
 
 /** A heading or the empty row above it. The cursor skips it. */
 export class HeadingRow extends Data.Class<{
@@ -52,11 +54,20 @@ export class PlaylistRow extends Data.Class<{
   readonly providerName: string | null;
 }> {}
 
+/** Albums side by side with their covers. The cursor selects each album. */
+export class AlbumStripRow extends Data.Class<{
+  readonly key: string;
+  readonly albums: ReadonlyArray<AlbumRow>;
+}> {}
+
 export type SelectableRow = TrackRow | AlbumRow | ArtistRow | PlaylistRow;
-export type Row = HeadingRow | SelectableRow;
+export type Row = HeadingRow | AlbumStripRow | SelectableRow;
 
 export const selectableRows = (rows: ReadonlyArray<Row>) =>
-  rows.flatMap((row) => (row instanceof HeadingRow ? [] : [row]));
+  rows.flatMap<SelectableRow>((row) => {
+    if (row instanceof HeadingRow) return [];
+    return row instanceof AlbumStripRow ? row.albums : [row];
+  });
 
 const typeLabels = { album: "Album", single: "Single", ep: "EP" };
 
@@ -76,6 +87,12 @@ export const artistRows = (artists: ReadonlyArray<ArtistCard>) =>
 
 export const albumRows = (albums: ReadonlyArray<AlbumCard>) =>
   albums.map((album) => new AlbumRow({ key: album.ref, album }));
+
+export const albumStrip = (key: string, albums: ReadonlyArray<AlbumCard>) =>
+  new AlbumStripRow({
+    key: `strip:${key}`,
+    albums: albums.map((album) => new AlbumRow({ key: `${key}:${album.ref}`, album })),
+  });
 
 export const trackRows = (
   keyPrefix: string,
@@ -295,6 +312,56 @@ function RowCells(props: {
   );
 }
 
+// A cover of 16 by 8 cells is about square
+const tileWidth = 16;
+const coverHeight = 8;
+const tileGap = 2;
+// The cover, the title and the artist
+const stripHeight = coverHeight + 2;
+
+const heightOf = (row: Row) => (row instanceof AlbumStripRow ? stripHeight : 1);
+
+function AlbumTile(props: {
+  readonly album: AlbumCard;
+  readonly selected: boolean;
+  readonly onMouseDown: () => void;
+}) {
+  const theme = useTheme();
+  const artwork = useArtwork(props.album.artworkUrl);
+  const background = props.selected ? theme.selection : "transparent";
+  return (
+    <box width={tileWidth} flexDirection="column" onMouseDown={props.onMouseDown}>
+      <Cover artwork={artwork} width={tileWidth} height={coverHeight} />
+      <text height={1} wrapMode="none" bg={background} fg={theme.text}>
+        {props.selected ? (
+          <strong>{fit(props.album.title, tileWidth)}</strong>
+        ) : (
+          fit(props.album.title, tileWidth)
+        )}
+      </text>
+      <text height={1} wrapMode="none" bg={background} fg={theme.muted}>
+        {fit(props.album.artist ?? "", tileWidth)}
+      </text>
+    </box>
+  );
+}
+
+// The first visible row: the selected row stays in view, and rows of different heights fill the
+// height from there
+const firstVisible = (
+  rows: ReadonlyArray<Row>,
+  previous: number,
+  selected: number,
+  height: number,
+) => {
+  const linesFrom = (start: number, end: number) =>
+    rows.slice(start, end + 1).reduce((total, row) => total + heightOf(row), 0);
+  let start = Math.min(previous, selected);
+  while (start < selected && linesFrom(start, selected) > height) start += 1;
+  while (start > 0 && linesFrom(start - 1, rows.length - 1) <= height) start -= 1;
+  return start;
+};
+
 /** The cursor skips headings. A double click opens or plays a row. */
 export function RowList(props: {
   readonly rows: ReadonlyArray<Row>;
@@ -310,7 +377,9 @@ export function RowList(props: {
 
   const rowAt = (index: number) => {
     const row = props.rows[index];
-    return row === undefined || row instanceof HeadingRow ? undefined : row;
+    return row === undefined || row instanceof HeadingRow || row instanceof AlbumStripRow
+      ? undefined
+      : row;
   };
   const click = useRowClick(
     (index) => {
@@ -323,15 +392,45 @@ export function RowList(props: {
     },
   );
 
+  const tileClick = useRowClick(
+    (index) => {
+      const row = selectableRows(props.rows)[index];
+      if (row !== undefined) props.onSelect(row);
+    },
+    (index) => {
+      const row = selectableRows(props.rows)[index];
+      if (row !== undefined) props.onActivate(row);
+    },
+  );
+  const selectableIndex = (key: string) =>
+    selectableRows(props.rows).findIndex((row) => row.key === key);
+
   const selectedIndex = Math.max(
     0,
-    props.rows.findIndex((row) => row.key === props.selected),
+    props.rows.findIndex(
+      (row) =>
+        row.key === props.selected ||
+        (row instanceof AlbumStripRow && row.albums.some((album) => album.key === props.selected)),
+    ),
   );
   const height = Math.max(1, size.height);
   // One column of padding on each side
   const width = size.width - 2;
-  offset.current = scrollOffset(offset.current, selectedIndex, height, props.rows.length);
-  const visible = props.rows.slice(offset.current, offset.current + height);
+  const strips = props.rows.some((row) => row instanceof AlbumStripRow);
+  offset.current = strips
+    ? firstVisible(props.rows, offset.current, selectedIndex, height)
+    : scrollOffset(offset.current, selectedIndex, height, props.rows.length);
+  const visible = (() => {
+    const shown: Array<Row> = [];
+    let lines = 0;
+    for (const row of props.rows.slice(offset.current)) {
+      lines += heightOf(row);
+      if (lines > height) break;
+      shown.push(row);
+    }
+    return shown;
+  })();
+  const tilesShown = Math.max(1, Math.floor((width + tileGap) / (tileWidth + tileGap)));
 
   const scroll = (delta: number) => {
     const selectable = selectableRows(props.rows);
@@ -366,6 +465,24 @@ export function RowList(props: {
                   <span fg={theme.faint}>{`  ${row.detail}`}</span>
                 )}
               </text>
+            </box>
+          );
+        }
+
+        if (row instanceof AlbumStripRow) {
+          // The strip scrolls sideways so that the selected album shows
+          const at = row.albums.findIndex((album) => album.key === props.selected);
+          const start = Math.max(0, Math.min(at - tilesShown + 1, row.albums.length - tilesShown));
+          return (
+            <box key={row.key} height={stripHeight} flexDirection="row" gap={tileGap} paddingX={1}>
+              {row.albums.slice(start, start + tilesShown).map((album) => (
+                <AlbumTile
+                  key={album.key}
+                  album={album.album}
+                  selected={album.key === props.selected}
+                  onMouseDown={() => tileClick(selectableIndex(album.key))}
+                />
+              ))}
             </box>
           );
         }
