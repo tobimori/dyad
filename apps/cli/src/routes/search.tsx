@@ -20,6 +20,7 @@ import {
 import type { Row } from "../component/row-list.tsx";
 import { commands, useCommands } from "../context/keymap.ts";
 import { Section, SectionView } from "../context/routes.ts";
+import { useScreenCommands } from "../context/screen-app.ts";
 import type { ScreenApp } from "../context/screen-app.ts";
 import { useLibraryStatus } from "./library/library-notice.tsx";
 import { useTheme } from "../theme/theme.ts";
@@ -76,40 +77,80 @@ function SearchField(props: {
 }
 
 const title = "Search";
+const filters = ["All", "Songs", "Albums", "Artists", "Playlists"] as const;
+type Filter = (typeof filters)[number];
+// What "All" shows of each kind; a filter shows all of its kind
 const topSongs = 8;
+const topArtists = 4;
+const topAlbums = 6;
 
 // An artist with exactly the name of the query comes first, else the songs
 const resultRows = (
   query: string,
   results: SearchResults,
   playlists: ReadonlyArray<PlaylistRow>,
+  filter: Filter,
 ) => {
   const tracks = results.sources.map(
     (source) => new PageTrack({ source, disc: null, number: null, playable: true }),
   );
   const songs = trackRows("song", tracks, "search");
+  if (filter === "Songs") return songs;
+  if (filter === "Albums") return albumRows(results.albums);
+  if (filter === "Artists") return artistRows(results.artists);
+  if (filter === "Playlists") return playlists;
+
   const wanted = query.trim().toLowerCase();
   const artistFirst = results.artists[0]?.name.toLowerCase() === wanted;
+  const artists = ["artists", "Artists", artistRows(results.artists.slice(0, topArtists))] as const;
   const sections = [
-    ...(artistFirst ? [["artists", "Artists", artistRows(results.artists)] as const] : []),
+    ...(artistFirst ? [artists] : []),
     ["songs", "Songs", songs.slice(0, topSongs)] as const,
-    ...(artistFirst ? [] : [["artists", "Artists", artistRows(results.artists)] as const]),
-    ["albums", "Albums", albumRows(results.albums)] as const,
+    ...(artistFirst ? [] : [artists]),
+    ["albums", "Albums", albumRows(results.albums.slice(0, topAlbums))] as const,
     ["playlists", "Your playlists", playlists] as const,
-    ["more", "More songs", songs.slice(topSongs)] as const,
   ].filter(([, , rows]) => rows.length > 0);
   return sections.flatMap(([key, label, rows], index) => headed(key, label, index === 0, rows));
 };
+
+function FilterBar(props: { readonly filter: Filter }) {
+  const theme = useTheme();
+  return (
+    <box flexDirection="row" height={1} marginBottom={1} paddingX={1} gap={2} flexShrink={0}>
+      {filters.map((filter) =>
+        filter === props.filter ? (
+          <text key={filter} fg={theme.accent}>
+            <strong>{filter}</strong>
+          </text>
+        ) : (
+          <text key={filter} fg={theme.muted}>
+            {filter}
+          </text>
+        ),
+      )}
+    </box>
+  );
+}
 
 function SearchScreen(props: {
   readonly app: ScreenApp;
   readonly rows: ReadonlyArray<Row>;
   readonly input: RefObject<InputRenderable | null>;
+  readonly filter: Filter;
+  readonly onFilter: (filter: Filter) => void;
 }) {
   const { app, input } = props;
   const theme = useTheme();
   const items = useMemo(() => selectableRows(props.rows), [props.rows]);
   const list = useListScreen(app, { title, items });
+  const step = (by: 1 | -1) =>
+    props.onFilter(
+      filters[(filters.indexOf(props.filter) + by + filters.length) % filters.length] ?? "All",
+    );
+  useScreenCommands(app, [
+    [commands.nextFilter, () => step(1)],
+    [commands.previousFilter, () => step(-1)],
+  ]);
 
   const { status, query } = app.search;
   return (
@@ -120,6 +161,7 @@ function SearchScreen(props: {
         onInput={app.search.search}
         onLeave={() => app.main.current?.focus()}
       />
+      <FilterBar filter={props.filter} />
       {status !== null && (
         <text fg={theme.muted} paddingX={1} marginBottom={1} flexShrink={0}>
           {status}
@@ -168,7 +210,11 @@ export const search = new Section({
           : [],
       );
     }, [query, playlistResult, names]);
-    const rows = useMemo(() => resultRows(query, results, playlists), [query, results, playlists]);
+    const [filter, setFilter] = useState<Filter>("All");
+    const rows = useMemo(
+      () => resultRows(query, results, playlists, filter),
+      [query, results, playlists, filter],
+    );
 
     // The search field exists only after the render that shows the search section
     useEffect(() => {
@@ -180,7 +226,9 @@ export const search = new Section({
     return new SectionView({
       count: results.sources.length,
       focus: () => setFocus(true),
-      render: () => <SearchScreen app={app} rows={rows} input={input} />,
+      render: () => (
+        <SearchScreen app={app} rows={rows} input={input} filter={filter} onFilter={setFilter} />
+      ),
     });
   },
 });
