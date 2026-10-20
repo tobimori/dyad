@@ -334,7 +334,7 @@ function AlbumTile(props: {
   readonly onMouseDown: () => void;
 }) {
   const theme = useTheme();
-  const artwork = useArtwork(props.album.artworkUrl);
+  const artwork = useArtwork(props.album.artworkUrl, true);
   const background = props.selected ? theme.selection : "transparent";
   return (
     <box width={tileWidth} flexDirection="column" onMouseDown={props.onMouseDown}>
