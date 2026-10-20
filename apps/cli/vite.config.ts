@@ -29,6 +29,24 @@ const libavAssets = readdirSync(libavDirectory)
   .filter((name) => /\.wasm\.(mjs|wasm)$/.test(name))
   .map((name) => ({ key: `libav/${name}`, source: join(libavDirectory, name) }));
 
+// node-av 6.1.1 requires its binding from a platform package, which an executable cannot do. The
+// executable extracts the binding with its other assets, and the loader reads it from there.
+const nodeAvRequire = createRequire(
+  createRequire(createRequire(import.meta.url).resolve("@dyad/media/node")).resolve("node-av"),
+);
+const nodeAvRootPath = "const rootPath = resolve(__dirname, '..', '..', 'node-av.node');";
+const nodeAvBinding = {
+  name: "dyad-node-av-binding",
+  transform: (code: string, id: string) => {
+    if (!id.endsWith("/node-av/dist/lib/binding.js")) return null;
+    if (!code.includes(nodeAvRootPath)) throw new Error("The node-av loader has changed");
+    return code.replace(
+      nodeAvRootPath,
+      "const rootPath = resolve(process.env.OTUI_ASSET_ROOT, 'node-av.node');",
+    );
+  },
+};
+
 const workerModule = Effect.gen(function* () {
   const { bundles } = yield* Effect.promise(() =>
     build({
@@ -65,11 +83,17 @@ const executable = (name: keyof typeof targets) => {
   const assets = [
     ...getNodeAssets({ platform, arch }).filter((asset) => asset.key.endsWith(library)),
     ...libavAssets,
+    // A build for another platform needs its package, see `supportedArchitectures` of pnpm
+    {
+      key: "node-av.node",
+      source: nodeAvRequire.resolve(`@seydx/node-av-${platform}-${arch}/node-av.node`),
+    },
   ];
   const hash = createHash("sha256");
   for (const asset of assets) hash.update(asset.key).update(readFileSync(asset.source));
 
   return {
+    plugins: [videoWorker, nodeAvBinding],
     outDir: `dist/${name}`,
     deps: { alwaysBundle: [/./], onlyBundle: false as const },
     define: {

@@ -14,7 +14,8 @@ const parent = join(envPaths("dyad", { suffix: "" }).cache, "sea");
  */
 export const seaAssetRoot = isSea() ? join(parent, DYAD_SEA_ASSET_HASH) : null;
 
-// `node:ffi` needs a real file, so the executable extracts its assets before OpenTUI loads
+// `node:ffi` and native addons need a real file, so the executable extracts its assets before
+// OpenTUI and node-av load
 if (seaAssetRoot !== null) {
   if (!existsSync(seaAssetRoot) && existsSync(parent)) {
     // A running old build keeps its loaded library when its file is removed. Another process of
