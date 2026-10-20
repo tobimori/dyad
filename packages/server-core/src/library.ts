@@ -1,8 +1,9 @@
-import { libraryRoot, localFile, source } from "@dyad/db";
-import { Database } from "@dyad/db/node";
+import { libraryRoot, localFile, source, sourceFile } from "@dyad/db";
+import { Database, ReplicaDatabase } from "@dyad/db/node";
 import { readAudioFile } from "@dyad/media/node";
 import type { AudioFile } from "@dyad/media/node";
 import { eq, inArray } from "drizzle-orm";
+import { HlcClock } from "@dyad/sync";
 import { Clock, Crypto, Data, Effect, FileSystem, Option, Path } from "effect";
 
 import { requestAnalysis } from "./audio-analysis.ts";
@@ -11,9 +12,53 @@ import { boundRecordingId } from "./ids.ts";
 import { normV1 } from "./normalize.ts";
 import { tagIdentifiers, writeSource } from "./sources.ts";
 import type { Tags } from "./sources.ts";
-import { touchGroups } from "./sync-counter.ts";
+import { nextChangeSeq, touchGroups } from "./sync-counter.ts";
 
 class Stat extends Data.Class<{ readonly size: number; readonly mtime: number }> {}
+
+// The `source_file` rows of this replica follow its files
+const announceFiles = Effect.gen(function* () {
+  const db = yield* Database;
+  const { replicaId } = yield* ReplicaDatabase;
+  const clock = yield* HlcClock;
+  const held = new Set(
+    (yield* db.selectDistinct({ sourceId: localFile.sourceId }).from(localFile)).map(
+      (row) => row.sourceId,
+    ),
+  );
+  const announced = yield* db
+    .select({ sourceId: sourceFile.sourceId, deleted: sourceFile.deleted })
+    .from(sourceFile)
+    .where(eq(sourceFile.replicaId, replicaId));
+  const known = new Map(announced.map((row) => [row.sourceId, row.deleted]));
+  const changes = [
+    ...[...held].flatMap((sourceId) =>
+      known.get(sourceId) === false ? [] : [{ sourceId, deleted: false }],
+    ),
+    ...announced.flatMap((row) =>
+      row.deleted || held.has(row.sourceId) ? [] : [{ sourceId: row.sourceId, deleted: true }],
+    ),
+  ];
+  if (changes.length === 0) return;
+
+  yield* db.transaction(() =>
+    Effect.gen(function* () {
+      const changeSeq = yield* nextChangeSeq;
+      yield* Effect.forEach(
+        changes,
+        ({ sourceId, deleted }) =>
+          Effect.gen(function* () {
+            const row = { sourceId, replicaId, deleted, hlc: yield* clock.next, changeSeq };
+            yield* db
+              .insert(sourceFile)
+              .values({ id: `${sourceId}:${replicaId}`, ...row })
+              .onConflictDoUpdate({ target: sourceFile.id, set: row });
+          }),
+        { discard: true },
+      );
+    }),
+  );
+});
 
 /**
  * The album artist rule of binding: the album artist tag, else Various Artists when the
@@ -155,6 +200,7 @@ export const syncLibraryRoot = Effect.fn("syncLibraryRoot")(function* (
       ),
     );
   yield* touchGroups(missingSources.flatMap((row) => row.recordingId ?? []));
+  yield* announceFiles;
 
   if (results.includes("imported")) yield* requestAnalysis;
 

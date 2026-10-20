@@ -1,4 +1,12 @@
-import { localFile, policyVersion, providerItem, recording, source, sourceVariant } from "@dyad/db";
+import {
+  localFile,
+  policyVersion,
+  providerItem,
+  recording,
+  source,
+  sourceFile,
+  sourceVariant,
+} from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { CreditedArtistRef, RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
@@ -328,6 +336,8 @@ export const playableSources = Effect.fn("playableSources")(function* (
     .select({
       source,
       variant: sourceVariant,
+      // `null` for a file that only another replica holds
+      fileId: localFile.id,
       // From one of the files when a source has several
       tags: localFile.tags,
       albumArtistKey: localFile.albumArtistKey,
@@ -382,7 +392,16 @@ export const playableSources = Effect.fn("playableSources")(function* (
     .leftJoin(providerItem, eq(providerItem.sourceId, source.id))
     .leftJoin(bound, eq(bound.id, source.recordingId))
     .leftJoin(canonical, eq(canonical.id, sql`coalesce(${bound.mergedIntoId}, ${bound.id})`))
-    .where(and(or(isNotNull(localFile.id), inArray(source.provider, [...providers.keys()])), match))
+    .where(
+      and(
+        or(
+          isNotNull(localFile.id),
+          inArray(source.provider, [...providers.keys()]),
+          sql`EXISTS (SELECT 1 FROM ${sourceFile} WHERE ${sourceFile.sourceId} = ${source.id} AND NOT ${sourceFile.deleted})`,
+        ),
+        match,
+      ),
+    )
     .groupBy(source.id)
     .$dynamic();
 

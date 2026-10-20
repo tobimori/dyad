@@ -70,6 +70,27 @@ export const sourceVariant = sqliteTable(
 );
 
 /**
+ * A replica that holds a file of the source. Each replica writes only its own rows, so that the
+ * other replicas know which files they can play through it. The path stays in `local_file`.
+ */
+export const sourceFile = sqliteTable(
+  "source_file",
+  {
+    // `<source_id>:<replica_id>`
+    id: text("id").primaryKey(),
+    sourceId: text("source_id").notNull(),
+    replicaId: text("replica_id").notNull(),
+    deleted: integer("deleted", { mode: "boolean" }).notNull(),
+    hlc: text("hlc").notNull(),
+    changeSeq,
+  },
+  (table) => [
+    index("source_file_source_idx").on(table.sourceId),
+    index("source_file_change_idx").on(table.changeSeq),
+  ],
+);
+
+/**
  * One tracklist entry of a DJ set source. The set itself is the recording of the source; a
  * segment points to the recording that the DJ plays. Derived from the selected `source.tracklist`
  * assertion. Offsets belong to the source: another upload of the same set has other offsets.

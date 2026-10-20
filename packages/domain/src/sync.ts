@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { DeviceId, PlayContext, RecordingId, ReplicaId, WorkspaceId } from "./primitives.ts";
 
 /** Two replicas sync only when they have the same version */
-export const syncProtocolVersion = 16;
+export const syncProtocolVersion = 17;
 
 /**
  * Hybrid logical clock value: `<wall ms, 15 digits>-<counter, 4 base-36 digits>-<replica_id>`.
@@ -285,12 +285,24 @@ export class LibraryRemoteTrackRow extends Schema.Class<LibraryRemoteTrackRow>(
   hlc: HybridLogicalClock,
 }) {}
 
+/** A replica holds a file of the source. Only that replica writes the row. */
+export class SourceFileRow extends Schema.Class<SourceFileRow>("SourceFileRow")({
+  table: Schema.Literal("source_file"),
+  /** `<source_id>:<replica_id>` */
+  id: Schema.String,
+  sourceId: Uuid,
+  replicaId: Uuid,
+  deleted: Schema.Boolean,
+  hlc: HybridLogicalClock,
+}) {}
+
 /** One row that a server replica sends to another, without its `change_seq` */
 export const PeerRow = Schema.Union([
   SyncRow,
   CatalogInputRow,
   ProviderAccountRow,
   LibraryRemoteTrackRow,
+  SourceFileRow,
 ]);
 export type PeerRow = typeof PeerRow.Type;
 

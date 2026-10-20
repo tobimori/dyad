@@ -176,8 +176,8 @@ const defaultEditionRecordings = Effect.fn(function* (group: ReadonlyArray<strin
 
 /**
  * The sources of the song that the user can play, also the source itself, best first: a copy of
- * the default edition, then a local file, then a stream in the media cache, then a stream. Quality
- * orders each tier, then the user's provider order.
+ * the default edition, then a file of this replica, then a stream in the media cache, then a file
+ * of another replica, then a stream. Quality orders each tier, then the user's provider order.
  */
 export const playableCopies = Effect.fn("playableCopies")(function* (sourceId: string) {
   const cache = yield* MediaCache;
@@ -195,8 +195,9 @@ export const playableCopies = Effect.fn("playableCopies")(function* (sourceId: s
   };
   const tier = (row: (typeof rows)[number]) => {
     if (defaultEdition.has(row.source.recordingId ?? "")) return 0;
-    if (row.source.provider === "local") return 1;
-    return cached.has(row) ? 2 : 3;
+    if (row.fileId !== null) return 1;
+    if (cached.has(row)) return 2;
+    return row.source.provider === "local" ? 3 : 4;
   };
   return rows.toSorted(
     (a, b) =>
@@ -266,7 +267,7 @@ export const sourceCopies = Effect.fn("sourceCopies")(function* (sourceId: strin
           bitrate: row.variant.bitrate,
           sampleRate: row.variant.sampleRate,
           bitDepth: row.variant.bitDepth,
-          // A file of another server, or a provider that this server does not have
+          // A file that no replica holds, or a provider that this replica does not have
           unavailable:
             row.source.provider !== "local" && providers.has(row.source.provider)
               ? "account_required"

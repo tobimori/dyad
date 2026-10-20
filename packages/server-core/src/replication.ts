@@ -10,6 +10,7 @@ import {
   providerAccount,
   recording,
   source,
+  sourceFile,
   sourcePreference,
   sourceVariant,
 } from "@dyad/db";
@@ -54,6 +55,7 @@ const peerTables = {
   provider_account: peerTable("provider_account", providerAccount),
   library_remote_track: peerTable("library_remote_track", libraryRemoteTrack),
   source: peerTable("source", source),
+  source_file: peerTable("source_file", sourceFile),
   source_preference: peerTable("source_preference", sourcePreference),
   source_variant: peerTable("source_variant", sourceVariant),
 } satisfies Record<PeerRow["table"], PeerTable>;
@@ -148,7 +150,10 @@ const isSyncRow = (row: PeerRow): row is SyncRow =>
 
 // RETURN TYPE: the predicate narrows the union for `mergeCatalogRow`
 const isCatalogRow = (row: PeerRow): row is CatalogInputRow =>
-  !isSyncRow(row) && row.table !== "provider_account" && row.table !== "library_remote_track";
+  !isSyncRow(row) &&
+  row.table !== "provider_account" &&
+  row.table !== "library_remote_track" &&
+  row.table !== "source_file";
 
 // RETURN TYPE: the branches return different row unions
 const mergePeerRow = (current: PeerRow | undefined, row: PeerRow): Option.Option<PeerRow> => {
@@ -342,5 +347,14 @@ export const mergePeerRows = Effect.fn("mergePeerRows")(function* (rows: Readonl
       !row.origin.startsWith("account:"),
   );
   if (marked) yield* queueMarkWrites;
+  // Clients show the songs of a file on another replica as playable
+  const files = changed.flatMap((row) => (row.table === "source_file" ? [row.sourceId] : []));
+  if (files.length > 0) {
+    const bound = yield* db
+      .select({ recordingId: source.recordingId })
+      .from(source)
+      .where(inArray(source.id, files));
+    yield* touchGroups(bound.flatMap((row) => row.recordingId ?? []));
+  }
   return adopted.length > 0 ? yield* adoptedSeq : undefined;
 });

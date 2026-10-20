@@ -604,5 +604,16 @@
       "\nDROP TABLE `playback_session`;",
       "\nALTER TABLE `__new_playback_session` RENAME TO `playback_session`;\n"
     ]
+  },
+  {
+    "name": "20261020101512_add_source_file",
+    "folderMillis": 1792491312000,
+    "hash": "6f1bd20ad624df29f512d9279b41582a0cc71084df58956d20e4e658c12ccd7e",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `source_file` (\n\t`id` text PRIMARY KEY,\n\t`source_id` text NOT NULL,\n\t`replica_id` text NOT NULL,\n\t`deleted` integer NOT NULL,\n\t`hlc` text NOT NULL,\n\t`change_seq` integer DEFAULT 0 NOT NULL\n);\n",
+      "\nCREATE INDEX `source_file_source_idx` ON `source_file` (`source_id`);",
+      "\nCREATE INDEX `source_file_change_idx` ON `source_file` (`change_seq`);"
+    ]
   }
 ]
