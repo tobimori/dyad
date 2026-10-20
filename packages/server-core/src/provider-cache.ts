@@ -9,6 +9,7 @@ import { boundRecordingId, sourceId } from "./ids.ts";
 import { Jobs } from "./jobs.ts";
 import { normalizeIsrc } from "./normalize.ts";
 import { providerAlbumRef, providerArtistRef } from "./refs.ts";
+import { addReferencedCache } from "./sources.ts";
 import { parseUploadTitle } from "./upload-titles.ts";
 import { parsedCredit, versionedTitle } from "./version-titles.ts";
 
@@ -164,6 +165,7 @@ export const cacheProviderSources = Effect.fn("cacheProviderSources")(function* 
       { discard: true },
     ),
   );
+  yield* addReferencedCache(cached);
 
   return cached;
 });

@@ -47,6 +47,7 @@ import {
   removePlaylistEntry,
 } from "./playlists.ts";
 import { heardInSets, listSets } from "./sets.ts";
+import { addReferencedSources } from "./sources.ts";
 import { listProviderChoices, setProviderOrder } from "./source-preference.ts";
 import { copySearchesLayer, sourceCopies, sourceCopiesStream } from "./source-copies.ts";
 import { listServerPeers, pairServer, peerEchoesLayer, peerRoutes, unpairServer } from "./peers.ts";
@@ -167,6 +168,8 @@ export const serverRoutes = Layer.unwrap(
       removePlaylistEntry: ({ entryId }) =>
         removePlaylistEntry(entryId).pipe(orDieOnDatabaseError("removePlaylistEntry")),
       listMarks: () => listMarks.pipe(orDieOnDatabaseError("listMarks")),
+      addReferencedSources: ({ songs }) =>
+        addReferencedSources(songs).pipe(orDieOnDatabaseError("addReferencedSources")),
       setLibraryMark: ({ entityType, entityId, mark, songs }) =>
         setLibraryMark(entityType, entityId, mark, songs).pipe(
           orDieOnDatabaseError("setLibraryMark"),

@@ -14,7 +14,13 @@ import { Jobs } from "./jobs.ts";
 import { matchingLayer, resolveRoots } from "./matching.ts";
 import { editionsLayer, repairJointCredits } from "./albums.ts";
 import { copyDiscoveryLayer } from "./source-copies.ts";
-import { Tags, tagIdentifiers, writeProviderSource, writeSource } from "./sources.ts";
+import {
+  Tags,
+  addAllReferencedCache,
+  tagIdentifiers,
+  writeProviderSource,
+  writeSource,
+} from "./sources.ts";
 import { assertSegmentMatches } from "./tracklists.ts";
 
 const backfillKind = "catalog.backfill";
@@ -137,6 +143,7 @@ const runBackfill = Effect.fn(function* ({ after }: typeof BackfillPayload.Type)
     // Recordings without a source, for example of matched tracklist entries, are in no batch
     yield* projectRecordings(yield* uncreditedRecordings);
     yield* repairJointCredits;
+    yield* addAllReferencedCache;
     return yield* Effect.logInfo("Catalog backfill finished");
   }
   yield* jobs.enqueue(backfillKind, backfillKind, { after: last.source.id }, { priority: -1 });

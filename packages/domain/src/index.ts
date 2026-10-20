@@ -1030,6 +1030,8 @@ const OwnerRpc = RpcGroup.make(
       songs: Schema.Array(MarkedSong),
     },
   }),
+  // A device has no provider cache, so its home server adds the search results that it refers to
+  Rpc.make("addReferencedSources", { payload: { songs: Schema.Array(MarkedSong) } }),
   // One place up or down
   Rpc.make("movePlaylistEntry", {
     payload: {

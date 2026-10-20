@@ -1,5 +1,8 @@
 import {
+  libraryItem,
+  libraryRemoteTrack,
   localFile,
+  playlistEntry,
   policyVersion,
   providerItem,
   recording,
@@ -8,18 +11,25 @@ import {
   sourceVariant,
 } from "@dyad/db";
 import { Database } from "@dyad/db/node";
-import { CreditedArtistRef, RecordingId, SourceSummary, catalogArtistRef } from "@dyad/domain";
+import {
+  CreditedArtistRef,
+  MarkedSong,
+  RecordingId,
+  SourceSummary,
+  catalogArtistRef,
+} from "@dyad/domain";
 import type { CreditedArtist, ProviderSource } from "@dyad/plugin";
 import { artistNameKey } from "@dyad/plugin/tracklist";
 import { HlcClock } from "@dyad/sync";
 import { and, eq, getColumns, inArray, isNotNull, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
-import type { SQLiteTable } from "drizzle-orm/sqlite-core";
+import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { Effect, Option, Schema } from "effect";
 
 import { ParseEvidence, assertRecording } from "./assertions.ts";
 import { AlbumType } from "./editions.ts";
+import { HomeServer } from "./home-server.ts";
 import { boundRecordingId, sourceId, variantId } from "./ids.ts";
 import { updateRecording } from "./matching.ts";
 import { normalizeIsrc } from "./normalize.ts";
@@ -265,28 +275,115 @@ export const addProviderSource = (cached: CachedSource) =>
  * A search result enters the catalog when the owner refers to it, like when it plays: in a
  * playlist or a library mark
  */
-export const addReferencedSources = (
+export const addReferencedSources = Effect.fn("addReferencedSources")(function* (
   entries: ReadonlyArray<{ readonly sourceId: string | null; readonly recordingId: string }>,
-) =>
-  Effect.forEach(
-    entries,
-    ({ sourceId, recordingId }) =>
-      Effect.gen(function* () {
-        if (sourceId === null) return;
-        const db = yield* Database;
-        const [known] = yield* db
-          .select({ id: source.id })
-          .from(source)
-          .where(eq(source.id, sourceId));
-        if (known !== undefined) return;
+) {
+  const unknown = yield* Effect.forEach(entries, ({ sourceId, recordingId }) =>
+    Effect.gen(function* () {
+      if (sourceId === null) return [];
+      const db = yield* Database;
+      const [known] = yield* db
+        .select({ id: source.id })
+        .from(source)
+        .where(eq(source.id, sourceId));
+      if (known !== undefined) return [];
 
-        const cached = yield* cachedProviderSource(sourceId);
-        if (Option.isSome(cached) && cached.value.recordingId === recordingId) {
-          yield* addProviderSource(cached.value);
-        }
-      }).pipe(Effect.catchCause((cause) => Effect.logWarning("Cannot add a saved source", cause))),
+      const cached = yield* cachedProviderSource(sourceId);
+      if (Option.isNone(cached))
+        return [new MarkedSong({ recordingId: RecordingId.make(recordingId), sourceId })];
+      if (cached.value.recordingId === recordingId) yield* addProviderSource(cached.value);
+      return [];
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Cannot add a saved source", cause).pipe(Effect.as([])),
+      ),
+    ),
+  );
+  // The source replicates back. Offline, `addReferencedCache` adds it when the home server caches
+  // the result again.
+  const songs = unknown.flat();
+  const home = yield* HomeServer;
+  if (songs.length === 0 || Option.isNone(home)) return;
+  yield* home.value
+    .addReferencedSources({ songs })
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("The home server cannot add the saved sources", cause),
+      ),
+    );
+});
+
+// The recordings that a library item, a playlist entry or a provider library song refers to, of
+// `ids` or of all
+const referencedRecordings = Effect.fn(function* (ids?: ReadonlyArray<string>) {
+  const db = yield* Database;
+  const within = (column: SQLiteColumn) => (ids === undefined ? undefined : inArray(column, ids));
+  const items = yield* db
+    .select({ id: libraryItem.entityId })
+    .from(libraryItem)
+    .where(
+      and(
+        eq(libraryItem.entityType, "recording"),
+        eq(libraryItem.deleted, false),
+        within(libraryItem.entityId),
+      ),
+    );
+  const entries = yield* db
+    .select({ id: playlistEntry.recordingId })
+    .from(playlistEntry)
+    .where(and(eq(playlistEntry.deleted, false), within(playlistEntry.recordingId)));
+  const songs = yield* db
+    .select({ id: libraryRemoteTrack.recordingId })
+    .from(libraryRemoteTrack)
+    .where(and(eq(libraryRemoteTrack.deleted, false), within(libraryRemoteTrack.recordingId)));
+  return new Set([...items, ...entries, ...songs].map((row) => row.id));
+});
+
+/**
+ * Cached provider results whose recording the owner refers to enter the catalog: a mark or a
+ * playlist entry from a device, or a provider library song that the import gave without a copy.
+ * The provider ID proves the song, because the recording ID is made from it.
+ */
+export const addReferencedCache = Effect.fn("addReferencedCache")(function* (
+  cached: ReadonlyArray<CachedSource>,
+  referenced?: ReadonlySet<string>,
+) {
+  const db = yield* Database;
+  if (cached.length === 0) return;
+  const refs = referenced ?? (yield* referencedRecordings(cached.map((item) => item.recordingId)));
+  const wanted = cached.filter((item) => refs.has(item.recordingId));
+  if (wanted.length === 0) return;
+  const known = new Set(
+    (yield* db
+      .select({ id: source.id })
+      .from(source)
+      .where(
+        inArray(
+          source.id,
+          wanted.map((item) => item.sourceId),
+        ),
+      )).map((row) => row.id),
+  );
+  yield* Effect.forEach(
+    wanted.filter((item) => !known.has(item.sourceId)),
+    addProviderSource,
     { discard: true },
   );
+});
+
+/** Adds the cached results that the owner refers to, for the results that were cached before */
+export const addAllReferencedCache = Effect.gen(function* () {
+  const db = yield* Database;
+  const referenced = yield* referencedRecordings();
+  const rows = yield* db
+    .select({ sourceId: providerItem.sourceId })
+    .from(providerItem)
+    .where(sql`NOT EXISTS (SELECT 1 FROM ${source} WHERE ${source.id} = ${providerItem.sourceId})`);
+  const cached = yield* Effect.forEach(rows, (row) =>
+    Effect.map(cachedProviderSource(row.sourceId), Option.toArray),
+  );
+  yield* addReferencedCache(cached.flat(), referenced);
+});
 
 export const Tags = Schema.Record(Schema.String, Schema.String);
 
