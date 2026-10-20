@@ -424,15 +424,19 @@ export function RowList(props: {
   // One column of padding on each side
   const width = size.width - 2;
   const strips = props.rows.some((row) => row instanceof AlbumStripRow);
-  offset.current = strips
-    ? firstVisible(props.rows, offset.current, selectedIndex, height)
-    : scrollOffset(offset.current, selectedIndex, height, props.rows.length);
+  // Before the first layout the height is unknown, and an offset for one line skips the headings
+  if (size.height > 0) {
+    offset.current = strips
+      ? firstVisible(props.rows, offset.current, selectedIndex, height)
+      : scrollOffset(offset.current, selectedIndex, height, props.rows.length);
+  }
   const visible = (() => {
     const shown: Array<Row> = [];
     let lines = 0;
     for (const row of props.rows.slice(offset.current)) {
       lines += heightOf(row);
-      if (lines > height) break;
+      // A strip that is higher than the list shows cut
+      if (lines > height && shown.length > 0) break;
       shown.push(row);
     }
     return shown;
