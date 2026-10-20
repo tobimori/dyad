@@ -318,8 +318,8 @@ export class ProviderMarks extends Data.Class<{
 }> {}
 
 /**
- * A streaming service. The core calls each function with the credentials of the user who plays or
- * searches. Without `account`, the credentials are empty.
+ * A streaming service. The core calls each function with the credentials of the linked account.
+ * Without `account`, the credentials are empty.
  */
 export class Provider extends Data.Class<{
   /** Name to show, for example `Apple Music` */
@@ -368,17 +368,16 @@ export class Provider extends Data.Class<{
     credentials: Credentials,
   ) => Effect.Effect<ProviderAlbum, ProviderError>;
   /**
-   * Shelves for the home page, cached like `artist`. All users share the cache, so the shelves must
-   * not depend on the user, apart from the storefront.
+   * Shelves for the home page, cached like `artist`. Use `Recommender` for personal shelves.
    */
   readonly home?: (
     credentials: Credentials,
   ) => Effect.Effect<ReadonlyArray<ProviderShelf>, ProviderError>;
-  /** Without `optional`, users must link an account before they can search or play the provider */
+  /** Without `optional`, the owner must link an account to search or play the provider */
   readonly account?: {
     /** With a `TokenLogin`, the credentials have one value, `token` */
     readonly login: BrowserLogin | TokenLogin;
-    /** Users can also search and play without an account */
+    /** The provider can also search and play without an account */
     readonly optional?: true;
     /** Checks the credentials with the provider and returns the account name to show */
     readonly link: (credentials: Credentials) => Effect.Effect<string, AccountLinkFailed>;
@@ -433,7 +432,7 @@ export class Suggestion extends Schema.Class<Suggestion>("Suggestion")({
   source: Schema.NullOr(ProviderSource),
 }) {}
 
-/** One personal list, for example `Quick picks`. The core caches it per user, so it is a schema. */
+/** One personal list, for example `Quick picks`. The core caches it, so it is a schema. */
 export class SuggestionShelf extends Schema.Class<SuggestionShelf>("SuggestionShelf")({
   title: Schema.String,
   songs: Schema.Array(Suggestion),
@@ -462,7 +461,7 @@ export class Scrobble extends Data.Class<{
 
 /**
  * Personal suggestions of a service, for example YouTube Music or ListenBrainz. The functions get
- * the credentials of the user's account of the provider with the recommender's ID, else of the
+ * the credentials of the account of the provider with the recommender's ID, else of the
  * recommender's own `account`.
  */
 export class Recommender extends Data.Class<{
@@ -471,7 +470,7 @@ export class Recommender extends Data.Class<{
   readonly priority?: number;
   /** Only when no provider has the recommender's ID */
   readonly account?: Provider["account"];
-  /** Called only with a linked account. The core caches the shelves of each user for 6 hours. */
+  /** Called only with a linked account. The core caches the shelves for 6 hours. */
   readonly shelves?: (
     credentials: Credentials,
   ) => Effect.Effect<ReadonlyArray<SuggestionShelf>, ProviderError>;
