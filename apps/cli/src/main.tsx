@@ -65,9 +65,30 @@ const player = Effect.fn(function* (controller: boolean) {
   yield* processErrorLogging(logServices);
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
+  // The Effect runtime owns process signals. The app handles Ctrl+C as a key, so that it can
+  // pause the session before it quits.
+  const renderer = yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      try: () => createCliRenderer({ exitSignals: [], exitOnCtrlC: false }),
+      catch: (cause) => new RendererError({ cause }),
+    }),
+    (renderer) =>
+      Effect.tryPromise(() => {
+        renderer.destroy();
+        return renderer.closed;
+      }).pipe(Effect.ignore),
+  );
+
   // Views and edits use the replica of this device. The rooms run on the home server; the
-  // replica of this device runs the room of the device while the home server is offline.
-  const local = yield* startLocalReplica.pipe(Effect.provide(FetchHttpClient.layer));
+  // replica of this device runs the room of the device while the home server is offline. It
+  // starts while the terminal answers: most answer at once, else the player uses dark colors.
+  const [local, mode] = yield* Effect.all(
+    [
+      startLocalReplica.pipe(Effect.provide(FetchHttpClient.layer)),
+      Effect.promise(() => renderer.waitForThemeMode(500)),
+    ],
+    { concurrency: "unbounded" },
+  );
   const localToken = yield* loadDeviceToken(local.origin);
   if (Option.isNone(localToken)) return yield* new NotJoined();
   const replicaConnection = yield* Layer.build(
@@ -195,22 +216,6 @@ const player = Effect.fn(function* (controller: boolean) {
     }),
   ).pipe(Effect.provideContext(logServices));
 
-  // The Effect runtime owns process signals. The app handles Ctrl+C as a key, so that it can
-  // pause the session before it quits.
-  const renderer = yield* Effect.acquireRelease(
-    Effect.tryPromise({
-      try: () => createCliRenderer({ exitSignals: [], exitOnCtrlC: false }),
-      catch: (cause) => new RendererError({ cause }),
-    }),
-    (renderer) =>
-      Effect.tryPromise(() => {
-        renderer.destroy();
-        return renderer.closed;
-      }).pipe(Effect.ignore),
-  );
-
-  // Most terminals answer at once. Without an answer, the player uses dark colors.
-  const mode = yield* Effect.promise(() => renderer.waitForThemeMode(500));
   const keymap = createKeymap(renderer);
 
   const logCrash = (cause: unknown, componentStack: string) =>

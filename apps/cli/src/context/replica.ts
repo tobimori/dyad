@@ -61,9 +61,9 @@ export const startLocalReplica = Effect.gen(function* () {
 
   const ready = yield* healthy(replica.origin).pipe(
     Effect.repeat({
-      schedule: Schedule.spaced("250 millis"),
+      schedule: Schedule.spaced("50 millis"),
       until: (ok) => ok,
-      times: 120,
+      times: 600,
     }),
   );
   if (!ready) return yield* new ReplicaNotStarted({ logFile });
