@@ -12,12 +12,13 @@ export class Artwork extends Data.Class<{
 // The terminal gets each image as PNG. A full cover of 1200 pixels costs 50 ms to encode, a tile
 // cover of 256 pixels 4 ms.
 const thumbnailPixels = 256;
-// Home has about 120 covers, at 256 KB each. A full cover can have 6 MB.
-const cacheLimits = { thumbnail: 200, full: 4 };
-
-// Shared, so that a tile that scrolls back shows its cover at once
-const loads = new Map<string, Promise<Artwork>>();
-const loaded = new Map<string, Artwork>();
+// Shared, so that a tile that scrolls back shows its cover at once. A cache holds one reference to
+// each image and each user holds its own. Home has about 120 covers, at 256 KB each. A full cover
+// can have 6 MB.
+const caches = {
+  thumbnail: { covers: new Map<string, Artwork | Promise<Artwork>>(), limit: 200 },
+  full: { covers: new Map<string, Artwork | Promise<Artwork>>(), limit: 4 },
+};
 
 const shrunk = (image: NativeImage) => {
   const scale = thumbnailPixels / Math.max(image.width, image.height);
@@ -30,33 +31,38 @@ const shrunk = (image: NativeImage) => {
   return small;
 };
 
+const cacheOf = (thumbnail: boolean) => (thumbnail ? caches.thumbnail : caches.full);
+
 const cachedCover = (url: string, thumbnail: boolean) => {
-  const kind = thumbnail ? "thumbnail" : "full";
-  const key = `${kind}:${url}`;
-  const cached = loads.get(key);
+  const { covers, limit } = cacheOf(thumbnail);
+  const cached = covers.get(url);
   if (cached !== undefined) {
     // The most recently used cover goes last, so that the oldest goes first
-    loads.delete(key);
-    loads.set(key, cached);
+    covers.delete(url);
+    covers.set(url, cached);
     return cached;
   }
 
   const loading = NativeImage.load(url).then((image) => {
     const shown = thumbnail ? shrunk(image) : image;
     const artwork = new Artwork({ image: shown, accent: artworkAccent(shown) });
-    if (loads.has(key)) loaded.set(key, artwork);
+    // `set` keeps the place of the key in the order
+    if (covers.get(url) === loading) covers.set(url, artwork);
     return artwork;
   });
   // A failed load tries again the next time
-  loading.catch(() => loads.delete(key));
-  loads.set(key, loading);
+  loading.catch(() => covers.get(url) === loading && covers.delete(url));
+  covers.set(url, loading);
 
-  const ofKind = [...loads.keys()].filter((other) => other.startsWith(`${kind}:`));
-  for (const oldest of ofKind.slice(0, Math.max(0, ofKind.length - cacheLimits[kind]))) {
-    loads.delete(oldest);
-    // Each user of the image holds its own reference
-    loaded.get(oldest)?.image.dispose();
-    loaded.delete(oldest);
+  for (const [oldest, evicted] of [...covers].slice(0, Math.max(0, covers.size - limit))) {
+    covers.delete(oldest);
+    // Users that wait for a cover that still loads take their reference first
+    if (evicted instanceof Artwork) evicted.image.dispose();
+    else
+      evicted.then(
+        (artwork) => artwork.image.dispose(),
+        () => {},
+      );
   }
   return loading;
 };
@@ -66,12 +72,13 @@ const cachedCover = (url: string, thumbnail: boolean) => {
  * costs much less to draw.
  */
 export function useArtwork(url: string | null, thumbnail = false) {
-  const keyOf = (from: string) => `${thumbnail ? "thumbnail" : "full"}:${from}`;
   const own = (cover: Artwork) => new Artwork({ ...cover, image: cover.image.retain() });
-  const initial = url === null ? undefined : loaded.get(keyOf(url));
-  const [artwork, setArtwork] = useState(() => (initial === undefined ? null : own(initial)));
+  const [artwork, setArtwork] = useState(() => {
+    const initial = url === null ? undefined : cacheOf(thumbnail).covers.get(url);
+    return initial instanceof Artwork ? own(initial) : null;
+  });
   // The cover that `artwork` shows, so that the first effect does not load it again
-  const held = useRef(initial === undefined || url === null ? null : keyOf(url));
+  const held = useRef(artwork === null ? null : url);
 
   useEffect(() => {
     if (url === null) {
@@ -79,21 +86,19 @@ export function useArtwork(url: string | null, thumbnail = false) {
       setArtwork(null);
       return;
     }
-    const key = keyOf(url);
-    const loading = cachedCover(url, thumbnail);
-    if (held.current === key) return;
-    const show = (cover: Artwork) => {
-      held.current = key;
-      setArtwork(own(cover));
+    const cover = cachedCover(url, thumbnail);
+    if (held.current === url) return;
+    const show = (ready: Artwork) => {
+      held.current = url;
+      setArtwork(own(ready));
     };
-    const ready = loaded.get(key);
-    if (ready !== undefined) {
-      show(ready);
+    if (cover instanceof Artwork) {
+      show(cover);
       return;
     }
     const state = { current: true };
-    loading.then(
-      (cover) => state.current && show(cover),
+    cover.then(
+      (ready) => state.current && show(ready),
       () => state.current && setArtwork(null),
     );
     return () => {
