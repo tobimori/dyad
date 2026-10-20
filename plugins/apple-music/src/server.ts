@@ -27,7 +27,6 @@ import {
   sessionCache,
   provider,
   resolveAacAsset,
-  searchCatalog,
 } from "./api.ts";
 import type { AppleSession } from "./api.ts";
 import {
@@ -41,7 +40,7 @@ import {
   setFavorites,
 } from "./library.ts";
 import { readCharts, readPersonal } from "./home.ts";
-import { readAlbum, readArtist } from "./pages.ts";
+import { readAlbum, readArtist, searchCatalog } from "./pages.ts";
 import { acquireAppleKeys } from "./widevine.ts";
 
 // The web player sets this cookie after the subscriber signs in

@@ -1,4 +1,4 @@
-import { FactRank, Plugin, Provider } from "@dyad/plugin";
+import { FactRank, Plugin, Provider, ProviderSearch } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
@@ -22,7 +22,11 @@ export const bandcampPlugin = new Plugin({
         new Provider({
           name: "Bandcamp",
           resolve: (externalId) => resolveTrack(externalId).pipe(Effect.provide(services)),
-          search: (query) => searchTracks(details, query).pipe(Effect.provide(services)),
+          search: (query) =>
+            searchTracks(details, query).pipe(
+              Effect.map((songs) => new ProviderSearch({ songs, releases: [], artists: [] })),
+              Effect.provide(services),
+            ),
           artist: (bandId) => readBand(bandId).pipe(Effect.provide(services)),
           album: (albumId) => readRelease(albumId).pipe(Effect.provide(services)),
           artistFromUrl: (url) => bandFromUrl(url).pipe(Effect.provide(services)),

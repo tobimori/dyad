@@ -77,12 +77,6 @@ export class AppleTrack extends Schema.Class<AppleTrack>("AppleTrack")({
 export const songIncludes = { "include[songs]": "artists" };
 
 // Apple leaves out `songs` when nothing matches (October 2026)
-const SearchResults = Schema.Struct({
-  results: Schema.Struct({
-    songs: Schema.optional(Schema.Struct({ data: Schema.Array(AppleTrack) })),
-  }),
-});
-
 const Account = Schema.Struct({
   meta: Schema.Struct({
     subscription: Schema.Struct({ active: Schema.Boolean, storefront: Schema.NonEmptyString }),
@@ -138,7 +132,7 @@ export const requestJson = <S extends Schema.Constraint>(
   stage: string,
 ) => getJson(request, schema).pipe(Effect.mapError(appleError(stage, request)));
 
-const withBearer =
+export const withBearer =
   (bearer: Redacted.Redacted<string>) => (request: HttpClientRequest.HttpClientRequest) =>
     request.pipe(
       HttpClientRequest.bearerToken(bearer),
@@ -269,7 +263,8 @@ export const datePrefix = /^\d{4}(-\d{2}(-\d{2})?)?/;
 
 // Apple has no type for sessions and live albums, only their names, for example `Apple Music Home
 // Session: Schmyt` or `Live at Wembley`
-const liveName = /\b(?:live (?:at|from|in|on)\b|home session\b|sessions?\b)|[([]live[)\]]|- live$/i;
+export const liveName =
+  /\b(?:live (?:at|from|in|on)\b|home session\b|sessions?\b)|[([]live[)\]]|- live$/i;
 
 /**
  * The artist ID of an Apple Music or iTunes artist page, for example `/us/artist/four-tet/41500` or
@@ -320,22 +315,6 @@ export const catalogSource = (song: AppleTrack) =>
     albumSecondaryTypes: liveName.test(song.attributes.albumName ?? "") ? ["live"] : [],
     releaseDate: song.attributes.releaseDate?.match(datePrefix)?.[0] ?? null,
   });
-
-/** The catalog needs only the web client token, not a subscriber */
-export const searchCatalog = Effect.fn("searchCatalog")(function* (
-  bearer: Redacted.Redacted<string>,
-  storefront: string,
-  term: string,
-) {
-  const request = HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/search`).pipe(
-    HttpClientRequest.setUrlParams({ term, types: "songs", limit: 25, ...songIncludes }),
-    withBearer(bearer),
-  );
-  const response = yield* requestJson(request, SearchResults, "search");
-  const songs = response.results.songs?.data ?? [];
-
-  return songs.map(catalogSource);
-});
 
 /** URL of the HLS media playlist of the 256 kbps AAC web asset */
 export const resolveAacAsset = Effect.fn("resolveAacAsset")(

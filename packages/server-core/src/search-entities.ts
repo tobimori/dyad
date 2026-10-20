@@ -2,18 +2,19 @@ import { album, albumArtist, artist } from "@dyad/db";
 import { Database } from "@dyad/db/node";
 import { AlbumCard, AlbumRef, ArtistCard, ArtistRef, catalogArtistRef } from "@dyad/domain";
 import type { SourceSummary } from "@dyad/domain";
+import type { ProviderArtistCard, ProviderRelease } from "@dyad/plugin";
 import { and, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Column } from "drizzle-orm";
-import { Array as Arr, Effect, Option } from "effect";
+import { Array as Arr, Data, Effect, Option } from "effect";
 
 import { albumPageRefs } from "./albums.ts";
 import { artistIdOf } from "./artists.ts";
 import { simplifyText, spellings } from "./normalize.ts";
-import { cardTypes } from "./pages.ts";
-import { providerRefParts } from "./refs.ts";
+import { cardTypes, releaseCard } from "./pages.ts";
+import { providerArtistRef, providerRefParts } from "./refs.ts";
 
-const shownArtists = 5;
-const shownAlbums = 8;
+const shownArtists = 20;
+const shownAlbums = 30;
 const scanLimit = 50;
 
 // Lower is better: the same name, then a name that starts with the query, then one that contains
@@ -137,52 +138,127 @@ const catalogRefs = Effect.fn(function* (refs: ReadonlyArray<ArtistRef>) {
   );
 });
 
+/** The albums and artists of one provider answer */
+export class FoundEntities extends Data.Class<{
+  readonly provider: string;
+  readonly upload: boolean;
+  readonly releases: ReadonlyArray<ProviderRelease>;
+  readonly artists: ReadonlyArray<ProviderArtistCard>;
+}> {}
+
+// Uploads are often reuploads and fan channels, so their order says less
+const uploadTrust = 0.5;
+// An artist or album that the catalog knows counts like a first result of a provider
+const catalogWeight = 1;
+// The credits and albums of the found songs count less than a direct hit
+const songWeight = 0.5;
+
+class Found<A> extends Data.Class<{
+  readonly card: A;
+  readonly score: number;
+  readonly weight: number;
+}> {}
+
 /**
- * The artists and albums for a query: catalog matches and the artists and albums of the found
- * songs, best name match first
+ * The artists and albums for a query from the catalog, the provider answers and the found songs,
+ * best name match first. Each list that has one adds to its weight, so an artist that the catalog
+ * and two providers know ranks over an artist that only one provider has.
  */
 export const rankedEntities = Effect.fn("rankedEntities")(function* (
   query: string,
   catalog: Effect.Success<ReturnType<typeof catalogEntities>>,
   sources: ReadonlyArray<SourceSummary>,
+  found: ReadonlyArray<FoundEntities>,
 ) {
+  const trust = (entry: FoundEntities, position: number) =>
+    (entry.upload ? uploadTrust : 1) / (1 + position);
+
   // Only credits with one page per name: `artist` can be a joint name with the first artist's page
   const credits = sources.flatMap((summary, position) =>
     summary.artists.flatMap((credited) =>
       credited.ref === null ? [] : [{ name: credited.name, ref: credited.ref, position }],
     ),
   );
-  const refs = yield* catalogRefs([...new Set(credits.map((credit) => credit.ref))]);
+  const hits = found.flatMap((entry) =>
+    entry.artists.map((artist, position) => ({
+      artist,
+      ref: providerArtistRef(entry.provider, artist.externalId),
+      weight: trust(entry, position),
+    })),
+  );
+  const refs = yield* catalogRefs([
+    ...new Set([...credits.map((credit) => credit.ref), ...hits.map((hit) => hit.ref)]),
+  ]);
 
-  // Catalog entries first; the found songs add the ones that the catalog does not have
-  const artists = new Map<string, { card: ArtistCard; score: number; weight: number }>();
-  for (const { card, weight } of catalog.artists) {
+  const artists = new Map<string, Found<ArtistCard>>();
+  const addArtist = (card: ArtistCard, weight: number) => {
+    const earlier = artists.get(card.ref);
+    if (earlier !== undefined) {
+      const artworkUrl = earlier.card.artworkUrl ?? card.artworkUrl;
+      artists.set(
+        card.ref,
+        new Found({
+          ...earlier,
+          card: new ArtistCard({ ...earlier.card, artworkUrl }),
+          weight: earlier.weight + weight,
+        }),
+      );
+      return;
+    }
     const score = nameScore(query, card.name);
-    if (score !== null) artists.set(card.ref, { card, score, weight });
+    if (score !== null) artists.set(card.ref, new Found({ card, score, weight }));
+  };
+  for (const { card, weight } of catalog.artists) {
+    addArtist(card, catalogWeight + Math.min(weight, 50) / 50);
+  }
+  for (const hit of hits) {
+    const ref = refs.get(hit.ref) ?? hit.ref;
+    addArtist(
+      new ArtistCard({ ref, name: hit.artist.name, artworkUrl: hit.artist.artworkUrl }),
+      hit.weight,
+    );
   }
   for (const credit of credits) {
     const ref = refs.get(credit.ref) ?? credit.ref;
-    const score = nameScore(query, credit.name);
-    if (score === null || artists.has(ref)) continue;
-    const card = new ArtistCard({ ref, name: credit.name, artworkUrl: null });
-    artists.set(ref, { card, score, weight: -credit.position });
+    addArtist(
+      new ArtistCard({ ref, name: credit.name, artworkUrl: null }),
+      songWeight / (1 + credit.position),
+    );
   }
 
-  const albums = new Map<string, { card: AlbumCard; score: number; weight: number }>();
+  const albums = new Map<string, Found<AlbumCard>>();
   const albumKey = (card: AlbumCard) =>
     `${simplifyText(card.title)}|${simplifyText(card.artist ?? "")}`;
-  for (const { card, weight } of catalog.albums) {
+  const addAlbum = (card: AlbumCard, weight: number) => {
+    const key = albumKey(card);
+    const earlier = albums.get(key);
+    if (earlier !== undefined) {
+      const artworkUrl = earlier.card.artworkUrl ?? card.artworkUrl;
+      albums.set(
+        key,
+        new Found({
+          ...earlier,
+          card: new AlbumCard({ ...earlier.card, artworkUrl }),
+          weight: earlier.weight + weight,
+        }),
+      );
+      return;
+    }
     const byTitle = nameScore(query, card.title);
     const byArtist = nameScore(query, card.artist);
     // An album of the artist that the query names comes after the albums that it names
     const score = byTitle ?? (byArtist === null || byArtist > 1 ? null : 4 + byArtist);
-    if (score !== null && !albums.has(albumKey(card))) {
-      albums.set(albumKey(card), { card, score, weight });
+    if (score !== null) albums.set(key, new Found({ card, score, weight }));
+  };
+  // The newest catalog album first among equals
+  for (const { card, weight } of catalog.albums) addAlbum(card, catalogWeight + weight / 1e5);
+  for (const entry of found) {
+    for (const [position, release] of entry.releases.entries()) {
+      addAlbum(releaseCard(entry.provider, release), trust(entry, position));
     }
   }
   for (const [position, summary] of sources.entries()) {
-    const score = nameScore(query, summary.album);
-    if (score === null || summary.albumRef === null || summary.album === null) continue;
+    if (summary.albumRef === null || summary.album === null) continue;
     const card = new AlbumCard({
       ref: summary.albumRef,
       title: summary.album,
@@ -195,10 +271,10 @@ export const rankedEntities = Effect.fn("rankedEntities")(function* (
       trackCount: null,
       artworkUrl: summary.artworkUrl,
     });
-    if (!albums.has(albumKey(card))) albums.set(albumKey(card), { card, score, weight: -position });
+    addAlbum(card, songWeight / (1 + position));
   }
 
-  const best = <A>(entries: Iterable<{ card: A; score: number; weight: number }>) =>
+  const best = <A>(entries: Iterable<Found<A>>) =>
     [...entries]
       .toSorted((a, b) => a.score - b.score || b.weight - a.weight)
       .map((entry) => entry.card);

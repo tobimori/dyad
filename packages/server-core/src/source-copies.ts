@@ -349,7 +349,7 @@ const discover = Effect.fn(function* (
         const results = yield* callProvider(
           "Copy discovery",
           searchTimeout,
-          search(query, credentials),
+          search(query, credentials).pipe(Effect.map((answer) => answer.songs)),
         );
         if (Option.isNone(results)) return;
         yield* cacheProviderSources(id, results.value);
@@ -563,7 +563,7 @@ export const searchCopy = Effect.fn("searchCopy")(function* (
       yield* callProvider(
         "Copy search",
         searchTimeout,
-        search(`${artist} ${title}`, usable.credentials),
+        search(`${artist} ${title}`, usable.credentials).pipe(Effect.map((answer) => answer.songs)),
       ).pipe(Effect.annotateLogs("provider", provider)),
       () => [],
     );

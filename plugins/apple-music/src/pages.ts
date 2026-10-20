@@ -3,9 +3,11 @@ import {
   ProviderArtist,
   ProviderArtistCard,
   ProviderRelease,
+  ProviderSearch,
   ProviderTrack,
 } from "@dyad/plugin";
 import { Effect, Schema } from "effect";
+import type { Redacted } from "effect";
 import { HttpClientRequest } from "effect/http";
 
 import {
@@ -14,9 +16,11 @@ import {
   authorize,
   catalogSource,
   datePrefix,
+  liveName,
   requestJson,
   songIncludes,
   typeSuffix,
+  withBearer,
 } from "./api.ts";
 import type { AppleSession } from "./api.ts";
 
@@ -130,6 +134,34 @@ const toCard = (artist: typeof AppleArtist.Type) =>
   });
 
 export const includes = { ...songIncludes, "include[albums]": "artists" };
+
+const SearchResponse = Schema.Struct({
+  results: Schema.Struct({
+    songs: View(AppleTrack),
+    albums: View(AppleAlbum),
+    artists: View(AppleArtist),
+  }),
+});
+
+/** The catalog needs only the web client token, not a subscriber */
+export const searchCatalog = Effect.fn("searchCatalog")(function* (
+  bearer: Redacted.Redacted<string>,
+  storefront: string,
+  term: string,
+) {
+  const request = HttpClientRequest.get(`${amp}/v1/catalog/${storefront}/search`).pipe(
+    HttpClientRequest.setUrlParams({ term, types: "songs,albums,artists", limit: 25, ...includes }),
+    withBearer(bearer),
+  );
+  const { results } = yield* requestJson(request, SearchResponse, "search");
+  return new ProviderSearch({
+    songs: (results.songs?.data ?? []).map(catalogSource),
+    releases: (results.albums?.data ?? []).map((album) =>
+      toRelease(album, null, liveName.test(album.attributes.name)),
+    ),
+    artists: (results.artists?.data ?? []).map(toCard),
+  });
+});
 
 // A view has 10 items and a `next` link. One more request gives up to 100 items.
 const allAlbums = Effect.fn(function* (session: AppleSession, view: typeof AlbumView.Type) {

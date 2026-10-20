@@ -853,7 +853,11 @@ const linkByName = Effect.fn(function* (group: ArtistGroup, page: ArtistPage) {
         }
         yield* recordSearch(subject, provider);
         const results = Option.getOrElse(
-          yield* callProvider("Artist search", "8 seconds", search(name, entry.credentials)),
+          yield* callProvider(
+            "Artist search",
+            "8 seconds",
+            search(name, entry.credentials).pipe(Effect.map((answer) => answer.songs)),
+          ),
           () => [],
         );
         const candidates = [

@@ -10,7 +10,9 @@ export class Candidate extends Data.Class<{
   readonly summary: SourceSummary;
   /** Normalized with `normalizeIsrc` */
   readonly isrc: string | null;
-  /** Position in the result list of its provider, from 0 */
+  /** The result list: a provider ID, or `catalog` for the results of this replica */
+  readonly list: string;
+  /** Position in its result list, from 0 */
   readonly position: number;
   /** A file on this replica */
   readonly local: boolean;
@@ -36,7 +38,7 @@ class Score extends Data.Class<{
   readonly match: number;
   /** 1 when the result is a cover, remix or other version that the query does not ask for */
   readonly otherVersion: number;
-  /** From the popularity sources, or from the provider position when they do not know it */
+  /** From the popularity sources, or from the positions in the lists when they do not know it */
   readonly popularity: number;
   /** From -1 to 1: recent plays of the same recording, less skips */
   readonly recordingPlays: number;
@@ -62,9 +64,13 @@ const weights = {
 // A query with only some matching words gets this part of an exact match when all words match
 const partialMatch = 0.7;
 
-// Popularity of the first result of a provider when no popularity source knows it. The value
-// decreases with the position, so the provider's own order stays.
+// Popularity of the first result of a list when no popularity source knows it. The value decreases
+// with the position, so the provider's own order stays. Each list that has the song adds its part,
+// so a song that several providers put high ranks over the first result of one provider.
 const positionPopularity = 0.3;
+
+// Uploads are often reuploads, covers or videos, so their order says less about the song
+const uploadTrust = 0.5;
 
 const halfLifeMs = 30 * 24 * 60 * 60 * 1000;
 
@@ -151,12 +157,27 @@ const isOtherVersion = (query: string, summary: SourceSummary) => {
   );
 };
 
+// The best position of the group in each list, added up
+const fusedPopularity = (members: ReadonlyArray<Candidate>) => {
+  const best = new Map<string, Candidate>();
+  for (const member of members) {
+    const earlier = best.get(member.list);
+    if (earlier === undefined || member.position < earlier.position) best.set(member.list, member);
+  }
+  return sum(
+    [...best.values()].map(
+      (member) => ((member.upload ? uploadTrust : 1) * positionPopularity) / (1 + member.position),
+    ),
+  );
+};
+
 const scoreCandidate = (
   query: string,
   candidate: Candidate,
   hits: ReadonlyArray<PopularityHit>,
   plays: ReadonlyArray<Play>,
   now: number,
+  fused: number,
 ) => {
   const summary = candidate.summary;
   const key = recordingKey(summary.title, summary.artist);
@@ -168,8 +189,7 @@ const scoreCandidate = (
       (key !== null && recordingKey(hit.title, hit.artist) === key),
   );
   const knownPopularity = Math.max(...matchingHits.map((hit) => hit.popularity));
-  const popularity =
-    matchingHits.length > 0 ? knownPopularity : positionPopularity / (1 + candidate.position);
+  const popularity = matchingHits.length > 0 ? knownPopularity : fused;
 
   const recordingPlays = plays.filter(
     (play) => play.sourceId === summary.id || (play.isrc !== null && play.isrc === candidate.isrc),
@@ -249,8 +269,9 @@ export const rank = (
   }
 
   const results = groups.map((members) => {
+    const fused = fusedPopularity(members);
     const scores = members.map((member) =>
-      scoreCandidate(normalizedQuery, member, hits, plays, now),
+      scoreCandidate(normalizedQuery, member, hits, plays, now, fused),
     );
     const score = scores.reduce((best, next) => (next.total > best.total ? next : best));
 

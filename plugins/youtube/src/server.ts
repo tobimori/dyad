@@ -1,4 +1,4 @@
-import { Plugin, Provider, ProviderError, Recommender } from "@dyad/plugin";
+import { Plugin, Provider, ProviderError, ProviderSearch, Recommender } from "@dyad/plugin";
 import { Clock, Data, Effect, Ref } from "effect";
 import { HttpClient } from "effect/http";
 
@@ -70,7 +70,11 @@ export const youtubePlugin = new Plugin({
               Effect.catchTag("BotCheck", () => ytdlp.video(externalId, credentials, maxHeight)),
               Effect.provide(services),
             ),
-          search: (query) => searchMusic(query).pipe(Effect.provide(services)),
+          search: (query) =>
+            searchMusic(query).pipe(
+              Effect.map((songs) => new ProviderSearch({ songs, releases: [], artists: [] })),
+              Effect.provide(services),
+            ),
           tracklists: (externalId) => videoTracklists(externalId).pipe(Effect.provide(services)),
           uploads: true,
           userRequestsOnly: true,

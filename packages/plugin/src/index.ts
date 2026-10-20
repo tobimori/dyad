@@ -127,6 +127,14 @@ export class ProviderArtistCard extends Schema.Class<ProviderArtistCard>("Provid
   artworkUrl: Schema.NullOr(Schema.String),
 }) {}
 
+/** The answer of a search. A provider gives empty lists for what it does not search. */
+export class ProviderSearch extends Data.Class<{
+  /** In the provider's order of relevance, like the other lists */
+  readonly songs: ReadonlyArray<ProviderSource>;
+  readonly releases: ReadonlyArray<ProviderRelease>;
+  readonly artists: ReadonlyArray<ProviderArtistCard>;
+}> {}
+
 /** One list of the home page, for example a chart */
 export class ProviderShelf extends Schema.Class<ProviderShelf>("ProviderShelf")({
   /** The heading, for example `Top songs` */
@@ -345,7 +353,7 @@ export class Provider extends Data.Class<{
   readonly search?: (
     query: string,
     credentials: Credentials,
-  ) => Effect.Effect<ReadonlyArray<ProviderSource>, ProviderError>;
+  ) => Effect.Effect<ProviderSearch, ProviderError>;
   /**
    * The page of `ProviderSource.artists[0]` or of its `uploader`. The core caches pages on its
    * replica for a day and stops waiting after 20 seconds.

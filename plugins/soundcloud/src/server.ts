@@ -1,4 +1,4 @@
-import { FactRank, Plugin, Provider } from "@dyad/plugin";
+import { FactRank, Plugin, Provider, ProviderSearch } from "@dyad/plugin";
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 
@@ -24,7 +24,11 @@ export const soundcloudPlugin = new Plugin({
           name: "SoundCloud",
           resolve: (externalId) =>
             resolveTrack(withClientId, externalId).pipe(Effect.provide(services)),
-          search: (query) => searchTracks(withClientId, query).pipe(Effect.provide(services)),
+          search: (query) =>
+            searchTracks(withClientId, query).pipe(
+              Effect.map((songs) => new ProviderSearch({ songs, releases: [], artists: [] })),
+              Effect.provide(services),
+            ),
           artist: (userId) => readUser(withClientId, userId).pipe(Effect.provide(services)),
           album: (setId) => readSet(withClientId, setId).pipe(Effect.provide(services)),
           artistFromUrl: (url) => userFromUrl(withClientId, url).pipe(Effect.provide(services)),

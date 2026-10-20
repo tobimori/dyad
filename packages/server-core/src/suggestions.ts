@@ -49,7 +49,7 @@ const searchOfUser = Effect.gen(function* () {
         yield* callProvider(
           "Suggestion search",
           searchTimeout,
-          search(query, usable.credentials),
+          search(query, usable.credentials).pipe(Effect.map((answer) => answer.songs)),
         ).pipe(Effect.annotateLogs("provider", id)),
         () => [],
       );

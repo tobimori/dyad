@@ -9,7 +9,7 @@ import { Array as Arr, Clock, Data, Effect, Option, Ref, Schema, Stream } from "
 
 import { normalizeIsrc, spellings } from "./normalize.ts";
 import { cacheProviderSources, cachedSummary, toCachedSource } from "./provider-cache.ts";
-import { catalogEntities, rankedEntities } from "./search-entities.ts";
+import { FoundEntities, catalogEntities, rankedEntities } from "./search-entities.ts";
 import { Popularities, Providers, callProvider, usableProviders } from "./providers.ts";
 import { Candidate, Play, playHistoryMs, rank } from "./ranking.ts";
 import { withSeries } from "./sets.ts";
@@ -57,6 +57,7 @@ const searchLocalSources = Effect.fn(function* (query: string) {
     return new Candidate({
       summary: sourceSummary(row),
       isrc: isrc === null ? null : normalizeIsrc(isrc),
+      list: "catalog",
       position,
       local: row.tags !== null,
       lossless: row.variant.lossless,
@@ -101,6 +102,7 @@ const searchLocalSources = Effect.fn(function* (query: string) {
         return new Candidate({
           summary: yield* cachedSummary(item, provider?.name ?? item.provider),
           isrc: item.isrc,
+          list: "catalog",
           position: catalog.length + index,
           local: false,
           lossless: item.source.lossless,
@@ -113,9 +115,12 @@ const searchLocalSources = Effect.fn(function* (query: string) {
 
 class Answer extends Data.Class<{
   readonly candidates: ReadonlyArray<Candidate>;
+  readonly entities: ReadonlyArray<FoundEntities>;
   readonly hits: ReadonlyArray<PopularityHit>;
   readonly unavailable: ReadonlyArray<string>;
 }> {}
+
+const noAnswer = { candidates: [], entities: [], hits: [], unavailable: [] };
 
 // A failure, a defect or a timeout of one plugin skips only that provider
 const searchProvider = Effect.fn(function* (
@@ -126,21 +131,21 @@ const searchProvider = Effect.fn(function* (
   credentials: Credentials,
   query: string,
 ) {
-  const sources = yield* callProvider(
+  const found = yield* callProvider(
     "Provider search",
     answerTimeout,
     search(query, credentials),
   ).pipe(Effect.annotateLogs("provider", id));
-  if (Option.isNone(sources)) {
-    return new Answer({ candidates: [], hits: [], unavailable: [name] });
-  }
+  if (Option.isNone(found)) return new Answer({ ...noAnswer, unavailable: [name] });
 
-  const cached = yield* cacheProviderSources(id, sources.value);
+  const { songs, releases, artists } = found.value;
+  const cached = yield* cacheProviderSources(id, songs);
   const candidates = yield* Effect.forEach(cached, (item, position) =>
     Effect.gen(function* () {
       return new Candidate({
         summary: yield* cachedSummary(item, name),
         isrc: item.isrc,
+        list: id,
         position,
         local: false,
         lossless: item.source.lossless,
@@ -148,7 +153,8 @@ const searchProvider = Effect.fn(function* (
       });
     }),
   );
-  return new Answer({ candidates, hits: [], unavailable: [] });
+  const entities = new FoundEntities({ provider: id, upload, releases, artists });
+  return new Answer({ ...noAnswer, candidates, entities: [entities] });
 });
 
 const fetchPopularity = (
@@ -227,7 +233,7 @@ const rankAnswers = Effect.fn(function* (
   const sources = ranked.map((result) => result.summary);
   return new SearchResults({
     sources,
-    ...(yield* rankedEntities(query, catalog, sources)),
+    ...(yield* rankedEntities(query, catalog, sources, answer.entities)),
     unavailable: answer.unavailable,
   });
 });
@@ -238,7 +244,7 @@ export const searchCatalog = Effect.fn("searchCatalog")(function* (query: string
   return yield* rankAnswers(
     query,
     yield* catalogEntities(query),
-    new Answer({ candidates: local, hits: [], unavailable: [] }),
+    new Answer({ ...noAnswer, candidates: local }),
   );
 });
 
@@ -263,7 +269,7 @@ export const search = (query: string) =>
       });
       const popularityAnswers = [...popularities].map(([name, popularity]) =>
         fetchPopularity(name, popularity, query).pipe(
-          Effect.map((hits) => new Answer({ candidates: [], hits, unavailable: [] })),
+          Effect.map((hits) => new Answer({ ...noAnswer, hits })),
         ),
       );
 
@@ -271,10 +277,11 @@ export const search = (query: string) =>
       return Stream.fromIterable([...providerAnswers, ...popularityAnswers]).pipe(
         Stream.flatMap(Stream.fromEffect, { concurrency: "unbounded" }),
         Stream.scan(
-          () => new Answer({ candidates: local, hits: [], unavailable: [] }),
+          () => new Answer({ ...noAnswer, candidates: local }),
           (all, next) =>
             new Answer({
               candidates: [...all.candidates, ...next.candidates],
+              entities: [...all.entities, ...next.entities],
               hits: [...all.hits, ...next.hits],
               unavailable: [...all.unavailable, ...next.unavailable],
             }),
