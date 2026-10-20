@@ -69,8 +69,8 @@ const partialMatch = 0.7;
 // so a song that several providers put high ranks over the first result of one provider.
 const positionPopularity = 0.3;
 
-// Uploads are often reuploads, covers or videos, so their order says less about the song
-const uploadTrust = 0.5;
+/** Uploads are often reuploads, covers or videos, so their order says less */
+export const uploadTrust = 0.5;
 
 const halfLifeMs = 30 * 24 * 60 * 60 * 1000;
 

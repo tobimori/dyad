@@ -10,6 +10,7 @@ import { Array as Arr, Data, Effect, Option } from "effect";
 import { albumPageRefs } from "./albums.ts";
 import { artistIdOf } from "./artists.ts";
 import { simplifyText, spellings } from "./normalize.ts";
+import { uploadTrust } from "./ranking.ts";
 import { cardTypes, releaseCard } from "./pages.ts";
 import { providerArtistRef, providerRefParts } from "./refs.ts";
 
@@ -146,8 +147,6 @@ export class FoundEntities extends Data.Class<{
   readonly artists: ReadonlyArray<ProviderArtistCard>;
 }> {}
 
-// Uploads are often reuploads and fan channels, so their order says less
-const uploadTrust = 0.5;
 // An artist or album that the catalog knows counts like a first result of a provider
 const catalogWeight = 1;
 // The credits and albums of the found songs count less than a direct hit
