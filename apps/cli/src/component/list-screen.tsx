@@ -174,7 +174,7 @@ export function useListScreen(
     }
     if (selectedItem instanceof AlbumRow) return new AlbumItem({ album: selectedItem.album });
     if (selectedItem instanceof ArtistRow)
-      return new ArtistItem({ name: selectedItem.artist.name });
+      return new ArtistItem({ name: selectedItem.artist.name, artistId: null });
     if (selectedItem instanceof PlaylistRow) {
       return new PlaylistItem({ playlist: selectedItem.playlist, onDelete: () => {} });
     }

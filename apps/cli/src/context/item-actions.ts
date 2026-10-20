@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { Action } from "../component/dialog-actions.tsx";
 import { useDownloadActions } from "../component/dialog-downloads.tsx";
 import { usePlayFromActions } from "../component/dialog-play-from.tsx";
+import { useArtistProfileActions } from "../routes/artist-profiles/dialog-artist-profiles.tsx";
 import { usePlaylistItemActions } from "../routes/playlists/dialog-playlists.tsx";
 import { useSetActions } from "../routes/sets/dialog-sets.tsx";
 import { useWebLinkActions } from "../component/dialog-web-links.tsx";
@@ -170,6 +171,7 @@ const providers = [
   useMarkActions,
   useSetActions,
   usePlayFromActions,
+  useArtistProfileActions,
   useWebLinkActions,
   useDownloadActions,
 ];

@@ -160,7 +160,10 @@ export function PageScreen(props: {
         page.artistId === null
           ? []
           : app.libraryMarks.artist(page.artistId, page.name ?? "the artist");
-      const radio = page.name === null ? [] : app.itemActions(new ArtistItem({ name: page.name }));
+      const radio =
+        page.name === null
+          ? []
+          : app.itemActions(new ArtistItem({ name: page.name, artistId: page.artistId }));
       return [...marks, ...radio, ...listActions(app, sources, "artist", null)];
     }
     return [];

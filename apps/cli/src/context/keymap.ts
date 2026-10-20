@@ -103,6 +103,8 @@ export const commands = {
   heardInSets: command("track.heardInSets", "Show the DJ sets that play it", "Track", []),
   openOnWeb: command("track.openOnWeb", "Open on the provider's site", "Track", []),
   playFrom: command("track.playFrom", "Play another copy of the song", "Track", []),
+  artistProfiles: command("page.artistProfiles", "Show the linked profiles", "Browse", []),
+  notSameSong: command("copy.notSame", "Not the same song", null, ["x"], "not the same"),
   saveSetAsPlaylist: command(
     "set.saveAsPlaylist",
     "Save the identified tracks of the set as a playlist",

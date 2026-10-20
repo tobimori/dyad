@@ -27,7 +27,11 @@ export class SongItem extends Data.TaggedClass("Song")<{
 
 export class AlbumItem extends Data.TaggedClass("Album")<{ readonly album: AlbumCard }> {}
 
-export class ArtistItem extends Data.TaggedClass("Artist")<{ readonly name: string }> {}
+export class ArtistItem extends Data.TaggedClass("Artist")<{
+  readonly name: string;
+  /** The root artist of a page, `null` for a search row */
+  readonly artistId: string | null;
+}> {}
 
 export class PlaylistItem extends Data.TaggedClass("Playlist")<{
   readonly playlist: PlaylistSummary;
