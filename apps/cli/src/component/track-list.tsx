@@ -58,13 +58,28 @@ const doubleClickMs = 400;
 // Rows that stay visible above and below the selection before the list scrolls
 const scrollMargin = 2;
 
-/** The list scrolls only when the selection comes near an edge */
-export const scrollOffset = (previous: number, selected: number, rows: number, total: number) => {
-  if (total <= rows) return 0;
-  const margin = Math.min(scrollMargin, Math.floor((rows - 1) / 2));
-  const upper = Math.min(previous, selected - margin);
-  const lower = Math.max(upper, selected + margin + 1 - rows);
-  return Math.max(0, Math.min(lower, total - rows));
+/**
+ * The first row to show. The list scrolls only when the selection comes near an edge, and rows
+ * fill the `lines` from there. `heightAt` gives the lines of the row at an index.
+ */
+export const scrollOffset = (
+  previous: number,
+  selected: number,
+  lines: number,
+  total: number,
+  heightAt: (index: number) => number = () => 1,
+) => {
+  const linesOf = (start: number, end: number) =>
+    Array.from({ length: Math.max(0, end - start + 1) }, (_, at) => heightAt(start + at)).reduce(
+      (sum, height) => sum + height,
+      0,
+    );
+  const margin = Math.min(scrollMargin, Math.floor((lines - 1) / 2));
+  const last = Math.min(total - 1, selected + margin);
+  let start = Math.max(0, Math.min(previous, selected - margin));
+  while (start < selected && linesOf(start, last) > lines) start += 1;
+  while (start > 0 && linesOf(start - 1, total - 1) <= lines) start -= 1;
+  return start;
 };
 
 /** A second click on the same row soon after activates it */

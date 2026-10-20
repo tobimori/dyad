@@ -362,7 +362,7 @@ const tileGap = 2;
 // The cover, the title and the artist
 const stripHeight = coverHeight + 2;
 
-const heightOf = (row: Row) => (row instanceof AlbumStripRow ? stripHeight : 1);
+const heightOf = (row: Row | undefined) => (row instanceof AlbumStripRow ? stripHeight : 1);
 
 function AlbumTile(props: {
   readonly album: AlbumCard;
@@ -388,22 +388,6 @@ function AlbumTile(props: {
     </box>
   );
 }
-
-// The first visible row: the selected row stays in view, and rows of different heights fill the
-// height from there
-const firstVisible = (
-  rows: ReadonlyArray<Row>,
-  previous: number,
-  selected: number,
-  height: number,
-) => {
-  const linesFrom = (start: number, end: number) =>
-    rows.slice(start, end + 1).reduce((total, row) => total + heightOf(row), 0);
-  let start = Math.min(previous, selected);
-  while (start < selected && linesFrom(start, selected) > height) start += 1;
-  while (start > 0 && linesFrom(start - 1, rows.length - 1) <= height) start -= 1;
-  return start;
-};
 
 /** The cursor skips headings. A double click opens or plays a row. */
 export function RowList(props: {
@@ -463,12 +447,11 @@ export function RowList(props: {
   const height = Math.max(1, size.height);
   // One column of padding on each side
   const width = size.width - 2;
-  const strips = props.rows.some((row) => row instanceof AlbumStripRow);
   // Before the first layout the height is unknown, and an offset for one line skips the headings
   if (size.height > 0) {
-    offset.current = strips
-      ? firstVisible(props.rows, offset.current, selectedIndex, height)
-      : scrollOffset(offset.current, selectedIndex, height, props.rows.length);
+    offset.current = scrollOffset(offset.current, selectedIndex, height, props.rows.length, (at) =>
+      heightOf(props.rows[at]),
+    );
   }
   const visible = (() => {
     const shown: Array<Row> = [];
