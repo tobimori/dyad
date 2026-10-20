@@ -254,7 +254,9 @@ export const serverRoutes = Layer.unwrap(
       videoRoute,
       downloadRoute,
       peerRoutes,
-      RpcServer.layerHttp({ group: ServerRpc, path: "/rpc" }).pipe(
+      // A defect, for example an offline home server, fails only its own call. Else the client
+      // fails all open calls, also the streams of the pages.
+      RpcServer.layerHttp({ group: ServerRpc, path: "/rpc", disableFatalDefects: true }).pipe(
         Layer.provide(handlers),
         Layer.provide(authenticationLayer),
         Layer.provide(RpcSerialization.layerJson),
