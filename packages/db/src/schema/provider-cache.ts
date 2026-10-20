@@ -44,3 +44,13 @@ export const providerPage = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.provider, table.kind, table.externalId] })],
 );
+
+// The last page that the home server sent to this device, so that the page shows at once after a
+// start and stays offline. Not swept: each answer replaces it.
+export const forwardedPage = sqliteTable("forwarded_page", {
+  // The RPC, for example `homePage`
+  name: text("name").primaryKey(),
+  // The encoded answer
+  data: text("data", { mode: "json" }).notNull(),
+  fetchedAt: integer("fetched_at").notNull(),
+});

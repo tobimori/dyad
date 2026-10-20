@@ -18,7 +18,7 @@ import { artistProfiles } from "./artists.ts";
 import { audioAnalysisLayer } from "./audio-analysis.ts";
 import { checkInDownloads, downloadRoute, prepareDownload } from "./downloads.ts";
 import { listRecentPlays } from "./history.ts";
-import { homePage } from "./home.ts";
+import { deviceHomePage } from "./home.ts";
 import { forwardEffect, forwardStream } from "./home-server.ts";
 import { jobsLayer } from "./jobs.ts";
 import { getLibrarySyncStatus, syncLibrary } from "./library-sync.ts";
@@ -134,7 +134,7 @@ export const serverRoutes = Layer.unwrap(
         searchCatalog(query).pipe(orDieOnDatabaseError("searchCatalog")),
       artistPage: ({ ref }) => forwardStream((home) => home.artistPage({ ref }), artistPage(ref)),
       albumPage: ({ ref }) => forwardStream((home) => home.albumPage({ ref }), albumPage(ref)),
-      homePage: () => forwardStream((home) => home.homePage(), homePage),
+      homePage: () => deviceHomePage,
       radio: ({ start }) =>
         forwardEffect(
           (home) => home.radio({ start }),

@@ -615,5 +615,14 @@
       "\nCREATE INDEX `source_file_source_idx` ON `source_file` (`source_id`);",
       "\nCREATE INDEX `source_file_change_idx` ON `source_file` (`change_seq`);"
     ]
+  },
+  {
+    "name": "20261020125051_add_forwarded_page",
+    "folderMillis": 1792500651000,
+    "hash": "e36e4afc9c71ddaeb8baf6c0593daa38abf698a595dfac26dcef99fbac40a24f",
+    "bps": true,
+    "sql": [
+      "CREATE TABLE `forwarded_page` (\n\t`name` text PRIMARY KEY,\n\t`data` text NOT NULL,\n\t`fetched_at` integer NOT NULL\n);\n"
+    ]
   }
 ]

@@ -1,4 +1,4 @@
-import { playEvent, providerPage, source } from "@dyad/db";
+import { forwardedPage, playEvent, providerPage, source } from "@dyad/db";
 import { Database, orDieOnDatabaseError } from "@dyad/db/node";
 import { AlbumCard, HomeGroup, HomePage, HomeShelf, PageState } from "@dyad/domain";
 import type { AlbumRef } from "@dyad/domain";
@@ -7,6 +7,7 @@ import type { Credentials, Recommender } from "@dyad/plugin";
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { Clock, Effect, Option, Schema, Stream } from "effect";
 
+import { HomeServer, forwardStream } from "./home-server.ts";
 import { libraryAlbumCards, providerPageStream, providerTracks, releaseCard } from "./pages.ts";
 import { callProvider, usableProviders } from "./providers.ts";
 import { playHistoryMs, playValue } from "./ranking.ts";
@@ -263,5 +264,44 @@ export const homePage = Stream.unwrap(
     return Stream.zipLatestAll(local, ...forYou, ...groups).pipe(
       Stream.map((latest) => new HomePage({ groups: latest })),
     );
+  }).pipe(orDieOnDatabaseError("homePage")),
+);
+
+/**
+ * On a device, the last page of the home server at once, then the pages that it sends now. With
+ * a last page, the page stays when the home server is offline.
+ */
+export const deviceHomePage = Stream.unwrap(
+  Effect.gen(function* () {
+    const home = yield* HomeServer;
+    if (Option.isNone(home)) return homePage;
+
+    const db = yield* Database;
+    const [row] = yield* db
+      .select({ data: forwardedPage.data })
+      .from(forwardedPage)
+      .where(eq(forwardedPage.name, "homePage"));
+    // A page from an older version does not decode and waits for the home server
+    const last = Option.flatMap(Option.fromNullishOr(row), ({ data }) =>
+      Schema.decodeUnknownOption(HomePage)(data),
+    );
+    const save = Effect.fn(function* (page: HomePage) {
+      const data = yield* Schema.encodeEffect(HomePage)(page).pipe(Effect.orDie);
+      const fetchedAt = yield* Clock.currentTimeMillis;
+      yield* db
+        .insert(forwardedPage)
+        .values({ name: "homePage", data, fetchedAt })
+        .onConflictDoUpdate({ target: forwardedPage.name, set: { data, fetchedAt } });
+    }, orDieOnDatabaseError("homePage"));
+
+    const current = forwardStream(
+      (client) => client.homePage().pipe(Stream.tap(save)),
+      homePage,
+      Option.isSome(last) ? Stream.empty : undefined,
+    );
+    return Option.match(last, {
+      onNone: () => current,
+      onSome: (page) => Stream.concat(Stream.succeed(page), current),
+    });
   }).pipe(orDieOnDatabaseError("homePage")),
 );
