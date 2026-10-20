@@ -76,7 +76,7 @@ export function useLibraryMarks(props: {
         mark !== "saved" && mark !== "favorite"
           ? new Action({
               command: commands.saveToLibrary,
-              label: "Save to library",
+              label: "Add to library",
               run: set("saved", `Saved ${name}`),
             })
           : new Action({

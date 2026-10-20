@@ -92,7 +92,7 @@ export const commands = {
   downloadAll: command("page.download", "Download all", "Browse", []),
   removeAllDownload: command("page.removeDownload", "Remove the download", "Browse", []),
   addToPlaylist: command("track.addToPlaylist", "Add to playlist", "Track", ["l"]),
-  saveToLibrary: command("track.save", "Save to library", "Track", ["shift+s"]),
+  saveToLibrary: command("track.save", "Add to library", "Track", ["shift+s"]),
   removeFromLibrary: command("track.removeFromLibrary", "Remove from library", "Track", []),
   favorite: command("track.favorite", "Favorite or remove from favorites", "Track", ["shift+f"]),
   dislike: command("track.dislike", "Dislike", "Track", []),

@@ -166,16 +166,16 @@ const navigationActions = (app: ActionApp) => {
 // The order of the actions dialog. Each entry is a hook, so the list never changes.
 const providers = [
   queueActions,
-  useRadioActions,
-  videoActions,
-  navigationActions,
-  usePlaylistItemActions,
   useMarkActions,
-  useSetActions,
+  usePlaylistItemActions,
+  useRadioActions,
   usePlayFromActions,
-  useArtistProfileActions,
-  useWebLinkActions,
+  navigationActions,
   useDownloadActions,
+  useWebLinkActions,
+  videoActions,
+  useSetActions,
+  useArtistProfileActions,
 ];
 
 /** The actions of all features for an item, and then the actions of its screen */
